@@ -57,6 +57,9 @@ jobs:
       - name: "Check generated API types"
         run: yarn api-types:test
 
+      - name: "Check generated GraphQL types"
+        run: yarn graphql-codegen --config codegen.ts --check
+
       - name: "Build application"
         run: yarn build
         env:
