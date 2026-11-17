@@ -1,33 +1,17 @@
+import { FakeResponse } from "@/testUtils/fakeFetchResponse";
 import { readEventStream } from "../eventStream";
 
-function makeStreamResponse(chunks: string[]): Response {
-  const encoder = new TextEncoder();
-  let index = 0;
-
-  const reader = {
-    read: async () => {
-      if (index < chunks.length) {
-        const value = encoder.encode(chunks[index]);
-        index++;
-        return { value, done: false };
-      }
-      return { value: undefined, done: true };
-    },
-  };
-
-  return {
-    ok: true,
-    status: 200,
-    body: {
-      getReader: () => reader,
-    },
-  } as unknown as Response;
-}
+const fetchMock = jest.fn<Promise<Response>, Parameters<typeof fetch>>();
 
 describe("readEventStream", () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    global.fetch = fetchMock;
+  });
+
   it("invokes onMessage for each SSE data line", async () => {
-    const response = makeStreamResponse(["data: line 1\n\n", "data: line 2\n\n"]);
-    (global.fetch as jest.Mock) = jest.fn().mockResolvedValue(response);
+    const response = new FakeResponse({ chunks: ["data: line 1\n\n", "data: line 2\n\n"] });
+    fetchMock.mockResolvedValue(response);
 
     const received: string[] = [];
     await readEventStream("http://localhost/stream", {
@@ -39,8 +23,8 @@ describe("readEventStream", () => {
   });
 
   it("ignores SSE comment lines", async () => {
-    const response = makeStreamResponse([": heartbeat\n\n", "data: line 1\n\n"]);
-    (global.fetch as jest.Mock) = jest.fn().mockResolvedValue(response);
+    const response = new FakeResponse({ chunks: [": heartbeat\n\n", "data: line 1\n\n"] });
+    fetchMock.mockResolvedValue(response);
 
     const received: string[] = [];
     await readEventStream("http://localhost/stream", {
@@ -52,8 +36,8 @@ describe("readEventStream", () => {
   });
 
   it("rejects when the response is not ok", async () => {
-    const response = { ok: false, status: 401, body: null } as unknown as Response;
-    (global.fetch as jest.Mock) = jest.fn().mockResolvedValue(response);
+    const response = new FakeResponse({ status: 401 });
+    fetchMock.mockResolvedValue(response);
 
     await expect(
       readEventStream("http://localhost/stream", {
@@ -64,8 +48,8 @@ describe("readEventStream", () => {
   });
 
   it("passes the event's id alongside its data", async () => {
-    const response = makeStreamResponse(["id: 100-0\ndata: line 1\n\n"]);
-    (global.fetch as jest.Mock) = jest.fn().mockResolvedValue(response);
+    const response = new FakeResponse({ chunks: ["id: 100-0\ndata: line 1\n\n"] });
+    fetchMock.mockResolvedValue(response);
 
     const received: Array<[string, string | undefined]> = [];
     await readEventStream("http://localhost/stream", {
@@ -77,8 +61,8 @@ describe("readEventStream", () => {
   });
 
   it("preserves indentation beyond the single SSE-spec leading space", async () => {
-    const response = makeStreamResponse(["data:      + arn = (known after apply)\n\n"]);
-    (global.fetch as jest.Mock) = jest.fn().mockResolvedValue(response);
+    const response = new FakeResponse({ chunks: ["data:      + arn = (known after apply)\n\n"] });
+    fetchMock.mockResolvedValue(response);
 
     const received: string[] = [];
     await readEventStream("http://localhost/stream", {
@@ -90,9 +74,8 @@ describe("readEventStream", () => {
   });
 
   it("sends Last-Event-ID as a request header when provided", async () => {
-    const response = makeStreamResponse(["data: line 1\n\n"]);
-    const fetchMock = jest.fn().mockResolvedValue(response);
-    (global.fetch as jest.Mock) = fetchMock;
+    const response = new FakeResponse({ chunks: ["data: line 1\n\n"] });
+    fetchMock.mockResolvedValue(response);
 
     await readEventStream("http://localhost/stream", {
       onMessage: jest.fn(),
@@ -101,16 +84,18 @@ describe("readEventStream", () => {
     });
 
     const [, requestInit] = fetchMock.mock.calls[0];
-    expect(requestInit.headers["Last-Event-ID"]).toBe("100-0");
+    expect(requestInit?.headers).toMatchObject({ "Last-Event-ID": "100-0" });
   });
 
   it("passes the event name of a named event, and none for plain data", async () => {
-    const response = makeStreamResponse([
-      "id: 5-0\ndata: line\n\n",
-      'event: gap\ndata: {"reason":"trimmed"}\n\n',
-      'event: end\ndata: {"reason":"rotate"}\n\n',
-    ]);
-    (global.fetch as jest.Mock) = jest.fn().mockResolvedValue(response);
+    const response = new FakeResponse({
+      chunks: [
+        "id: 5-0\ndata: line\n\n",
+        'event: gap\ndata: {"reason":"trimmed"}\n\n',
+        'event: end\ndata: {"reason":"rotate"}\n\n',
+      ],
+    });
+    fetchMock.mockResolvedValue(response);
 
     const received: Array<[string, string | undefined, string | undefined]> = [];
     await readEventStream("http://localhost/stream", {
