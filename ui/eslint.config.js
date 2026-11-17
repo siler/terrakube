@@ -23,6 +23,8 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
+      // tsconfig.test.json covers app and test files, which the type-aware rules below need.
+      parserOptions: { project: "./tsconfig.test.json", tsconfigRootDir: import.meta.dirname },
     },
     plugins: {
       "react-hooks": reactHooks,
@@ -44,7 +46,7 @@ export default tseslint.config(
       "react/button-has-type": "error",
       "react/react-in-jsx-scope": ["off"],
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-explicit-any": "error",
       // tsc (yarn typecheck) already checks these, and they misread Vite query imports such as `?worker`.
       // https://typescript-eslint.io/troubleshooting/typed-linting/performance#eslint-plugin-import
       "import/named": "off",
@@ -70,6 +72,14 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_", ignoreRestSiblings: true },
       ],
+      "@typescript-eslint/no-non-null-assertion": "error",
+      // `as const` stays allowed; every other assertion needs a type guard or a documented exception.
+      "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
+      "@typescript-eslint/no-unsafe-argument": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
     },
   }
 );
