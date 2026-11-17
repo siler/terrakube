@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { readEventStream } from "../modules/api/eventStream";
 import { compareStreamIds } from "../modules/api/streamIds";
+import { isRecord } from "../modules/utils/typeGuards";
 
 // `event: gap` payload: output the server could not replay. `recovery` says where to read it instead.
 export type StreamGap = {
@@ -37,6 +38,26 @@ const RESUME_JITTER_MS = 1750;
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
+
+const optionalString = (value: unknown): value is string | undefined =>
+  value === undefined || typeof value === "string";
+
+/** Narrows a parsed `event: gap` payload to a {@link StreamGap}. */
+export const isStreamGap = (value: unknown): value is StreamGap =>
+  isRecord(value) &&
+  typeof value.reason === "string" &&
+  optionalString(value.afterId) &&
+  optionalString(value.firstAvailableId) &&
+  optionalString(value.recovery);
+
+// Control payloads are best-effort: a malformed one must not break the stream.
+const parseControlPayload = (data: string): unknown => {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return undefined;
+  }
+};
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -98,18 +119,14 @@ export function useEventStream<T>({
         lastEventId,
         onMessage: (data, id, event) => {
           if (event === "end") {
-            try {
-              endReason = (JSON.parse(data) as { reason?: string }).reason;
-            } catch {
-              endReason = undefined;
-            }
+            const payload = parseControlPayload(data);
+            endReason = isRecord(payload) && typeof payload.reason === "string" ? payload.reason : undefined;
             return;
           }
           if (event === "gap") {
-            try {
-              currentValue = onGap != null ? onGap(currentValue, JSON.parse(data) as StreamGap) : currentValue;
-            } catch {
-              // A malformed gap notice must not break the stream.
+            const gap = parseControlPayload(data);
+            if (onGap != null && isStreamGap(gap)) {
+              currentValue = onGap(currentValue, gap);
             }
             dirty = true;
             if (flushIntervalMs == null) {
@@ -184,7 +201,6 @@ export function useEventStream<T>({
         clearTimeout(flushTimeout);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, enabled]);
 
   return value;
