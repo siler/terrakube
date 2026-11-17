@@ -1,7 +1,11 @@
 import axiosInstance from "@/config/axiosConfig";
+import type { CreateBody, UpdateBody } from "@/domain/api";
 import { apiPost } from "@/modules/api/apiWrapper";
 import { ApiResponse } from "@/modules/api/types";
 import { ProjectModel } from "@/domain/types";
+
+/** A project as the project pages and pickers show it. */
+export type Project = ProjectModel;
 
 export type ProjectAccessModel = {
   id: string;
@@ -45,18 +49,13 @@ async function listProjects(organizationId: string): Promise<ApiResponse<Project
     }`,
   };
 
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, {
+  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
     dataWrapped: true,
     contentType: "application/json",
   });
 
   if (tempData.isError) {
-    return {
-      isError: true,
-      responseCode: tempData.responseCode,
-      error: tempData.error,
-      data: [],
-    };
+    return tempData;
   }
 
   const edges = tempData.data?.organization?.edges?.[0]?.node?.project?.edges ?? [];
@@ -73,7 +72,7 @@ async function listProjects(organizationId: string): Promise<ApiResponse<Project
 }
 
 async function createProject(organizationId: string, data: { name: string; description?: string }): Promise<void> {
-  const body = {
+  const body: CreateBody<"project"> = {
     data: {
       type: "project",
       attributes: {
@@ -93,7 +92,7 @@ async function updateProject(
   projectId: string,
   data: { name: string; description?: string }
 ): Promise<void> {
-  const body = {
+  const body: UpdateBody<"project"> = {
     data: {
       id: projectId,
       type: "project",
@@ -130,18 +129,13 @@ async function getProject(organizationId: string, projectId: string): Promise<Ap
     }`,
   };
 
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, {
+  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
     dataWrapped: true,
     contentType: "application/json",
   });
 
   if (tempData.isError) {
-    return {
-      isError: true,
-      responseCode: tempData.responseCode,
-      error: tempData.error,
-      data: { id: "", name: "" },
-    };
+    return tempData;
   }
 
   const node = tempData.data?.organization?.edges?.[0]?.node?.project?.edges?.[0]?.node;
@@ -162,7 +156,7 @@ async function deleteProject(organizationId: string, projectId: string): Promise
 }
 
 async function listProjectAccess(
-  organizationId: string,
+  _organizationId: string,
   projectId: string
 ): Promise<ApiResponse<ProjectAccessModel[]>> {
   const body = {
@@ -191,18 +185,13 @@ async function listProjectAccess(
     }`,
   };
 
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, {
+  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
     dataWrapped: true,
     contentType: "application/json",
   });
 
   if (tempData.isError) {
-    return {
-      isError: true,
-      responseCode: tempData.responseCode,
-      error: tempData.error,
-      data: [],
-    };
+    return tempData;
   }
 
   const edges = tempData.data?.project?.edges?.[0]?.node?.projectAccess?.edges ?? [];
@@ -231,13 +220,13 @@ async function addProjectAccess(
   role: string,
   permissions?: ProjectAccessPermissions
 ): Promise<void> {
-  const body = {
+  const body: CreateBody<"project_access"> = {
     data: {
       type: "project_access",
       attributes: {
         name: teamName,
         role,
-        ...(permissions ?? {}),
+        ...permissions,
       },
     },
   };
@@ -258,11 +247,11 @@ async function updateProjectAccess(
   role: string,
   permissions?: ProjectAccessPermissions
 ): Promise<void> {
-  const body = {
+  const body: UpdateBody<"project_access"> = {
     data: {
       id: accessId,
       type: "project_access",
-      attributes: { role, ...(permissions ?? {}) },
+      attributes: { role, ...permissions },
     },
   };
   await axiosInstance.patch(`organization/${organizationId}/project/${projectId}/projectAccess/${accessId}`, body, {

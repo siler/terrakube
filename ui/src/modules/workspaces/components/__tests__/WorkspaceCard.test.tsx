@@ -1,22 +1,22 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorkspaceCard from "../WorkspaceCard";
-import { WorkspaceListItem } from "@/modules/workspaces/types";
-import { JobStatus } from "@/domain/types";
+import type { WorkspaceListItem } from "@/modules/workspaces/workspaceService";
+import { workspaceListItem } from "@/testUtils/workspaceListItem";
 
 describe("WorkspaceCard", () => {
-  const baseItem: WorkspaceListItem = {
+  const baseItem: WorkspaceListItem = workspaceListItem({
     id: "ws-1",
     name: "test-workspace",
     description: "A test workspace",
     iacType: "terraform",
     source: "https://github.com/acme/infra",
     normalizedSource: "https://github.com/acme/infra",
-    lastStatus: JobStatus.Completed,
+    lastStatus: "completed",
     lastRun: "2024-06-01T00:00:00.000Z",
     terraformVersion: "1.8.0",
     policyComplianceStatus: "COMPLIANT",
-  };
+  });
 
   it("renders workspace details and policy compliance badge", () => {
     render(

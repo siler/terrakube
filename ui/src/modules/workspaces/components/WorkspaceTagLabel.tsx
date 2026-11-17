@@ -1,4 +1,4 @@
-import { TagModel } from "@/modules/organizations/types";
+import { TagModel } from "@/modules/organizations/organizationService";
 import { WorkspaceTagBinding } from "@/modules/workspaces/types";
 import { workspaceTagKey } from "@/modules/workspaces/utils/workspaceTags";
 import "./WorkspaceTagLabel.css";

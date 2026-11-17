@@ -1,34 +1,34 @@
-import { JobStatus } from "../../../domain/types";
+import { JobStatus } from "../../../domain/generated/apiResources";
 
-export function getWorkspaceStatusText(status?: string): string | undefined {
+export function getWorkspaceStatusText(status?: string | null): string | undefined {
   switch (status) {
-    case JobStatus.Completed:
+    case JobStatus.completed:
       return "Completed";
-    case JobStatus.NoChanges:
+    case JobStatus.noChanges:
       return "No changes";
-    case JobStatus.Running:
+    case JobStatus.running:
       return "Running";
-    case JobStatus.Queue:
+    case JobStatus.queue:
       return "Queued";
-    case JobStatus.Pending:
+    case JobStatus.pending:
       return "Pending";
-    case JobStatus.WaitingApproval:
+    case JobStatus.waitingApproval:
       return "Waiting approval";
-    case JobStatus.NotExecuted:
+    case JobStatus.notExecuted:
       return "Not executed";
-    case "NeverExecuted":
+    case JobStatus.NeverExecuted:
       return "Never executed";
-    case JobStatus.Rejected:
+    case JobStatus.rejected:
       return "Discarded";
-    case JobStatus.Cancelled:
+    case JobStatus.cancelled:
       return "Cancelled";
-    case JobStatus.Failed:
+    case JobStatus.failed:
       return "Failed";
-    case JobStatus.Approved:
+    case JobStatus.approved:
       return "Approved";
-    case JobStatus.Unknown:
+    case JobStatus.unknown:
       return "Unknown";
     default:
-      return status;
+      return status ?? undefined;
   }
 }

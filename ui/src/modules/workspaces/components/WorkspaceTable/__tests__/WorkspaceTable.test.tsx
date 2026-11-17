@@ -1,18 +1,18 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorkspaceTable from "../WorkspaceTable";
-import { WorkspaceListItem } from "@/modules/workspaces/types";
-import { JobStatus } from "@/domain/types";
+import type { WorkspaceListItem } from "@/modules/workspaces/workspaceService";
+import { workspaceListItem } from "@/testUtils/workspaceListItem";
 
 const workspaces: WorkspaceListItem[] = [
-  {
+  workspaceListItem({
     id: "ws-1",
     name: "billing-api-staging",
     description: "Handles invoice generation and payment webhooks",
     iacType: "terraform",
     source: "https://github.com/acme/billing",
     normalizedSource: "https://github.com/acme/billing",
-    lastStatus: JobStatus.Running,
+    lastStatus: "running",
     lastRun: "2024-06-01T00:00:00.000Z",
     terraformVersion: "1.8.0",
     tags: [
@@ -24,17 +24,17 @@ const workspaces: WorkspaceListItem[] = [
     projectName: "platform",
     locked: true,
     policyComplianceStatus: "COMPLIANT",
-  },
-  {
+  }),
+  workspaceListItem({
     id: "ws-2",
     name: "auth-service-dev",
     iacType: "terraform",
     source: "",
     branch: "remote-content",
-    lastStatus: JobStatus.Failed,
+    lastStatus: "failed",
     terraformVersion: "1.9.2",
     locked: false,
-  },
+  }),
 ];
 
 const organizationTags = [
@@ -63,7 +63,7 @@ function renderTable(props = {}) {
 describe("WorkspaceTable", () => {
   beforeEach(() => {
     defaultProps.onSelectProject.mockClear();
-    (defaultProps.onSortChange as jest.Mock).mockClear();
+    defaultProps.onSortChange.mockClear();
   });
 
   it("renders a row per workspace with name and status, with a single header", () => {
@@ -156,16 +156,13 @@ describe("WorkspaceTable", () => {
   });
 
   it("stays on the current page when a background refresh supplies a new array with the same workspaces", () => {
-    const manyWorkspaces: WorkspaceListItem[] = Array.from({ length: 25 }, (_, i) => ({
-      id: `bulk-${i}`,
-      name: `bulk-workspace-${i}`,
-      iacType: "terraform",
-      source: "",
-    }));
+    const manyWorkspaces: WorkspaceListItem[] = Array.from({ length: 25 }, (_, i) =>
+      workspaceListItem({ id: `bulk-${i}`, name: `bulk-workspace-${i}` })
+    );
 
     const { container, rerender } = renderTable({ workspaces: manyWorkspaces });
 
-    fireEvent.click(screen.getByTitle("2"));
+    fireEvent.click(screen.getByRole("button", { name: "Page 2" }));
     expect(screen.getByText("bulk-workspace-20")).toBeInTheDocument();
 
     // Simulate a polling refresh: same workspaces, but a brand-new array reference.
@@ -180,16 +177,13 @@ describe("WorkspaceTable", () => {
   });
 
   it("clamps to the last valid page when a refresh shrinks the workspace list below the current page", () => {
-    const manyWorkspaces: WorkspaceListItem[] = Array.from({ length: 25 }, (_, i) => ({
-      id: `bulk-${i}`,
-      name: `bulk-workspace-${i}`,
-      iacType: "terraform",
-      source: "",
-    }));
+    const manyWorkspaces: WorkspaceListItem[] = Array.from({ length: 25 }, (_, i) =>
+      workspaceListItem({ id: `bulk-${i}`, name: `bulk-workspace-${i}` })
+    );
 
     const { rerender } = renderTable({ workspaces: manyWorkspaces });
 
-    fireEvent.click(screen.getByTitle("2"));
+    fireEvent.click(screen.getByRole("button", { name: "Page 2" }));
     expect(screen.getByText("bulk-workspace-20")).toBeInTheDocument();
 
     const shrunkWorkspaces = manyWorkspaces.slice(0, 5);
@@ -268,12 +262,9 @@ describe("WorkspaceTable", () => {
     });
 
     it("caps a large group at 10 rows with a 'Show N more' link, which expands it", () => {
-      const bigGroupItems: WorkspaceListItem[] = Array.from({ length: 12 }, (_, i) => ({
-        id: `bulk-${i}`,
-        name: `bulk-workspace-${i}`,
-        iacType: "terraform",
-        source: "",
-      }));
+      const bigGroupItems: WorkspaceListItem[] = Array.from({ length: 12 }, (_, i) =>
+        workspaceListItem({ id: `bulk-${i}`, name: `bulk-workspace-${i}` })
+      );
       const bigGroups = [{ key: "proj-1", label: "platform", items: bigGroupItems }];
 
       renderTable({ groups: bigGroups });
@@ -357,7 +348,11 @@ describe("WorkspaceTable", () => {
 
       it("leaves the project chip, row links and tag buttons working in an expanded group", () => {
         const { container } = renderTable(collapsibleProps());
-        fireEvent.click(container.querySelector(".workspace-clickable-tag")!);
+        const projectChip = container.querySelector(".workspace-clickable-tag");
+        if (!projectChip) {
+          throw new Error("Expected a project chip in the expanded group");
+        }
+        fireEvent.click(projectChip);
         expect(defaultProps.onSelectProject).toHaveBeenCalledWith("proj-1");
         expect(onToggleGroup).not.toHaveBeenCalled();
         expect(screen.getByLabelText("Open workspace billing-api-staging")).toBeInTheDocument();

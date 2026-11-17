@@ -1,5 +1,6 @@
 import { CheckCircleFilled, CloseCircleOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import {
+  type TableColumnsType,
   Button,
   Checkbox,
   Form,
@@ -13,8 +14,9 @@ import {
   Typography,
   message,
 } from "antd";
+import { getErrorMessage, isPermissionError } from "@/config/axiosConfig";
 import { useEffect, useState } from "react";
-import axiosInstance from "@/config/axiosConfig";
+import { api, fields, type Row, type WriteAttributes } from "@/domain/api";
 import projectService, { ProjectAccessModel, ProjectAccessPermissions } from "./projectService";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import "./Projects.css";
@@ -25,9 +27,10 @@ type Props = {
   canManage: boolean;
 };
 
+// teamName is the team picker's value, sent on as the project_access resource's name.
 type AddTeamForm = {
   teamName: string;
-  role: string;
+  role: NonNullable<WriteAttributes<"project_access">["role"]>;
   manageWorkspace?: boolean;
   manageState?: boolean;
   planJob?: boolean;
@@ -35,7 +38,8 @@ type AddTeamForm = {
   destroyJob?: boolean;
 };
 
-type TeamOption = { id: string; name: string };
+const TEAM_NAME_FIELDS = fields.team("name");
+type TeamOption = Row<typeof TEAM_NAME_FIELDS>;
 
 const ROLES = [
   {
@@ -111,6 +115,11 @@ function effectivePermissions(record: ProjectAccessModel): ProjectAccessPermissi
   }
 }
 
+const accessErrorMessage = (action: string, err: unknown): string =>
+  isPermissionError(err)
+    ? "You are not authorized to manage project team access."
+    : `${action}: ${getErrorMessage(err)}`;
+
 export default function ProjectAccessTab({ orgid, projectId, canManage }: Props) {
   const [accessList, setAccessList] = useState<ProjectAccessModel[]>([]);
   const [loading, setLoading] = useState(false);
@@ -150,16 +159,13 @@ export default function ProjectAccessTab({ orgid, projectId, canManage }: Props)
 
   useEffect(() => {
     setLoadingTeams(true);
-    axiosInstance
-      .get(`organization/${orgid}/team`)
-      .then((res) => {
-        const list = (res.data?.data ?? []).map((t: any) => ({
-          id: t.id,
-          name: t.attributes.name,
-        }));
-        setTeams(list);
-      })
-      .finally(() => setLoadingTeams(false));
+    void (async () => {
+      try {
+        setTeams(await api.organization(orgid).team().select(TEAM_NAME_FIELDS));
+      } finally {
+        setLoadingTeams(false);
+      }
+    })();
   }, [orgid]);
 
   const onAdd = async (values: AddTeamForm) => {
@@ -179,12 +185,8 @@ export default function ProjectAccessTab({ orgid, projectId, canManage }: Props)
       message.success(`Team "${values.teamName}" added to project`);
       form.resetFields();
       await load();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        message.error("You are not authorized to manage project team access.");
-      } else {
-        message.error(err?.message ?? "Failed to add team access");
-      }
+    } catch (err) {
+      message.error(accessErrorMessage("Failed to add team access", err));
     } finally {
       setAdding(false);
     }
@@ -195,12 +197,8 @@ export default function ProjectAccessTab({ orgid, projectId, canManage }: Props)
       await projectService.removeProjectAccess(orgid, projectId, accessId);
       message.success(`Team "${teamName}" removed from project`);
       await load();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        message.error("You are not authorized to manage project team access.");
-      } else {
-        message.error(err?.message ?? "Failed to remove team access");
-      }
+    } catch (err) {
+      message.error(accessErrorMessage("Failed to remove team access", err));
     }
   };
 
@@ -223,18 +221,14 @@ export default function ProjectAccessTab({ orgid, projectId, canManage }: Props)
       message.success(`Role for "${record.name}" updated to ${roleLabel(editingRole)}`);
       setEditingId(null);
       await load();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        message.error("You are not authorized to manage project team access.");
-      } else {
-        message.error(err?.message ?? "Failed to update role");
-      }
+    } catch (err) {
+      message.error(accessErrorMessage("Failed to update role", err));
     } finally {
       setSavingRole(false);
     }
   };
 
-  const columns = [
+  const columns: TableColumnsType<ProjectAccessModel> = [
     {
       title: "Team",
       dataIndex: "name",
@@ -327,8 +321,8 @@ export default function ProjectAccessTab({ orgid, projectId, canManage }: Props)
           </Tooltip>
         ),
         key: field.key,
-        align: "center" as const,
-        render: (_: any, record: ProjectAccessModel) => {
+        align: "center",
+        render: (_: unknown, record: ProjectAccessModel) => {
           const granted = effectivePermissions(record)[field.key];
           const label = `${granted ? "Can" : "Cannot"} ${field.label.toLowerCase()}`;
           return (
@@ -349,8 +343,8 @@ export default function ProjectAccessTab({ orgid, projectId, canManage }: Props)
     {
       title: "",
       key: "actions",
-      align: "right" as const,
-      render: (_: any, record: ProjectAccessModel) => (
+      align: "right",
+      render: (_: unknown, record: ProjectAccessModel) => (
         <Popconfirm
           okButtonProps={{ danger: true }}
           title={`Remove team "${record.name}" from this project?`}

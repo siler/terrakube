@@ -1,20 +1,22 @@
 import { DeleteOutlined } from "@ant-design/icons";
 import { Button, Flex, Form, Input, Layout, Menu, Popconfirm, Space, Spin, Typography, message } from "antd";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
-import projectService, { ProjectAccessModel } from "./projectService";
+import projectService, { ProjectAccessModel, type Project } from "./projectService";
 import { apiGet } from "@/modules/api/apiWrapper";
+import { parseCurrentTeams } from "@/modules/token/parse";
 import ProjectWorkspaces from "./ProjectWorkspaces";
 import ProjectAccessTab from "./ProjectAccessTab";
 import workspaceService from "@/modules/workspaces/workspaceService";
 import useApiRequest from "@/modules/api/useApiRequest";
-import { ProjectModel } from "@/domain/types";
 import { ORGANIZATION_NAME } from "../../config/actionTypes";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import type { MenuProps } from "antd";
 import { PermissionErrorMessage } from "@/components/feedback/PermissionErrorMessage";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import "./Projects.css";
 
 const { Content, Sider } = Layout;
@@ -33,7 +35,7 @@ type ProjectForm = {
 type GeneralProps = {
   orgid: string;
   projectId: string;
-  project: ProjectModel | null;
+  project: Project | null;
   assignedWorkspacesCount: number;
   manageWorkspace: boolean;
   canUpdateProject: boolean;
@@ -65,11 +67,11 @@ function ProjectGeneralSettings({
       await projectService.updateProject(orgid, projectId, values);
       message.success("Project updated successfully");
       onSaved();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 403) {
         message.error(<PermissionErrorMessage action="update projects" permission="Manage Workspaces" />);
       } else {
-        message.error(err?.message ?? "Project update failed");
+        message.error(err instanceof Error ? err.message : "Project update failed");
       }
     } finally {
       setWaiting(false);
@@ -81,8 +83,8 @@ function ProjectGeneralSettings({
       await projectService.deleteProject(orgid, projectId);
       message.success("Project deleted successfully");
       navigate(`/organizations/${orgid}/projects`);
-    } catch (err: any) {
-      const statusCode = err?.response?.status;
+    } catch (err) {
+      const statusCode = axios.isAxiosError(err) ? err.response?.status : undefined;
       if (statusCode === 403) {
         message.error(<PermissionErrorMessage action="delete projects" permission="Manage Workspaces" />);
       } else if (statusCode === 423) {
@@ -90,7 +92,7 @@ function ProjectGeneralSettings({
           "Cannot delete project: Workspaces are still associated with this project. Please remove all workspaces first and try again."
         );
       } else {
-        message.error(err?.message ?? "Project deletion failed");
+        message.error(err instanceof Error ? err.message : "Project deletion failed");
       }
     }
   };
@@ -169,8 +171,9 @@ function ProjectGeneralSettings({
 }
 
 export default function ProjectDetailPage({ organizationName, setOrganizationName }: Props) {
-  const { orgid, id } = useParams();
-  const [project, setProject] = useState<ProjectModel | null>(null);
+  const orgid = useRequiredParam("orgid");
+  const id = useRequiredParam("id");
+  const [project, setProject] = useState<Project | null>(null);
   const [activeKey, setActiveKey] = useState("general");
   const [assignedWorkspacesCount, setAssignedWorkspacesCount] = useState(0);
   const { permissions } = useOrgPermissions();
@@ -178,24 +181,22 @@ export default function ProjectDetailPage({ organizationName, setOrganizationNam
   const [projectAccessForPerm, setProjectAccessForPerm] = useState<ProjectAccessModel[]>([]);
 
   useEffect(() => {
-    apiGet<{ groups: string[] }>("/access-token/v1/teams/current-teams").then((res) => {
-      if (!res.isError && res.data?.groups) setUserGroups(res.data.groups);
+    apiGet("/access-token/v1/teams/current-teams", parseCurrentTeams).then((res) => {
+      if (!res.isError) setUserGroups(res.data.groups);
     });
   }, []);
 
   useEffect(() => {
-    if (orgid && id) {
-      projectService.listProjectAccess(orgid, id).then((res) => {
-        if (!res.isError) setProjectAccessForPerm(res.data ?? []);
-      });
-    }
+    projectService.listProjectAccess(orgid, id).then((res) => {
+      if (!res.isError) setProjectAccessForPerm(res.data ?? []);
+    });
   }, [orgid, id]);
 
   const isProjectAdmin = projectAccessForPerm.some((a) => userGroups.includes(a.name) && a.role === "admin");
   const canManageProject = permissions.manageWorkspace || isProjectAdmin;
 
   const { loading, execute, error } = useApiRequest({
-    action: () => projectService.getProject(orgid!, id!),
+    action: () => projectService.getProject(orgid, id),
     onReturn: (data) => {
       setProject(data);
       const stored = sessionStorage.getItem(ORGANIZATION_NAME);
@@ -210,7 +211,7 @@ export default function ProjectDetailPage({ organizationName, setOrganizationNam
   useEffect(() => {
     async function loadWorkspaces() {
       try {
-        const result = await workspaceService.listWorkspaces(orgid!);
+        const result = await workspaceService.listWorkspaces(orgid);
         if (!result.isError) {
           const assignedCount = result.data.workspaces.filter((ws) => ws.projectId === id).length;
           setAssignedWorkspacesCount(assignedCount);
@@ -220,15 +221,13 @@ export default function ProjectDetailPage({ organizationName, setOrganizationNam
       }
     }
 
-    if (orgid && id) {
-      loadWorkspaces();
-    }
+    loadWorkspaces();
   }, [orgid, id]);
 
   // Reload workspace count when switching tabs
   const handleTabChange = (key: string) => {
     setActiveKey(key);
-    if (key === "general" && orgid && id) {
+    if (key === "general") {
       execute();
       workspaceService.listWorkspaces(orgid).then((result) => {
         if (!result.isError) {
@@ -255,15 +254,15 @@ export default function ProjectDetailPage({ organizationName, setOrganizationNam
   const renderContent = () => {
     switch (activeKey) {
       case "workspaces":
-        return <ProjectWorkspaces key={`${orgid}:${id}`} orgid={orgid!} projectId={id!} />;
+        return <ProjectWorkspaces key={`${orgid}:${id}`} orgid={orgid} projectId={id} />;
       case "teams":
-        return <ProjectAccessTab orgid={orgid!} projectId={id!} canManage={canManageProject} />;
+        return <ProjectAccessTab orgid={orgid} projectId={id} canManage={canManageProject} />;
       case "general":
       default:
         return (
           <ProjectGeneralSettings
-            orgid={orgid!}
-            projectId={id!}
+            orgid={orgid}
+            projectId={id}
             project={project}
             assignedWorkspacesCount={assignedWorkspacesCount}
             manageWorkspace={permissions.manageWorkspace}

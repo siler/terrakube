@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import projectService from "../projectService";
+import projectService, { type Project } from "../projectService";
 import ProjectsPage from "../ProjectsPage";
 
 jest.mock("../projectService", () => ({
@@ -26,12 +26,14 @@ jest.mock("@/components/layout/PageWrapper/PageWrapper", () => ({
   ),
 }));
 
+const listProjects = jest.mocked(projectService.listProjects);
+const createProject = jest.mocked(projectService.createProject);
+
+const project = (id: string, name: string): Project => ({ id, name, description: undefined });
+
 const projects = [
-  ...Array.from({ length: 10 }, (_, index) => ({
-    id: `project-${index + 1}`,
-    name: `Project ${index + 1}`,
-  })),
-  { id: "billing-api", name: "Billing API" },
+  ...Array.from({ length: 10 }, (_, index) => project(`project-${index + 1}`, `Project ${index + 1}`)),
+  project("billing-api", "Billing API"),
 ];
 
 function renderProjectsPage() {
@@ -51,13 +53,13 @@ describe("ProjectsPage search", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     sessionStorage.clear();
-    (projectService.listProjects as jest.Mock).mockResolvedValue({ isError: false, data: projects });
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: projects });
   });
 
   it("searches all projects case-insensitively and restores the full list when cleared", async () => {
     renderProjectsPage();
 
-    fireEvent.click(await screen.findByTitle("Next Page"));
+    fireEvent.click(await screen.findByLabelText("Next Page"));
     expect(await screen.findByText("Billing API")).toBeInTheDocument();
 
     const search = await screen.findByRole("textbox", { name: "Search projects by name" });
@@ -69,7 +71,7 @@ describe("ProjectsPage search", () => {
     fireEvent.change(search, { target: { value: "" } });
 
     expect(screen.getByText("Project 1")).toBeInTheDocument();
-    expect(screen.getByTitle("Next Page")).toBeInTheDocument();
+    expect(screen.getByLabelText("Next Page")).toBeInTheDocument();
   });
 
   it("shows a no-results state when the search has no matches", async () => {
@@ -96,13 +98,11 @@ describe("ProjectsPage search", () => {
   });
 
   it("paginates the filtered results rather than the complete list", async () => {
-    (projectService.listProjects as jest.Mock).mockResolvedValue({
+    listProjects.mockResolvedValue({
       isError: false,
+      responseCode: 200,
       data: [
-        ...Array.from({ length: 12 }, (_, index) => ({
-          id: `billing-${index}`,
-          name: `Billing ${index + 1}`,
-        })),
+        ...Array.from({ length: 12 }, (_, index) => project(`billing-${index}`, `Billing ${index + 1}`)),
         ...projects,
       ],
     });
@@ -112,13 +112,13 @@ describe("ProjectsPage search", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Search projects by name" }), {
       target: { value: "billing" },
     });
-    fireEvent.click(screen.getByTitle("Next Page"));
+    fireEvent.click(screen.getByLabelText("Next Page"));
 
     expect(screen.getByText("Billing 11")).toBeInTheDocument();
     expect(screen.getByText("Billing 12")).toBeInTheDocument();
     expect(screen.getByText("Billing API")).toBeInTheDocument();
     expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(4);
-    expect(screen.getByTitle("Next Page")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByLabelText("Next Page")).toHaveAttribute("aria-disabled", "true");
   });
 
   it("preserves the selected page size after a search with no matches", async () => {
@@ -146,10 +146,11 @@ describe("ProjectsPage search", () => {
     fireEvent.click(screen.getByRole("button", { name: /New project/ }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Platform" } });
-    (projectService.createProject as jest.Mock).mockResolvedValue(undefined);
-    (projectService.listProjects as jest.Mock).mockResolvedValue({
+    createProject.mockResolvedValue(undefined);
+    listProjects.mockResolvedValue({
       isError: false,
-      data: [{ id: "platform", name: "Platform" }, ...projects],
+      responseCode: 200,
+      data: [project("platform", "Platform"), ...projects],
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
 
@@ -159,7 +160,7 @@ describe("ProjectsPage search", () => {
   });
 
   it("keeps the existing empty state when the organization has no projects", async () => {
-    (projectService.listProjects as jest.Mock).mockResolvedValue({ isError: false, data: [] });
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: [] });
 
     renderProjectsPage();
 

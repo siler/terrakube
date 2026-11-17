@@ -1,16 +1,16 @@
-import { JobStatus } from "../../../domain/types";
+import { JobStatus } from "../../../domain/generated/apiResources";
 
 export const statusColors: Record<string, string> = {
-  [JobStatus.Completed]: "var(--tk-status-success)",
-  [JobStatus.Running]: "var(--tk-status-info)",
-  [JobStatus.Queue]: "#6e6e6e",
-  [JobStatus.Pending]: "#6e6e6e",
-  [JobStatus.WaitingApproval]: "var(--tk-status-warning)",
-  [JobStatus.NotExecuted]: "var(--tk-status-warning)",
-  [JobStatus.Rejected]: "var(--tk-status-error)",
-  [JobStatus.Failed]: "var(--tk-status-error)",
-  [JobStatus.Cancelled]: "var(--tk-status-error)",
-  [JobStatus.NoChanges]: "#c026d3",
-  [JobStatus.Approved]: "var(--tk-status-success)",
-  [JobStatus.Unknown]: "#6e6e6e",
+  [JobStatus.completed]: "var(--tk-status-success)",
+  [JobStatus.running]: "var(--tk-status-info)",
+  [JobStatus.queue]: "#6e6e6e",
+  [JobStatus.pending]: "#6e6e6e",
+  [JobStatus.waitingApproval]: "var(--tk-status-warning)",
+  [JobStatus.notExecuted]: "var(--tk-status-warning)",
+  [JobStatus.rejected]: "var(--tk-status-error)",
+  [JobStatus.failed]: "var(--tk-status-error)",
+  [JobStatus.cancelled]: "var(--tk-status-error)",
+  [JobStatus.noChanges]: "#c026d3",
+  [JobStatus.approved]: "var(--tk-status-success)",
+  [JobStatus.unknown]: "#6e6e6e",
 };

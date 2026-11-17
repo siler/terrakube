@@ -1,15 +1,17 @@
-import { Button, Flex, Form, Input, Modal, Table, message } from "antd";
+import { Button, Flex, Form, Input, Modal, Table, message, type TableColumnsType } from "antd";
+import axios from "axios";
 import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
-import projectService from "./projectService";
+import projectService, { type Project } from "./projectService";
 import useApiRequest from "@/modules/api/useApiRequest";
-import { ProjectModel } from "@/domain/types";
 import { ORGANIZATION_NAME } from "../../config/actionTypes";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import { PermissionErrorMessage } from "@/components/feedback/PermissionErrorMessage";
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
+import { isRecord } from "@/modules/utils/guards";
 import "./Projects.css";
 
 type Props = {
@@ -23,9 +25,9 @@ type ProjectForm = {
 };
 
 export default function ProjectsPage({ organizationName, setOrganizationName }: Props) {
-  const { id } = useParams();
+  const id = useRequiredParam("id");
   const { permissions } = useOrgPermissions(id);
-  const [projects, setProjects] = useState<ProjectModel[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
@@ -33,7 +35,7 @@ export default function ProjectsPage({ organizationName, setOrganizationName }: 
   const [form] = Form.useForm<ProjectForm>();
 
   const { loading, execute, error } = useApiRequest({
-    action: () => projectService.listProjects(id!),
+    action: () => projectService.listProjects(id),
     onReturn: (data) => {
       setProjects(data);
       setCurrentPage(1);
@@ -55,29 +57,32 @@ export default function ProjectsPage({ organizationName, setOrganizationName }: 
     try {
       const values = await form.validateFields();
       setSubmitting(true);
-      await projectService.createProject(id!, values);
+      await projectService.createProject(id, values);
       setSearch("");
       message.success("Project created");
       setModalOpen(false);
       execute();
-    } catch (err: any) {
-      if (err?.errorFields) return;
-      if (err?.response?.status === 403) {
+    } catch (err) {
+      // antd rejects validateFields with the field errors, which the form already shows inline.
+      if (isRecord(err) && err.errorFields) {
+        return;
+      }
+      if (axios.isAxiosError(err) && err.response?.status === 403) {
         message.error(<PermissionErrorMessage action="create projects" permission="Manage Workspaces" />);
       } else {
-        message.error(err?.message ?? "An error occurred");
+        message.error(err instanceof Error ? err.message : "An error occurred");
       }
     } finally {
       setSubmitting(false);
     }
   };
 
-  const columns = [
+  const columns: TableColumnsType<Project> = [
     {
       title: "Name",
       dataIndex: "name",
       key: "name",
-      render: (_: any, record: ProjectModel) => (
+      render: (_, record) => (
         <Button type="link" className="projects-name-link">
           <Link to={`/organizations/${id}/projects/${record.id}`}>{record.name}</Link>
         </Button>

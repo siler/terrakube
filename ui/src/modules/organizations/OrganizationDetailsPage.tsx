@@ -3,14 +3,13 @@ import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { ImportOutlined, PlusOutlined } from "@ant-design/icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WorkspaceFilter from "@/modules/workspaces/components/WorkspaceFilter";
-import { WorkspaceListItem, WorkspacePageInfo, WorkspacePageRequest } from "@/modules/workspaces/types";
-import { JobStatus } from "@/domain/types";
+import { WorkspacePageRequest } from "@/modules/workspaces/types";
 import { Link, useParams } from "react-router-dom";
 import { LinkButton } from "@/components/navigation/LinkButton";
-import workspaceService from "@/modules/workspaces/workspaceService";
+import workspaceService, { WorkspaceListItem, WorkspacePageResult } from "@/modules/workspaces/workspaceService";
 import { useOrganizationJobStatusSubscription, usePolling } from "@/hooks";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../config/actionTypes";
-import { TagModel } from "./types";
+import { TagModel } from "./organizationService";
 import WorkspaceCard from "@/modules/workspaces/components/WorkspaceCard";
 import WorkspaceTable from "@/modules/workspaces/components/WorkspaceTable/WorkspaceTable";
 import ListViewToggle from "@/components/display/ListViewToggle/ListViewToggle";
@@ -25,6 +24,8 @@ import {
 } from "@/modules/workspaces/utils/workspaceSort";
 import projectService from "@/modules/projects/projectService";
 import { ErrorInformation } from "@/modules/api/types";
+import { JobStatus } from "@/domain/generated/apiResources";
+import { isOneOf } from "@/modules/utils/guards";
 import "./OrganizationDetailsPage.css";
 
 type Props = {
@@ -33,6 +34,8 @@ type Props = {
 };
 
 const DEFAULT_PAGE_SIZE = 20;
+
+const JOB_STATUSES = Object.values(JobStatus);
 
 export default function OrganizationsDetailPage({ organizationName, setOrganizationName }: Props) {
   const { id } = useParams();
@@ -47,7 +50,11 @@ export default function OrganizationsDetailPage({ organizationName, setOrganizat
   const [listViewMode, setListViewMode] = useState<ListViewMode>(() => getStoredListViewMode());
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [pageInfo, setPageInfo] = useState<WorkspacePageInfo>({ hasNextPage: false, totalRecords: 0 });
+  const [pageInfo, setPageInfo] = useState<WorkspacePageResult["pageInfo"]>({
+    endCursor: undefined,
+    hasNextPage: false,
+    totalRecords: 0,
+  });
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [policyCounts, setPolicyCounts] = useState<Record<string, number>>({});
   const [debouncedSearch, setDebouncedSearch] = useState(filterState.search);
@@ -114,7 +121,7 @@ export default function OrganizationsDetailPage({ organizationName, setOrganizat
       const response = await workspaceService.listWorkspacePage(request, includeStatusCounts);
       if (sequence !== requestSequence.current) return;
 
-      if (response.isError || !response.data) {
+      if (response.isError) {
         if (!loadedOnce.current) {
           setError({
             title: response.error?.status || "Failed to load workspaces",
@@ -180,9 +187,14 @@ export default function OrganizationsDetailPage({ organizationName, setOrganizat
     organizationId: id ?? "",
     enabled: Boolean(id),
     onEvent: (event) => {
+      const { status } = event;
+      // The subscription schema types the status as a plain String, so values the UI doesn't know are dropped.
+      if (!isOneOf(JOB_STATUSES, status)) {
+        return;
+      }
       setWorkspaces((current) =>
         current.map((workspace) =>
-          workspace.id === event.workspaceId ? { ...workspace, lastStatus: event.status as JobStatus } : workspace
+          workspace.id === event.workspaceId ? { ...workspace, lastStatus: status } : workspace
         )
       );
     },
@@ -193,10 +205,12 @@ export default function OrganizationsDetailPage({ organizationName, setOrganizat
     for (const workspace of workspaces) {
       const key = workspace.projectId ?? "__unassigned__";
       const label = workspace.projectId ? (workspace.projectName ?? "Unknown project") : "(unassigned)";
-      if (!map.has(key)) {
-        map.set(key, { key, label, items: [] });
+      const group = map.get(key);
+      if (group) {
+        group.items.push(workspace);
+      } else {
+        map.set(key, { key, label, items: [workspace] });
       }
-      map.get(key)!.items.push(workspace);
     }
     return Array.from(map.values());
   }, [workspaces]);
