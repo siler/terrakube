@@ -1,5 +1,8 @@
+import { fields } from "./generated/apiPaths";
 import type { FormValues } from "./api/writeBodies";
+import type { Row } from "./api/fieldSelection";
 import { VcsType as GeneratedVcsType } from "./generated/apiResources";
+import type { DeliveryState } from "./generated/apiResources";
 // Shared
 
 import { AuditFieldBase } from "@/modules/types";
@@ -200,20 +203,26 @@ export type JobAttributes = {
 /** Output-delivery outcome of a step, tracked apart from whether the step itself succeeded. */
 export type StepDeliveryState = "ACKED" | "SPOOLED" | "RECOVERED" | "EXPIRED" | "NOT_DURABLE";
 
-export type JobStep = {
-  executionDurationMs?: number | null;
-  executionPhase?: "plan" | "apply" | null;
-  id: string;
-  name: string;
-  stepNumber: number;
-  status: JobStatus;
+export const STEP_FIELDS = fields.step(
+  "stepNumber",
+  "status",
+  "output",
+  "name",
+  "deliveryState",
+  "executionDurationMs",
+  "executionPhase"
+);
+
+export type JobStep = Omit<Row<typeof STEP_FIELDS>, "deliveryState" | "output" | "name"> & {
+  // The run page coalesces these two nullable attributes to "" before any consumer sees a row.
   output: string;
+  name: string;
   outputLog: string;
   /**
    * Whether this step's final structured output reached durable storage (#3692). Absent when the
    * API predates the field.
    */
-  deliveryState?: StepDeliveryState;
+  deliveryState?: DeliveryState;
 };
 export type FlatJob = {
   planDurationMs?: number | null;

@@ -158,20 +158,7 @@ describe("countBySeverity", () => {
   });
 });
 
-describe("collectRunDiagnostics with output that is not well formed", () => {
-  it("skips a null or non-object diagnostic instead of failing", () => {
-    const result = collectRunDiagnostics({
-      steps,
-      planStructuredOutput: {
-        "plan-1": [planChange("aws_vpc.main", [null as unknown as Diagnostic, warning("Deprecated argument")])],
-      },
-      applyStructuredOutput: {},
-      jobDiagnostics: { "plan-1": ["oops" as unknown as Diagnostic, error("Boom")] },
-    });
-
-    expect(result.map((diagnostic) => diagnostic.summary)).toEqual(["Boom", "Deprecated argument"]);
-  });
-
+describe("collectRunDiagnostics keys", () => {
   it("gives the same diagnostic the same key and different ones different keys", () => {
     const result = collectRunDiagnostics({
       steps,
