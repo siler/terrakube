@@ -1,5 +1,6 @@
 import { apiUrl } from "@/config/apiUrls";
-import { VcsConnectionType, VcsType, VcsTypeExtended } from "../types";
+import { VcsConnectionType, VcsType } from "../generated/apiResources";
+import { VcsTypeExtended } from "../types";
 
 // Provider facts shared by the VCS list, add and edit pages.
 

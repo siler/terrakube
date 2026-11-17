@@ -3,9 +3,11 @@ import { CodeEditor } from "@/components/forms/CodeEditor";
 import { Alert, Form, Input, message } from "antd";
 import { decodeBase64, encodeBase64 } from "@/modules/utils/base64";
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { Template } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { Row } from "../api/fieldSelection";
+import type { UpdateBody } from "../api/writeBodies";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Settings.css";
 import "./EditorForm.css";
@@ -31,11 +33,14 @@ type EditTemplateForm = {
   version: string;
 };
 
+const TEMPLATE_FIELDS = fields.template("name", "description", "tcl");
+type TemplateRow = Row<typeof TEMPLATE_FIELDS>;
+
 export const EditTemplate = ({ setMode, templateId, loadTemplates, managePermission = true }: Props) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const [tcl, setTCL] = useState("");
   const editorRef = useRef<IStandaloneCodeEditor>(null);
-  const [template, setTemplate] = useState<Template>();
+  const [template, setTemplate] = useState<TemplateRow>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,23 +52,21 @@ export const EditTemplate = ({ setMode, templateId, loadTemplates, managePermiss
     loadTemplate(templateId);
   }, [templateId]);
 
-  const loadTemplate = (templateId: string) => {
-    axiosInstance
-      .get(`organization/${orgid}/template/${templateId}`)
-      .then((response) => {
-        setTemplate(response.data.data);
-        setTCL(decodeBase64(response.data.data.attributes.tcl));
-      })
-      .catch((err) => {
-        setError(getErrorMessage(err));
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+  const loadTemplate = async (templateId: string) => {
+    try {
+      const loaded = await api.organization(orgid).template(templateId).select(TEMPLATE_FIELDS);
+      setTemplate(loaded);
+      // A template without a flow still opens the editor with an empty definition.
+      setTCL(decodeBase64(loaded.tcl ?? ""));
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const onFinish = (values: EditTemplateForm) => {
-    const body = {
+    const body: UpdateBody<"template"> = {
       data: {
         type: "template",
         id: templateId,
@@ -121,7 +124,7 @@ export const EditTemplate = ({ setMode, templateId, loadTemplates, managePermiss
           <SettingsForm<EditTemplateForm>
             className="editor-form"
             name="edit-template"
-            initialValues={{ name: template.attributes.name, description: template.attributes.description }}
+            initialValues={{ name: template.name, description: template.description }}
             onFinish={onFinish}
             saveLabel="Update template"
             saveDisabled={!managePermission}
@@ -155,7 +158,7 @@ export const EditTemplate = ({ setMode, templateId, loadTemplates, managePermiss
             description="Workspaces can no longer run jobs with this template. Notifications filtered only to this template then fire for every template. This cannot be undone."
             disabled={!managePermission}
             onConfirm={onDelete}
-            confirmMessage={`Workspaces can no longer run jobs with ${template.attributes.name}. Notifications filtered only to this template then fire for every template. This cannot be undone.`}
+            confirmMessage={`Workspaces can no longer run jobs with ${template.name}. Notifications filtered only to this template then fire for every template. This cannot be undone.`}
           />
         </>
       ) : (

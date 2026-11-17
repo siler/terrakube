@@ -1,9 +1,11 @@
 import { CloudServerOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Form, Tooltip, Typography, message } from "antd";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { Agent } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import type { CreateBody } from "../api/writeBodies";
 import "./Settings.css";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
@@ -13,22 +15,26 @@ import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal
 import AgentFormModal, { AddAgentFormValues } from "./components/AgentFormModal";
 import ResourceCard from "./components/ResourceCard";
 
-type Params = {
-  orgid: string;
-};
+const AGENT_FIELDS = fields.agent("name", "description", "url");
+
+/** An agent pool as the list card shows it. */
+type AgentRow = Row<typeof AGENT_FIELDS>;
+
+// The linkage alone answers "which workspaces use this pool"; the names would add nothing to the count.
+const WORKSPACE_AGENT_IDS = fields.workspace({ agent: ids });
 
 type Props = {
   managePermission?: boolean;
 };
 
 export const AgentSettings = ({ managePermission = true }: Props) => {
-  const { orgid } = useParams<Params>();
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const orgid = useRequiredParam("orgid");
+  const [agents, setAgents] = useState<AgentRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [visible, setVisible] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<Agent | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AgentRow | null>(null);
   const [form] = Form.useForm<AddAgentFormValues>();
 
   const onNew = () => {
@@ -36,29 +42,29 @@ export const AgentSettings = ({ managePermission = true }: Props) => {
     setVisible(true);
   };
 
-  const onDelete = (agent: Agent) => {
-    axiosInstance
-      .get(`organization/${orgid}/workspace?filter[workspace]=agent.id==${agent.id}&fields[workspace]=name`)
-      .then((response) => {
-        const workspaces = response.data.data?.length ?? 0;
-        if (workspaces > 0) {
-          message.error(
-            `${agent.attributes.name} is used by ${workspaces} workspace${workspaces === 1 ? "" : "s"}. Move them to another agent pool first.`
-          );
-          return;
-        }
-        return axiosInstance.delete(`organization/${orgid}/agent/${agent.id}`).then(() => {
-          message.success(`Agent pool ${agent.attributes.name} deleted`);
-          loadAgents();
-        });
-      })
-      .catch((err) => {
-        message.error(`Could not delete the agent pool: ${getErrorMessage(err)}`);
-      });
+  const onDelete = async (agent: AgentRow) => {
+    try {
+      const workspaces = await api
+        .organization(orgid)
+        .workspace()
+        .select(WORKSPACE_AGENT_IDS)
+        .where((workspace) => workspace.agent.id.eq(agent.id));
+      if (workspaces.length > 0) {
+        message.error(
+          `${agent.name} is used by ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}. Move them to another agent pool first.`
+        );
+        return;
+      }
+      await axiosInstance.delete(`organization/${orgid}/agent/${agent.id}`);
+      message.success(`Agent pool ${agent.name} deleted`);
+      loadAgents();
+    } catch (err) {
+      message.error(`Could not delete the agent pool: ${getErrorMessage(err)}`);
+    }
   };
 
   const onCreate = (values: AddAgentFormValues) => {
-    const body = {
+    const body: CreateBody<"agent"> = {
       data: {
         type: "agent",
         attributes: {
@@ -88,21 +94,18 @@ export const AgentSettings = ({ managePermission = true }: Props) => {
       .finally(() => setSaving(false));
   };
 
-  const loadAgents = () => {
-    axiosInstance
-      .get(`organization/${orgid}/agent`)
-      .then((response) => {
-        setAgents(response.data.data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (isPermissionError(err)) {
-          setError(getErrorMessage(err));
-        } else {
-          message.error(`Could not load agent pools: ${getErrorMessage(err)}`);
-        }
-        setLoading(false);
-      });
+  const loadAgents = async () => {
+    try {
+      setAgents(await api.organization(orgid).agent().select(AGENT_FIELDS));
+    } catch (err) {
+      if (isPermissionError(err)) {
+        setError(getErrorMessage(err));
+      } else {
+        message.error(`Could not load agent pools: ${getErrorMessage(err)}`);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => {
     setLoading(true);
@@ -132,24 +135,22 @@ export const AgentSettings = ({ managePermission = true }: Props) => {
             <ResourceCard
               key={item.id}
               icon={<CloudServerOutlined />}
-              name={item.attributes.name}
+              name={item.name}
               actions={
                 <Tooltip title="Delete">
                   <Button
                     icon={<DeleteOutlined />}
                     disabled={!managePermission}
-                    aria-label={`Delete agent pool ${item.attributes.name}`}
+                    aria-label={`Delete agent pool ${item.name}`}
                     onClick={() => setPendingDelete(item)}
                   />
                 </Tooltip>
               }
             >
-              {item.attributes.description && (
-                <Typography.Text className="resource-card-meta">{item.attributes.description}</Typography.Text>
-              )}
-              {item.attributes.url && (
+              {item.description && <Typography.Text className="resource-card-meta">{item.description}</Typography.Text>}
+              {item.url && (
                 <Typography.Text className="resource-mono resource-card-meta" copyable>
-                  {item.attributes.url}
+                  {item.url}
                 </Typography.Text>
               )}
             </ResourceCard>
@@ -191,8 +192,8 @@ export const AgentSettings = ({ managePermission = true }: Props) => {
             title="Delete agent pool"
             message={
               <>
-                <strong>{pendingDelete?.attributes.name}</strong> can only be deleted when no workspace is assigned to
-                it. The agent itself keeps running until you shut it down. This cannot be undone.
+                <strong>{pendingDelete?.name}</strong> can only be deleted when no workspace is assigned to it. The
+                agent itself keeps running until you shut it down. This cannot be undone.
               </>
             }
             okText="Delete agent pool"
