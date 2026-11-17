@@ -68,14 +68,28 @@ describe("pageKey", () => {
     expect(mounts).toBe(1);
   });
 
-  it("remounts for another workspace, another organization or a run", async () => {
+  it("remounts for another workspace or another organization", async () => {
     const go = setup("/organizations/o1/workspaces/w1/runs");
     await go("/organizations/o1/workspaces/w2/runs");
     expect(mounts).toBe(2);
     await go("/organizations/o2/workspaces/w2/runs");
     expect(mounts).toBe(3);
-    await go("/organizations/o2/workspaces/w2/runs/r1");
-    expect(mounts).toBe(4);
+  });
+
+  it("keeps the workspace page mounted when a run opens, changes or closes", async () => {
+    const go = setup("/organizations/o1/workspaces/w1/runs");
+    await go("/organizations/o1/workspaces/w1/runs/r1");
+    expect(screen.getByText(/^run .*"runid":"r1"/)).toBeInTheDocument();
+    await go("/organizations/o1/workspaces/w1/runs/r2");
+    await go("/organizations/o1/workspaces/w1/runs");
+    expect(screen.getByText(/^runs/)).toBeInTheDocument();
+    expect(mounts).toBe(1);
+  });
+
+  it("remounts for the same run in another workspace", async () => {
+    const go = setup("/organizations/o1/workspaces/w1/runs/r1");
+    await go("/organizations/o1/workspaces/w2/runs/r1");
+    expect(mounts).toBe(2);
   });
 
   it("remounts routes without a page handle on every route change", async () => {
