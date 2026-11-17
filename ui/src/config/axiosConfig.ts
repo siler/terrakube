@@ -1,7 +1,8 @@
-import axios, { AxiosError, AxiosResponse } from "axios";
+import axios, { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from "axios";
 import { mgr } from "./authConfig";
 import getUserFromStorage from "./authUser";
 import { setBackendError, FATAL_API_STATUSES } from "@/modules/api/backendStatus";
+import { isRecord } from "@/modules/utils/guards";
 import {
   classifyRequestOutcome,
   recordAuxiliaryRequestFailure,
@@ -17,12 +18,15 @@ declare module "axios" {
      */
     auxClass?: string;
   }
+
+  interface AxiosError {
+    /** Set by the response interceptors on a 403 so callers can show {@link permissionMessage}. */
+    permissionError?: boolean;
+    permissionMessage?: string;
+  }
 }
 
-type RuntimeEnv = Window["_env_"] & { REACT_APP_TERRAKUBE_SEND_COOKIES?: string };
-
-const runtimeEnv = window._env_ as RuntimeEnv;
-const sendCookiesWithRequests = runtimeEnv.REACT_APP_TERRAKUBE_SEND_COOKIES?.trim().toLowerCase() === "true";
+const sendCookiesWithRequests = window._env_.REACT_APP_TERRAKUBE_SEND_COOKIES?.trim().toLowerCase() === "true";
 
 const axiosInstance = axios.create({
   baseURL: window._env_.REACT_APP_TERRAKUBE_API_URL,
@@ -57,14 +61,14 @@ export const axiosAuxiliary = axios.create({
 });
 
 // Shared request interceptor that attaches the Bearer token
-function attachAuthToken(config: any) {
+function attachAuthToken(config: InternalAxiosRequestConfig) {
   const user = getUserFromStorage();
   const accessToken = user?.access_token;
   config.headers["Authorization"] = `Bearer ${accessToken}`;
   return config;
 }
 
-function rejectError(error: any) {
+function rejectError(error: unknown) {
   return Promise.reject(error);
 }
 
@@ -87,9 +91,8 @@ function applyAuthHandling(error: AxiosError) {
   }
   if (error.response?.status === 403) {
     // Enrich the error with a clear permission message so callers can display it
-    const enriched = error as AxiosError & { permissionError: true; permissionMessage: string };
-    enriched.permissionError = true;
-    enriched.permissionMessage =
+    error.permissionError = true;
+    error.permissionMessage =
       "You do not have the required permissions to perform this action. Please contact your organization administrator.";
   }
 }
@@ -121,42 +124,63 @@ axiosGraphQL.interceptors.response.use(handleResponseSuccess, handleResponseErro
 axiosRegistry.interceptors.response.use(handleResponseSuccess, handleResponseError);
 axiosAuxiliary.interceptors.response.use((response) => response, handleAuxiliaryResponseError);
 
+const UNEXPECTED_ERROR = "An unexpected error occurred.";
+
+const nonBlank = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() !== "" ? value : undefined;
+
 /**
- * Helper to extract a user-friendly error message from an axios error.
- * Use this in .catch() blocks to display meaningful errors.
+ * Reads the first JSON:API error's `detail` from a response body, or undefined when the body has none.
  */
-export function getErrorMessage(error: any): string {
-  if (error?.permissionError) {
-    return error.permissionMessage;
+export const jsonApiErrorDetail = (data: unknown): string | undefined => {
+  if (!isRecord(data) || !Array.isArray(data.errors)) {
+    return undefined;
   }
+  const errors: unknown[] = data.errors;
+  const first = errors[0];
+  return isRecord(first) ? nonBlank(first.detail) : undefined;
+};
+
+/**
+ * Extracts a user-friendly message from a rejected request: an axios error, an `ApiError`
+ * (`{ message }`), or anything else thrown. Use it in catch blocks to show meaningful errors.
+ */
+export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
-    if (error.response?.status === 403) {
+    if (error.permissionError && error.permissionMessage) {
+      return error.permissionMessage;
+    }
+    const response = error.response;
+    if (response?.status === 403) {
       return "You do not have the required permissions to perform this action.";
     }
-    if (error.response?.status === 429) {
-      if (typeof error.response.data === "string" && error.response.data.trim() !== "") {
-        return error.response.data;
-      }
-
-      return "The upstream API rate limit was reached. Please wait a moment and try again.";
+    if (response?.status === 429) {
+      return nonBlank(response.data) ?? "The upstream API rate limit was reached. Please wait a moment and try again.";
     }
-    if (error.response?.status === 404) {
+    if (response?.status === 404) {
       return "The requested resource could not be found.";
     }
-    const jsonApiDetail = error.response?.data?.errors?.[0]?.detail;
-    if (typeof jsonApiDetail === "string" && jsonApiDetail.trim() !== "") {
-      return jsonApiDetail;
-    }
-    return error.response?.statusText || error.message || "An unexpected error occurred.";
+    return jsonApiErrorDetail(response?.data) || response?.statusText || error.message || UNEXPECTED_ERROR;
   }
-  return error?.message || "An unexpected error occurred.";
+  if (isRecord(error)) {
+    if (error.permissionError === true && typeof error.permissionMessage === "string") {
+      return error.permissionMessage;
+    }
+    if (typeof error.message === "string" && error.message) {
+      return error.message;
+    }
+  }
+  return UNEXPECTED_ERROR;
 }
 
 /**
  * Returns true if the error is a 403 permission error.
  */
-export function isPermissionError(error: any): boolean {
-  return error?.permissionError === true || error?.response?.status === 403;
+export function isPermissionError(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
+  }
+  return error.permissionError === true || (isRecord(error.response) && error.response.status === 403);
 }
 
 export default axiosInstance;

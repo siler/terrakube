@@ -15,7 +15,7 @@ jest.mock("../authUser", () => ({
   default: jest.fn(() => ({ access_token: "token" })),
 }));
 
-const mockRemoveUser = mgr.removeUser as jest.Mock;
+const mockRemoveUser = jest.mocked(mgr.removeUser);
 
 const rejectWith =
   (status: number | undefined, extra: Record<string, unknown> = {}) =>
@@ -23,10 +23,7 @@ const rejectWith =
     Promise.reject({
       isAxiosError: true,
       config,
-      response:
-        status == null
-          ? undefined
-          : { status, data: {}, statusText: "", headers: {}, config },
+      response: status == null ? undefined : { status, data: {}, statusText: "", headers: {}, config },
       toJSON: () => ({}),
       ...extra,
     });
@@ -135,17 +132,95 @@ describe("axiosAuxiliary client", () => {
   it("a successful auxiliary response does not clear a genuine global outage", async () => {
     const { axiosAuxiliary } = await import("../axiosConfig");
     setBackendError(503);
-    axiosAuxiliary.defaults.adapter = () =>
+    axiosAuxiliary.defaults.adapter = (config) =>
       Promise.resolve({
         data: {},
         status: 200,
         statusText: "OK",
         headers: {},
-        config: {} as never,
+        config,
       });
 
     await axiosAuxiliary.get("/context/v1/1", { auxClass: "context" });
 
     expect(getBackendError()).toBe(503);
+  });
+});
+
+describe("getErrorMessage", () => {
+  const axiosError = (status: number, data: unknown, extra: Record<string, unknown> = {}) => ({
+    isAxiosError: true,
+    message: `Request failed with status code ${status}`,
+    response: { status, data, statusText: "", headers: {}, config: {} },
+    ...extra,
+  });
+
+  it("prefers the server's JSON:API detail over axios's generic message", async () => {
+    const { getErrorMessage } = await import("../axiosConfig");
+
+    expect(getErrorMessage(axiosError(400, { errors: [{ detail: "Team already has access" }] }))).toBe(
+      "Team already has access"
+    );
+  });
+
+  it("falls back to axios's message when the body has no usable detail", async () => {
+    const { getErrorMessage } = await import("../axiosConfig");
+
+    expect(getErrorMessage(axiosError(500, { errors: [{ detail: "  " }] }))).toBe(
+      "Request failed with status code 500"
+    );
+    expect(getErrorMessage(axiosError(500, "oops"))).toBe("Request failed with status code 500");
+  });
+
+  it("returns the interceptor's permission message on an enriched 403", async () => {
+    const { getErrorMessage } = await import("../axiosConfig");
+
+    expect(getErrorMessage(axiosError(403, {}, { permissionError: true, permissionMessage: "No access" }))).toBe(
+      "No access"
+    );
+    expect(getErrorMessage(axiosError(403, {}))).toBe(
+      "You do not have the required permissions to perform this action."
+    );
+  });
+
+  it("returns a non-blank 429 body, otherwise the rate-limit message", async () => {
+    const { getErrorMessage } = await import("../axiosConfig");
+
+    expect(getErrorMessage(axiosError(429, "Slow down"))).toBe("Slow down");
+    expect(getErrorMessage(axiosError(429, ""))).toMatch(/rate limit/);
+  });
+
+  it("reads the message of an ApiError or Error, and a default for anything else", async () => {
+    const { getErrorMessage } = await import("../axiosConfig");
+
+    expect(getErrorMessage({ status: "500", statusCode: 500, message: "Backend down" })).toBe("Backend down");
+    expect(getErrorMessage(new Error("boom"))).toBe("boom");
+    expect(getErrorMessage("boom")).toBe("An unexpected error occurred.");
+    expect(getErrorMessage(null)).toBe("An unexpected error occurred.");
+  });
+});
+
+describe("jsonApiErrorDetail", () => {
+  it("returns the first error's detail only when it is a non-blank string", async () => {
+    const { jsonApiErrorDetail } = await import("../axiosConfig");
+
+    expect(jsonApiErrorDetail({ errors: [{ detail: "Bad name" }, { detail: "ignored" }] })).toBe("Bad name");
+    expect(jsonApiErrorDetail({ errors: [{ detail: 42 }] })).toBeUndefined();
+    expect(jsonApiErrorDetail({ errors: [] })).toBeUndefined();
+    expect(jsonApiErrorDetail({ errors: "nope" })).toBeUndefined();
+    expect(jsonApiErrorDetail("<html>")).toBeUndefined();
+    expect(jsonApiErrorDetail(undefined)).toBeUndefined();
+  });
+});
+
+describe("isPermissionError", () => {
+  it("recognises an enriched error or a 403 response", async () => {
+    const { isPermissionError } = await import("../axiosConfig");
+
+    expect(isPermissionError({ permissionError: true })).toBe(true);
+    expect(isPermissionError({ response: { status: 403 } })).toBe(true);
+    expect(isPermissionError({ response: { status: 404 } })).toBe(false);
+    expect(isPermissionError(undefined)).toBe(false);
+    expect(isPermissionError("403")).toBe(false);
   });
 });
