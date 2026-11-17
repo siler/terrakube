@@ -1,17 +1,18 @@
 import { message } from "antd";
 import { Link, useNavigate } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
-import { Workspace } from "../../types";
+import type { RelationshipBody, UpdateBody } from "@/domain/api/writeBodies";
+import type { WorkspacePageRow } from "../workspaceQuery";
 import { genericHeader } from "../Workspaces";
 import { DangerZone } from "@/components/settings/DangerZone";
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
 };
 
-export const WorkspaceAdvanced = ({ workspace, manageWorkspace }: Props) => {
-  const organizationId = workspace.relationships.organization.data.id;
+export const WorkspaceAdvanced = ({ organizationId, workspace, manageWorkspace }: Props) => {
   const navigate = useNavigate();
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -24,33 +25,29 @@ export const WorkspaceAdvanced = ({ workspace, manageWorkspace }: Props) => {
 
     return result;
   }
-  const onDelete = (workspace: Workspace) => {
+  const onDelete = (workspace: WorkspacePageRow) => {
     const id = workspace.id;
     const randomLetters = generateRandomString(4);
-    const deletedName = `${workspace.attributes.name.substring(0, 21)}_DEL_${randomLetters}`;
+    const deletedName = `${workspace.name.substring(0, 21)}_DEL_${randomLetters}`;
 
-    const body = {
+    const vcsLinkage: RelationshipBody<"workspace", "vcs"> = { data: null };
+
+    const body: UpdateBody<"workspace"> = {
       data: {
         type: "workspace",
         id: id,
         attributes: {
           name: deletedName,
-          deleted: "true",
+          deleted: true,
         },
       },
     };
     axiosInstance
-      .patch(
-        `/organization/${organizationId}/workspace/${id}/relationships/vcs`,
-        {
-          data: null,
+      .patch(`/organization/${organizationId}/workspace/${id}/relationships/vcs`, vcsLinkage, {
+        headers: {
+          "Content-Type": "application/vnd.api+json",
         },
-        {
-          headers: {
-            "Content-Type": "application/vnd.api+json",
-          },
-        }
-      )
+      })
       .then(() =>
         axiosInstance.patch(`organization/${organizationId}/workspace/${id}`, body, genericHeader).then((response) => {
           if (response.status === 204) {
@@ -82,8 +79,8 @@ export const WorkspaceAdvanced = ({ workspace, manageWorkspace }: Props) => {
           </>
         }
         disabled={!manageWorkspace}
-        confirmValue={workspace.attributes.name}
-        confirmMessage={`Workspace "${workspace.attributes.name}" will be removed from Terrakube: active runs are cancelled and its state files and run outputs are deleted. This cannot be undone. Resources it manages are not destroyed.`}
+        confirmValue={workspace.name}
+        confirmMessage={`Workspace "${workspace.name}" will be removed from Terrakube: active runs are cancelled and its state files and run outputs are deleted. This cannot be undone. Resources it manages are not destroyed.`}
         onConfirm={() => onDelete(workspace)}
       />
     </div>
