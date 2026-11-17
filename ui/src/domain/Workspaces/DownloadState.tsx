@@ -1,13 +1,16 @@
 import { FileJpgOutlined } from "@ant-design/icons";
-import { Dropdown } from "antd";
+import { Dropdown, message } from "antd";
 import { toJpeg, toPng, toSvg } from "html-to-image";
 import { BsFiletypeJson, BsFiletypePng, BsFiletypeSvg } from "react-icons/bs";
-import axiosInstance from "../../config/axiosConfig";
+import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
 
 type Props = {
   stateUrl: string;
   manageState: boolean;
 };
+
+const IMAGE_WIDTH = 1024;
+const IMAGE_HEIGHT = 768;
 
 export const DownloadState = ({ stateUrl, manageState }: Props) => {
   function downloadImage(dataUrl: string, fileName: string) {
@@ -17,70 +20,55 @@ export const DownloadState = ({ stateUrl, manageState }: Props) => {
     a.click();
   }
 
-  const downloadPNG = () => {
-    const imageWidth = 1024;
-    const imageHeight = 768;
-
-    toPng(document.querySelector(".react-flow__renderer") as HTMLElement, {
-      width: imageWidth,
-      height: imageHeight,
+  const exportDiagram = (render: typeof toPng, fileName: string, backgroundColor?: string) => {
+    const diagram = document.querySelector(".react-flow__renderer");
+    if (!(diagram instanceof HTMLElement)) {
+      message.error("The state diagram is not shown, so it cannot be exported");
+      return;
+    }
+    render(diagram, {
+      backgroundColor,
+      width: IMAGE_WIDTH,
+      height: IMAGE_HEIGHT,
       style: {
-        width: imageWidth.toString(),
-        height: imageHeight.toString(),
+        width: IMAGE_WIDTH.toString(),
+        height: IMAGE_HEIGHT.toString(),
       },
-    }).then((dataUrl) => {
-      downloadImage(dataUrl, "terrakube-state-diagram.png");
-    });
+    })
+      .then((dataUrl) => {
+        downloadImage(dataUrl, fileName);
+      })
+      .catch((error: unknown) => {
+        message.error("Exporting the state diagram failed: " + getErrorMessage(error));
+      });
   };
 
-  const downloadJPG = () => {
-    const imageWidth = 1024;
-    const imageHeight = 768;
+  const downloadPNG = () => exportDiagram(toPng, "terrakube-state-diagram.png");
 
-    toJpeg(document.querySelector(".react-flow__renderer") as HTMLElement, {
-      backgroundColor: "white",
-      width: imageWidth,
-      height: imageHeight,
-      style: {
-        width: imageWidth.toString(),
-        height: imageHeight.toString(),
-      },
-    }).then((dataUrl) => {
-      downloadImage(dataUrl, "terrakube-state-diagram.jpg");
-    });
-  };
+  const downloadJPG = () => exportDiagram(toJpeg, "terrakube-state-diagram.jpg", "white");
 
-  const downloadSVG = () => {
-    const imageWidth = 1024;
-    const imageHeight = 768;
-
-    toSvg(document.querySelector(".react-flow__renderer") as HTMLElement, {
-      width: imageWidth,
-      height: imageHeight,
-      style: {
-        width: imageWidth.toString(),
-        height: imageHeight.toString(),
-      },
-    }).then((dataUrl) => {
-      downloadImage(dataUrl, "terrakube-state-diagram.svg");
-    });
-  };
+  const downloadSVG = () => exportDiagram(toSvg, "terrakube-state-diagram.svg");
 
   const downloadJSON = () => {
-    axiosInstance.request({ url: stateUrl, method: "GET", responseType: "blob" }).then((response) => {
-      const href = window.URL.createObjectURL(response.data);
+    axiosInstance
+      .request<Blob>({ url: stateUrl, method: "GET", responseType: "blob" })
+      .then((response) => {
+        const href = window.URL.createObjectURL(response.data);
 
-      const anchorElement = document.createElement("a");
+        const anchorElement = document.createElement("a");
 
-      anchorElement.href = href;
-      anchorElement.download = "terrakube-state.json";
+        anchorElement.href = href;
+        anchorElement.download = "terrakube-state.json";
 
-      document.body.appendChild(anchorElement);
-      anchorElement.click();
+        document.body.appendChild(anchorElement);
+        anchorElement.click();
 
-      document.body.removeChild(anchorElement);
-      window.URL.revokeObjectURL(href);
-    });
+        document.body.removeChild(anchorElement);
+        window.URL.revokeObjectURL(href);
+      })
+      .catch((error: unknown) => {
+        message.error("Downloading the state failed: " + getErrorMessage(error));
+      });
   };
 
   const handleButtonClick = () => {
@@ -119,7 +107,7 @@ export const DownloadState = ({ stateUrl, manageState }: Props) => {
       icon: <FileJpgOutlined />,
     },
     {
-      label: "Donwload PNG",
+      label: "Download PNG",
       key: "2",
       icon: <BsFiletypePng />,
     },

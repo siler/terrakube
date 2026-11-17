@@ -1,14 +1,24 @@
 import { Checkbox, Form, Input, type RadioChangeEvent } from "antd";
 import RadioChoices from "@/components/settings/RadioChoices";
+import { Category } from "@/domain/generated/apiResources";
+import { isOneOf } from "@/modules/utils/typeGuards";
 
 type Props = {
-  category?: string;
-  onCategoryChange?: (value: string) => void;
+  category?: Category;
+  onCategoryChange?: (value: Category) => void;
 };
 
 export default function VariableFormFields({ category, onCategoryChange }: Props) {
   const radioGroupProps = onCategoryChange
-    ? { value: category, onChange: (e: RadioChangeEvent) => onCategoryChange(e.target.value) }
+    ? {
+        value: category,
+        onChange: (e: RadioChangeEvent) => {
+          const value: unknown = e.target.value;
+          if (isOneOf(Object.values(Category), value)) {
+            onCategoryChange(value);
+          }
+        },
+      }
     : {};
 
   return (

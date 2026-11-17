@@ -1,3 +1,5 @@
+import { isOneOf, isRecord } from "@/modules/utils/typeGuards";
+
 export type PlanChange = {
   address?: string;
   resourceType?: string;
@@ -25,18 +27,6 @@ export type PlanChange = {
 };
 
 export type StructuredPlanOutputByStep = Record<string, PlanChange[]>;
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  if (value === null) {
-    return false;
-  }
-
-  if (typeof value !== "object") {
-    return false;
-  }
-
-  return true;
-};
 
 const toOptionalString = (value: unknown): string | undefined => {
   if (typeof value !== "string") {
@@ -223,7 +213,7 @@ export type ApplyChange = PlanChange & {
 
 export type StructuredApplyOutputByStep = Record<string, ApplyChange[]>;
 
-const CHANGE_STATUSES: ChangeStatus[] = [
+const CHANGE_STATUSES = [
   "pending",
   "planned",
   "refreshing",
@@ -240,11 +230,11 @@ const CHANGE_STATUSES: ChangeStatus[] = [
   "ephemeral-renewed",
   "ephemeral-closing",
   "ephemeral-errored",
-];
+] as const satisfies readonly ChangeStatus[];
 
 const toChangeStatus = (value: unknown): ChangeStatus => {
-  if (typeof value === "string" && (CHANGE_STATUSES as string[]).includes(value)) {
-    return value as ChangeStatus;
+  if (isOneOf(CHANGE_STATUSES, value)) {
+    return value;
   }
 
   return "pending";
@@ -284,11 +274,11 @@ const toOptionalNumber = (value: unknown): number | undefined => {
 
 const normalizeApplyChange = (value: unknown): ApplyChange | null => {
   const planChange = normalizePlanChange(value);
-  if (planChange === null) {
+  if (planChange === null || !isRecord(value)) {
     return null;
   }
 
-  const record = value as Record<string, unknown>;
+  const record = value;
 
   return {
     ...planChange,
@@ -408,7 +398,9 @@ export const normalizeUITemplates = (value: unknown): Record<string, string> => 
   return normalizedTemplates;
 };
 
-export type PlanTotals = { create: number; update: number; delete: number; replace: number };
+const PLAN_TOTAL_LABELS = ["create", "update", "delete", "replace"] as const;
+
+export type PlanTotals = Record<(typeof PLAN_TOTAL_LABELS)[number], number>;
 
 /** What an approver signs off on: the planned changes of every plan step, or null when no plan was read. */
 export const computePlanTotals = (planByStep: StructuredPlanOutputByStep): PlanTotals | null => {
@@ -418,7 +410,7 @@ export const computePlanTotals = (planByStep: StructuredPlanOutputByStep): PlanT
     for (const change of changes) {
       seen = true;
       const label = getPlanChangeActionLabel(change.actions, change.action);
-      if (label in totals) totals[label as keyof PlanTotals] += 1;
+      if (isOneOf(PLAN_TOTAL_LABELS, label)) totals[label] += 1;
     }
   }
   return seen ? totals : null;

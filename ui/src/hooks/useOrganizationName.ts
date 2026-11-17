@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
-import axiosInstance from "@/config/axiosConfig";
 import { ORGANIZATION_NAME } from "@/config/actionTypes";
 import { isOrgId } from "@/config/orgId";
+import { api } from "@/domain/generated/apiPaths";
 
 // Names are cached per organization id, so a page never shows the name of another organization.
 const names = new Map<string, string>();
@@ -47,16 +47,16 @@ export function useOrganizationName(orgId: string | null | undefined): string | 
   useEffect(() => {
     if (!id || readName(id) || loading.has(id)) return;
     loading.add(id);
-    axiosInstance
-      .get(`organization/${id}?fields[organization]=name`)
-      .then((response) => {
-        const fetched = response.data?.data?.attributes?.name;
-        if (fetched) cacheOrganizationName(id, fetched);
-      })
-      .catch(() => {
+    void (async () => {
+      try {
+        const row = await api.organization(id).select("name");
+        if (row.name) cacheOrganizationName(id, row.name);
+      } catch {
         // Leave the name empty; the page shows its own error for an unreadable organization.
-      })
-      .finally(() => loading.delete(id));
+      } finally {
+        loading.delete(id);
+      }
+    })();
   }, [id]);
 
   return name;

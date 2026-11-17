@@ -1,6 +1,7 @@
 import { axiosAuxiliary, axiosClient } from "../../config/axiosConfig";
 import { apiUrl } from "@/config/apiUrls";
-import { getJobOutputRequestUrl, isTerrakubeApiUrl } from "./outputUrl";
+import { isRecord } from "@/modules/utils/typeGuards";
+import { getApiRequestUrl, isTerrakubeApiUrl } from "./outputUrl";
 
 /** Objects at or above this size are fetched tail-first via a Range request. */
 export const LARGE_LOG_THRESHOLD = 2 * 1024 * 1024;
@@ -42,7 +43,7 @@ export const OUTPUT_INCOMPLETE_HEADER = "x-terrakube-output-incomplete";
 
 function resolveUrl(params: FetchStepLogParams): { url: string; terrakubeApi: boolean } {
   if (params.output != null && params.output !== "") {
-    const url = getJobOutputRequestUrl(params.output);
+    const url = getApiRequestUrl(params.output);
     return { url, terrakubeApi: isTerrakubeApiUrl(url) };
   }
   const url =
@@ -78,9 +79,15 @@ function isAbortError(error: unknown): boolean {
 }
 
 function statusOf(error: unknown): number | undefined {
-  const response = (error as { response?: { status?: number } })?.response;
-  return response?.status;
+  if (!isRecord(error) || !isRecord(error.response)) {
+    return undefined;
+  }
+  const { status } = error.response;
+  return typeof status === "number" ? status : undefined;
 }
+
+// Keeps the raw body: logs are plain text and must not go through axios's JSON parsing.
+const keepRawBody = (data: unknown): unknown => data;
 
 export async function fetchStepLog(params: FetchStepLogParams): Promise<FetchStepLogResult> {
   await acquireSlot();
@@ -117,22 +124,23 @@ async function fetchStepLogInner(params: FetchStepLogParams): Promise<FetchStepL
 
   try {
     const response = wantsTail
-      ? await client.get(url, {
+      ? await client.get<unknown>(url, {
           signal: params.signal,
           headers: { Range: `bytes=-${params.tailBytes}` },
           responseType: "text",
-          transformResponse: (d) => d,
+          transformResponse: keepRawBody,
           auxClass: "step-log",
         })
-      : await client.get(url, {
+      : await client.get<unknown>(url, {
           signal: params.signal,
           responseType: "text",
-          transformResponse: (d) => d,
+          transformResponse: keepRawBody,
           auxClass: "step-log",
         });
 
     const text = typeof response.data === "string" ? response.data : String(response.data ?? "");
-    const contentRange = response.headers?.["content-range"] as string | undefined;
+    const rawContentRange: unknown = response.headers?.["content-range"];
+    const contentRange = typeof rawContentRange === "string" ? rawContentRange : undefined;
     const truncated = response.status === 206 && contentRange != null && !/^bytes 0-/.test(contentRange);
 
     const incomplete = String(response.headers?.[OUTPUT_INCOMPLETE_HEADER] ?? "").toLowerCase() === "true";

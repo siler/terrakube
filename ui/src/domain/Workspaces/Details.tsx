@@ -1,5 +1,7 @@
 import { apiUrl } from "@/config/apiUrls";
 import { ApprovalAttribution } from "@/components/display/ApprovalAttribution";
+import { matchDisplayCriteria } from "./actionCriteria";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import {
   ArrowRightOutlined,
   BranchesOutlined,
@@ -14,8 +16,9 @@ import {
 } from "@ant-design/icons";
 import { Alert, Avatar, Button, Col, Empty, message, Row, Space, Table, Tabs, Typography, Modal } from "antd";
 
-import { lazy, Suspense, useEffect, useState } from "react";
-import { useJobStatusSubscription, usePolling } from "../../hooks";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCoalescedReload, useJobStatusSubscription, usePolling } from "../../hooks";
+import { parseOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import { BiTerminal } from "react-icons/bi";
 import { FiGitCommit } from "react-icons/fi";
 import { HiOutlineExternalLink } from "react-icons/hi";
@@ -25,20 +28,7 @@ import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME, WORKSPACE_ARCHIVE } from "../.
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
 import { CreateJob } from "../Jobs/Create";
 import PolicyStatusTag from "@/components/display/PolicyStatusTag";
-import {
-  Action,
-  ActionWithSettings,
-  FlatJob,
-  FlatJobHistory,
-  FlatSchedule,
-  FlatVariable,
-  IncludedItem,
-  Organization,
-  Resource,
-  Template,
-  VcsType,
-  Workspace,
-} from "../types.js";
+import { Resource, VcsTypeOrUnknown } from "../types.js";
 import { CLIDriven } from "../Workspaces/CLIDriven";
 import { ResourceDrawer } from "../Workspaces/ResourceDrawer";
 import { RunTriggers } from "../Workspaces/RunTriggers";
@@ -54,8 +44,33 @@ import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { LinkButton } from "@/components/navigation/LinkButton";
 import RunList from "@/modules/workspaces/components/RunList";
 import WorkspaceStatusTag from "@/components/display/WorkspaceStatusTag";
+import { and } from "../api/rsqlFilter";
+import { api, fields } from "../generated/apiPaths";
+import type { Row as ApiRow } from "../api/fieldSelection";
+import type { UpdateBody } from "../api/writeBodies";
 
-import { setupWorkspaceIncludes, isValidUrl, fixSshURL, StateOutputVariableWithName } from "./workspaceDataUtils";
+import {
+  setupWorkspaceIncludes,
+  isValidUrl,
+  fixSshURL,
+  StateOutputVariableWithName,
+  CollectionVariableRow,
+  GlobalVariableRow,
+  NamedSchedule,
+  WorkspaceHistoryRow,
+  WorkspaceJobRow,
+} from "./workspaceDataUtils";
+import { outputCopyText } from "./stateModel";
+import {
+  ORG_TEMPLATE_FIELDS,
+  OrgTemplateRow,
+  toActionWorkspace,
+  workspacePageQuery,
+  workspacePageRequest,
+  WorkspacePageRow,
+  WorkspaceScheduleRow,
+  WorkspaceVariableRow,
+} from "./workspaceQuery";
 import VcsLogo from "@/components/display/VcsLogo";
 import { formatDateTime, formatDuration, relativeTime } from "@/modules/utils/dates";
 import { computeWorkspaceMetrics, FINISHED_JOB_STATUSES } from "./workspaceMetrics";
@@ -68,6 +83,11 @@ const WorkspaceSettings = lazy(() =>
 );
 
 const { Paragraph } = Typography;
+
+const PAGE_ACTION_FIELDS = fields.action("action", "displayCriteria", "type");
+
+/** A workspace page action, with the settings its matching display criterion attaches. */
+type PageAction = ApiRow<typeof PAGE_ACTION_FIELDS> & { settings?: Record<string, unknown> };
 
 const WORKSPACE_SECTION_LABELS: Record<string, string> = {
   "1": "Overview",
@@ -98,10 +118,29 @@ type Props = {
   settingsSection?: string;
 };
 
+const SIDE_REQUEST_TIMEOUT_MS = 15_000;
+
+// A typed query has no axios timeout, so a side request's limit is a signal that also aborts at the deadline.
+const withTimeout = (parent: AbortSignal, ms: number) => {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (parent.aborted) {
+    abort();
+  }
+  parent.addEventListener("abort", abort);
+  const timer = setTimeout(abort, ms);
+  return {
+    signal: controller.signal,
+    release: () => {
+      clearTimeout(timer);
+      parent.removeEventListener("abort", abort);
+    },
+  };
+};
+
 type Params = {
-  id: string;
-  runid: string;
   orgid: string;
+  runid: string;
 };
 
 export const WorkspaceDetails = ({
@@ -110,29 +149,30 @@ export const WorkspaceDetails = ({
   selectedTab,
   settingsSection,
 }: Props) => {
-  const { id, runid, orgid } = useParams<Params>();
-  if (orgid !== null && orgid !== undefined && orgid !== "") {
-    sessionStorage.setItem(ORGANIZATION_ARCHIVE, orgid);
-  }
-  const organizationId = sessionStorage.getItem(ORGANIZATION_ARCHIVE)!;
-  sessionStorage.setItem(WORKSPACE_ARCHIVE, id!);
-  const [workspace, setWorkspace] = useState<Workspace>();
+  const id = useRequiredParam("id");
+  const { orgid, runid } = useParams<Params>();
+  // Links without an organization (`/workspaces/:id/...`) use the organization this tab last visited.
+  const organizationId = orgid || sessionStorage.getItem(ORGANIZATION_ARCHIVE) || "";
+  sessionStorage.setItem(ORGANIZATION_ARCHIVE, organizationId);
+  sessionStorage.setItem(WORKSPACE_ARCHIVE, id);
+  const [workspace, setWorkspace] = useState<WorkspacePageRow>();
   const [manageWorkspace, setManageWorkspace] = useState(false);
   const [manageState, setManageState] = useState(false);
   const [planJob, setPlanJob] = useState(false);
   const [approveJob, setApproveJob] = useState(false);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
-  const [variables, setVariables] = useState<FlatVariable[]>([]);
-  const [collectionVariables, setCollectionVariables] = useState<any[]>([]);
-  const [collectionEnvVariables, setCollectionEnvVariables] = useState<any[]>([]);
-  const [globalVariables, setGlobalVariables] = useState<FlatVariable[]>([]);
-  const [globalEnvVariables, setGlobalEnvVariables] = useState<FlatVariable[]>([]);
-  const [history, setHistory] = useState<FlatJobHistory[]>([]);
-  const [schedule, setSchedule] = useState<FlatSchedule[]>([]);
+  // Tab collections stay null until a load for a tab that reads them lands.
+  const [variables, setVariables] = useState<WorkspaceVariableRow[] | null>(null);
+  const [collectionVariables, setCollectionVariables] = useState<CollectionVariableRow[]>([]);
+  const [collectionEnvVariables, setCollectionEnvVariables] = useState<CollectionVariableRow[]>([]);
+  const [globalVariables, setGlobalVariables] = useState<GlobalVariableRow[]>([]);
+  const [globalEnvVariables, setGlobalEnvVariables] = useState<GlobalVariableRow[]>([]);
+  const [history, setHistory] = useState<WorkspaceHistoryRow[]>([]);
+  const [schedule, setSchedule] = useState<WorkspaceScheduleRow[] | null>(null);
   const [open, setOpen] = useState(false);
   const [resource, setResource] = useState<Resource>();
-  const [envVariables, setEnvVariables] = useState<FlatVariable[]>([]);
-  const [jobs, setJobs] = useState<FlatJob[]>([]);
+  const [envVariables, setEnvVariables] = useState<WorkspaceVariableRow[] | null>(null);
+  const [jobs, setJobs] = useState<WorkspaceJobRow[] | null>(null);
   const [stateDetailsVisible, setStateDetailsVisible] = useState(false);
   const [jobId, setJobId] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -141,33 +181,29 @@ export const WorkspaceDetails = ({
   const [organizationNameLocal, setOrganizationNameLocal] = useState<string>();
   const [workspaceName, setWorkspaceName] = useState("...");
   const [activeKey, setActiveKey] = useState(selectedTab ?? "1");
-  const [templates, setTemplates] = useState([]);
-  const [lastRun, setLastRun] = useState("");
+  const [templates, setTemplates] = useState<OrgTemplateRow[] | null>(null);
   const [executionMode, setExecutionMode] = useState("...");
-  const [, setAgent] = useState("...");
-  const [orgTemplates, setOrgTemplates] = useState([]);
-  const [vcsProvider, setVCSProvider] = useState<VcsType>(VcsType.UNKNOWN);
+  const [vcsProvider, setVCSProvider] = useState<VcsTypeOrUnknown>(VcsTypeOrUnknown.UNKNOWN);
   const [resources, setResources] = useState<Resource[]>([]);
   const [outputs, setOutputs] = useState<StateOutputVariableWithName[]>([]);
-  const [currentStateId, setCurrentStateId] = useState("");
-  const [actions, setActions] = useState<Action[]>([]);
+  const [actions, setActions] = useState<PageAction[]>([]);
   const [contextState, setContextState] = useState({});
   const [projectName, setProjectName] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const manageStateRequest = useRef<Promise<boolean>>(Promise.resolve(false));
+  const currentStateId = useRef("");
+  const variableSourcesKey = useRef<string | null>(null);
+  const firstLoadPending = useRef(true);
+  const workspaceRequests = useRef(new AbortController());
+  // A queued or polled load runs after the render that scheduled it, so it reads the route it lands on from here.
+  const requestedView = useRef({ tab: selectedTab ?? "1", runOpen: Boolean(runid) });
+  useLayoutEffect(() => {
+    requestedView.current = { tab: selectedTab ?? "1", runOpen: Boolean(runid) };
+  }, [selectedTab, runid]);
 
   const runLink = (jobid: string) => `/organizations/${organizationId}/workspaces/${id}/runs/${jobid}`;
 
-  const getOutputValueFromState = (outputName: string): string => {
-    const outputValue = (contextState as any)?.values?.outputs?.[outputName];
-    if (outputValue) {
-      if (typeof outputValue.type === "string") {
-        return outputValue.value;
-      } else {
-        return JSON.stringify(outputValue.value);
-      }
-    }
-    return "";
-  };
+  const getOutputValueFromState = (outputName: string): string => outputCopyText(contextState, outputName);
 
   const outputColumns = [
     {
@@ -252,7 +288,6 @@ export const WorkspaceDetails = ({
       title: "Type",
       dataIndex: "type",
       key: "type",
-      onFilter: (value: React.Key | boolean, record: Resource) => record.type.indexOf(value as any) === 0,
       sorter: (a: Resource, b: Resource) => a.type.localeCompare(b.type),
       render: (text: string, record: Resource) => (
         <span className="resource-type" title={text}>
@@ -271,15 +306,27 @@ export const WorkspaceDetails = ({
     },
   ];
 
-  const loadOrgTemplates = () => {
-    axiosInstance
-      .get(`organization/${organizationId}/template`)
-      .then((response) => {
-        setOrgTemplates(response.data.data);
-      })
-      .catch((err) => {
-        console.error("Failed to load org templates:", err);
-      });
+  const loadTemplates = (workspaceSignal: AbortSignal) => {
+    const deadline = withTimeout(workspaceSignal, SIDE_REQUEST_TIMEOUT_MS);
+    api
+      .organization(organizationId)
+      .template()
+      .select(ORG_TEMPLATE_FIELDS)
+      .signal(deadline.signal)
+      .then(
+        (orgTemplates) => {
+          if (!workspaceSignal.aborted) {
+            setTemplates(orgTemplates);
+          }
+        },
+        (err) => {
+          if (!workspaceSignal.aborted) {
+            console.error("Failed to load org templates:", err);
+            setTemplates((current) => current ?? []);
+          }
+        }
+      )
+      .then(deadline.release);
   };
 
   const showDrawer = (record: Resource) => {
@@ -287,45 +334,153 @@ export const WorkspaceDetails = ({
     setResource(record);
   };
 
-  const evaluateCriteria = (criteria: any, _: any) => {
-    try {
-      const result = eval(criteria.filter);
-
-      if (result) {
-        if (!criteria.settings) {
-          return {};
-        }
-        return criteria.settings.reduce((acc: any, setting: any) => {
-          acc[setting.key] = setting.value;
-          return acc;
-        }, {});
-      }
-    } catch (error) {
-      console.error("Error evaluating criteria:", error);
-    }
-    return null;
-  };
+  const workspaceSettingsPath = `/organizations/${organizationId}/workspaces/${id}/settings`;
 
   const fetchActions = async () => {
     try {
-      const response = await axiosInstance.get("action", {
-        params: { "filter[action]": "active==true;type=in=('Workspace/Action')" },
-      });
-
-      const fetchedActions = response.data.data || [];
+      const fetchedActions = await api
+        .action()
+        .select(PAGE_ACTION_FIELDS)
+        .where((action) => and(action.active.eq(true), action.type.in(["Workspace/Action"])));
       setActions(fetchedActions);
     } catch (error) {
       console.error("Error fetching actions:", error);
     }
   };
 
+  const changeJob = (id: string) => {
+    setJobId(id);
+    setJobVisible(true);
+    setActiveKey("2");
+  };
+
+  const loadPermissionSet = (workspaceSignal: AbortSignal): Promise<boolean> => {
+    if (!id) {
+      setPermissionsLoaded(true);
+      return Promise.resolve(false);
+    }
+    // The workspace endpoint already folds in the organization permissions.
+    const url = `${apiUrl("")}/access-token/v1/teams/permissions/organization/${organizationId}/workspace/${id}`;
+    return axiosInstance
+      .get<unknown>(url, { signal: workspaceSignal, timeout: SIDE_REQUEST_TIMEOUT_MS })
+      .then((response) => {
+        if (workspaceSignal.aborted) {
+          return false;
+        }
+        const permissions = parseOrgPermissions(response.data);
+        setManageState(permissions.manageState);
+        setManageWorkspace(permissions.manageWorkspace);
+        setPlanJob(permissions.planJob);
+        setApproveJob(permissions.approveJob);
+        return permissions.manageState;
+      })
+      .catch((err) => {
+        if (!workspaceSignal.aborted) {
+          console.error("Failed to load workspace permissions:", err);
+        }
+        return false;
+      })
+      .finally(() => {
+        if (!workspaceSignal.aborted) {
+          setPermissionsLoaded(true);
+        }
+      });
+  };
+
+  const loadWorkspace = async (isCurrent: () => boolean, signal: AbortSignal) => {
+    try {
+      const request = workspacePageRequest(requestedView.current.tab, requestedView.current.runOpen);
+      const page = await workspacePageQuery(organizationId, id, request).load(signal);
+      if (!isCurrent()) {
+        return;
+      }
+      setWorkspace(page.workspace);
+
+      await setupWorkspaceIncludes(page, {
+        axiosInstance,
+        manageState: manageStateRequest.current,
+        currentStateId,
+        variableSourcesKey,
+        isCurrent,
+        signal,
+        setVariables,
+        setJobs,
+        setEnvVariables,
+        setHistory,
+        setSchedule,
+        setVCSProvider,
+        setResources,
+        setOutputs,
+        setContextState,
+        setCollectionVariables,
+        setCollectionEnvVariables,
+        setGlobalVariables,
+        setGlobalEnvVariables,
+      });
+      if (!isCurrent()) {
+        return;
+      }
+
+      const { organization, project } = page.workspace;
+      if (organization) {
+        setOrganizationName(organization.name);
+        sessionStorage.setItem(ORGANIZATION_NAME, organization.name);
+      }
+
+      setProjectName(project?.name ?? null);
+      setProjectId(project?.id ?? null);
+      setOrganizationNameLocal(sessionStorage.getItem(ORGANIZATION_NAME) ?? undefined);
+      setWorkspaceName(page.workspace.name);
+      setExecutionMode(page.workspace.executionMode ?? "remote");
+      if (firstLoadPending.current) {
+        firstLoadPending.current = false;
+        if (runid) {
+          changeJob(runid);
+        }
+        fetchActions();
+      }
+      setLoadError(null);
+    } catch (err) {
+      if (isCurrent()) {
+        setLoadError(getErrorMessage(err));
+      }
+    } finally {
+      if (isCurrent()) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const workspaceReload = useCoalescedReload(loadWorkspace);
+
+  const reloadVariables = () => {
+    variableSourcesKey.current = null;
+    workspaceReload.reload();
+  };
+
   useEffect(() => {
+    const requests = new AbortController();
+    workspaceRequests.current = requests;
     setLoading(true);
     setLoadError(null);
-    loadWorkspace(true, true, true);
-    loadPermissionSet();
-    loadOrgTemplates();
-    // Polling is now handled by usePolling hook below
+    firstLoadPending.current = true;
+    currentStateId.current = "";
+    variableSourcesKey.current = null;
+    setJobs(null);
+    setVariables(null);
+    setEnvVariables(null);
+    setSchedule(null);
+    setCollectionVariables([]);
+    setCollectionEnvVariables([]);
+    setGlobalVariables([]);
+    setGlobalEnvVariables([]);
+    manageStateRequest.current = loadPermissionSet(requests.signal);
+    workspaceReload.reload();
+    loadTemplates(requests.signal);
+    return () => {
+      requests.abort();
+      workspaceReload.cancel();
+    };
   }, [id]);
 
   useEffect(() => {
@@ -336,9 +491,24 @@ export const WorkspaceDetails = ({
     setActiveKey(selectedTab ?? "1");
   }, [selectedTab]);
 
+  // Tabs share one mounted page, so entering one revalidates what it shows while the previous data stays up.
+  useEffect(() => {
+    if (firstLoadPending.current) {
+      return;
+    }
+    if (selectedTab === "4") {
+      variableSourcesKey.current = null;
+    }
+    manageStateRequest.current = loadPermissionSet(workspaceRequests.current.signal);
+    loadTemplates(workspaceRequests.current.signal);
+    fetchActions();
+    workspaceReload.reload();
+  }, [selectedTab, settingsSection]);
+
   // Keep the Runs view in sync with the URL: viewing /runs/:runid shows that job's
   // details, but navigating back to the bare /runs list (e.g. via the sidebar) must
   // reset jobVisible, otherwise it stays stuck showing the last-viewed job forever.
+  const previousRunid = useRef(runid);
   useEffect(() => {
     if (runid) {
       setJobId(runid);
@@ -346,148 +516,31 @@ export const WorkspaceDetails = ({
     } else {
       setJobVisible(false);
     }
+    // Leaving a run for the list stays on the Runs tab, so no tab entry reloads the jobs the run view skipped.
+    if (previousRunid.current && !runid && selectedTab === "2" && !firstLoadPending.current) {
+      workspaceReload.reload();
+    }
+    previousRunid.current = runid;
   }, [runid]);
 
-  // Polling for workspace updates
   usePolling(
     () => {
-      loadWorkspace(false, false, false);
+      // Org-level variables can change under an open Variables tab; elsewhere they aren't shown.
+      if (activeKey === "4") {
+        variableSourcesKey.current = null;
+      }
+      workspaceReload.reload();
     },
     { interval: 10000, enabled: Boolean(id), immediate: false }
   );
 
-  // Pushes an immediate refresh on real job status changes; the poll above stays as a fallback for a
-  // dropped WebSocket connection.
+  // The poll stays as a fallback for a dropped WebSocket. Events are debounced because a run passes through
+  // several statuses in quick succession and one reload covers them all.
   useJobStatusSubscription({
     workspaceId: id ?? "",
     enabled: Boolean(id),
-    onEvent: () => loadWorkspace(false, false, false),
+    onEvent: () => workspaceReload.reloadSoon(),
   });
-
-  const changeJob = (id: string) => {
-    setJobId(id);
-    setJobVisible(true);
-    setActiveKey("2");
-  };
-
-  const loadPermissionSet = () => {
-    const url = `${apiUrl("")}/access-token/v1/teams/permissions/organization/${organizationId}`;
-    axiosInstance
-      .get(url)
-      .then((response) => {
-        setManageState(response.data.manageState);
-        setManageWorkspace(response.data.manageWorkspace);
-        setPlanJob(response.data.planJob);
-        setApproveJob(response.data.approveJob);
-
-        if (id === undefined || id === null) setPermissionsLoaded(true);
-        if (id !== undefined && id !== null) {
-          const urlWorkspaceAccess = `${apiUrl(
-            ""
-          )}/access-token/v1/teams/permissions/organization/${organizationId}/workspace/${id}`;
-          axiosInstance
-            .get(urlWorkspaceAccess)
-            .then((response) => {
-              setManageState(response.data.manageState);
-              setManageWorkspace(response.data.manageWorkspace);
-              setPlanJob(response.data.planJob);
-              setApproveJob(response.data.approveJob);
-              setPermissionsLoaded(true);
-            })
-            .catch((err) => {
-              console.error("Failed to load workspace permissions:", err);
-              setPermissionsLoaded(true);
-            });
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to load org permissions:", err);
-        setPermissionsLoaded(true);
-      });
-  };
-
-  const loadWorkspace = (_loadVersions: boolean, _loadTemplates = false, _loadPermissionSet = false) => {
-    const templatesRequest: Promise<any[]> = _loadTemplates
-      ? axiosInstance.get(`organization/${organizationId}/template`).then((template) => {
-          setTemplates(template.data.data);
-          return template.data.data;
-        })
-      : Promise.resolve(templates);
-    templatesRequest
-      .then((templateList) => {
-        axiosInstance
-          .get(
-            `organization/${organizationId}/workspace/${id}?include=job,variable,history,schedule,vcs,agent,organization,webhook,reference,project`
-          )
-          .then(async (response) => {
-            if (_loadPermissionSet) loadPermissionSet();
-
-            setWorkspace(response.data.data);
-
-            if (response.data.included) {
-              await setupWorkspaceIncludes(
-                response.data,
-                setVariables,
-                setJobs,
-                setEnvVariables,
-                setHistory,
-                setSchedule,
-                templateList,
-                setLastRun,
-                setVCSProvider,
-                setCurrentStateId,
-                currentStateId,
-                axiosInstance,
-                setResources,
-                setOutputs,
-                setAgent,
-                _loadTemplates,
-                setContextState,
-                setCollectionVariables,
-                setCollectionEnvVariables,
-                setGlobalVariables,
-                setGlobalEnvVariables
-              );
-            }
-
-            const organization: Organization | undefined = response.data.included?.find(
-              (item: IncludedItem<Organization>) => item.type === "organization"
-            );
-            if (organization) {
-              const organizationName = organization.attributes.name;
-              setOrganizationName(organizationName);
-              sessionStorage.setItem(ORGANIZATION_NAME, organizationName);
-            }
-
-            const proj = response.data.included?.find((item: any) => item.type === "project");
-            if (proj) {
-              setProjectName(proj.attributes?.name ?? null);
-              setProjectId(proj.id ?? null);
-            } else {
-              setProjectName(null);
-              setProjectId(null);
-            }
-            setOrganizationNameLocal(sessionStorage.getItem(ORGANIZATION_NAME)!);
-            setWorkspaceName(response.data.data.attributes.name);
-            setExecutionMode(response.data.data.attributes.executionMode ?? "remote");
-            if (runid && _loadVersions) changeJob(runid); // if runid is provided, show the job details
-            if (_loadVersions) fetchActions();
-            setLoadError(null);
-          })
-          .catch((err) => {
-            setLoadError(getErrorMessage(err));
-          })
-          .finally(() => {
-            setLoading(false);
-          });
-      })
-      .catch((err) => {
-        setLoadError(getErrorMessage(err));
-        setLoading(false);
-      });
-  };
-
-  const workspaceSettingsPath = `/organizations/${organizationId}/workspaces/${id}/settings`;
 
   const [lockModal, lockModalContext] = Modal.useModal();
 
@@ -507,10 +560,14 @@ export const WorkspaceDetails = ({
   };
 
   const handleLockButton = (locked: boolean) => {
-    const body = {
+    if (!id) {
+      message.error(`Workspace ${locked ? "unlock" : "lock"} failed: no workspace is selected`);
+      return;
+    }
+    const body: UpdateBody<"workspace"> = {
       data: {
         type: "workspace",
-        id: id,
+        id,
         attributes: {
           locked: !locked,
         },
@@ -523,36 +580,55 @@ export const WorkspaceDetails = ({
         },
       })
       .then(() => {
-        loadWorkspace(true);
+        workspaceReload.reload();
         const newstatus = locked ? "unlocked" : "locked";
         message.success("Workspace " + newstatus + " successfully");
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         const newstatus = locked ? "unlock" : "lock";
-        message.error("Workspace " + newstatus + " failed: " + error.response.data.errors[0].detail);
+        message.error("Workspace " + newstatus + " failed: " + getErrorMessage(error));
       });
   };
 
-  const currentRun = selectCurrentRun(jobs);
+  const currentRun = selectCurrentRun(jobs ?? []);
   const latestJob = currentRun?.job;
   const runCardTitle = currentRun?.active ? "Current run" : "Latest run";
-  const metrics = computeWorkspaceMetrics(jobs);
+  const metrics = computeWorkspaceMetrics(jobs ?? []);
+  const templateName = (templateId?: string | null) => templates?.find((t) => t.id === templateId)?.name;
+  const namedSchedules = useMemo<NamedSchedule[] | undefined>(
+    () =>
+      schedule?.map((item) => ({
+        ...item,
+        name: templates?.find((t) => t.id === item.templateReference)?.name ?? "",
+      })),
+    [schedule, templates]
+  );
 
-  const renderSection = (workspace: Workspace) => {
+  const runCardFallback =
+    jobs === null ? (
+      <LoadingFallback />
+    ) : (
+      <div className="latest-run latest-run--empty">
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={manageWorkspace ? "No runs yet. Use Run now above to trigger your first plan." : "No runs yet."}
+        />
+      </div>
+    );
+
+  const renderSection = (workspace: WorkspacePageRow) => {
     switch (activeKey) {
       case "1":
         return (
           <Row>
             <Col span={18} className="workspace-overview-main">
-              {workspace.attributes.source === "empty" &&
-              workspace.attributes.branch === "remote-content" &&
-              (workspace.relationships?.history?.data?.length || 0) < 1 ? (
+              {workspace.source === "empty" && workspace.branch === "remote-content" && workspace.history.length < 1 ? (
                 <CLIDriven organizationName={organizationNameLocal} workspaceName={workspaceName} />
               ) : (
                 <div>
                   <div className="latest-run-header">
                     <Typography.Title level={3}>{runCardTitle}</Typography.Title>
-                    {jobs.length > 0 && (
+                    {jobs && jobs.length > 0 && (
                       <Link to={`/organizations/${organizationId}/workspaces/${id}/runs`}>
                         View all runs <ArrowRightOutlined aria-hidden />
                       </Link>
@@ -589,16 +665,13 @@ export const WorkspaceDetails = ({
                       <dl className="latest-run-facts">
                         <div>
                           <dt>Template</dt>
-                          <dd>
-                            {(templates as Template[]).find((t) => t.id === latestJob.templateReference)?.attributes
-                              ?.name ?? "—"}
-                          </dd>
+                          <dd>{templateName(latestJob.templateReference) ?? "—"}</dd>
                         </div>
                         <div>
                           <dt>Policy checks</dt>
                           <dd>
                             <PolicyStatusTag
-                              status={workspace.attributes?.policyComplianceStatus}
+                              status={workspace.policyComplianceStatus}
                               organizationId={organizationId}
                               workspaceId={id}
                               clickable
@@ -638,7 +711,7 @@ export const WorkspaceDetails = ({
                             canApprove={approveJob}
                             permissionsLoaded={permissionsLoaded}
                             approvalTeam={latestJob.approvalTeam}
-                            onChanged={() => loadWorkspace(false)}
+                            onChanged={workspaceReload.reload}
                           />
                         </div>
                       )}
@@ -649,16 +722,7 @@ export const WorkspaceDetails = ({
                       </div>
                     </article>
                   ) : (
-                    <div className="latest-run latest-run--empty">
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description={
-                          manageWorkspace
-                            ? "No runs yet. Use Run now above to trigger your first plan."
-                            : "No runs yet."
-                        }
-                      />
-                    </div>
+                    runCardFallback
                   )}
                   <Tabs
                     type="card"
@@ -695,12 +759,11 @@ export const WorkspaceDetails = ({
               <aside className="workspace-rail" aria-label="Workspace details">
                 <ul className="workspace-rail-facts">
                   <li>
-                    {workspace.attributes.branch !== "remote-content" &&
-                    isValidUrl(fixSshURL(workspace.attributes.source)) ? (
+                    {workspace.branch !== "remote-content" && isValidUrl(fixSshURL(workspace.source)) ? (
                       <>
                         <VcsLogo type={vcsProvider} />
-                        <a href={fixSshURL(workspace.attributes.source)} target="_blank" rel="noreferrer">
-                          {new URL(fixSshURL(workspace.attributes.source))?.pathname?.replace(".git", "")?.substring(1)}
+                        <a href={fixSshURL(workspace.source)} target="_blank" rel="noreferrer">
+                          {new URL(fixSshURL(workspace.source))?.pathname?.replace(".git", "")?.substring(1)}
                         </a>
                       </>
                     ) : (
@@ -710,11 +773,11 @@ export const WorkspaceDetails = ({
                       </>
                     )}
                   </li>
-                  {workspace.attributes.branch && workspace.attributes.branch !== "remote-content" && (
+                  {workspace.branch && workspace.branch !== "remote-content" && (
                     <li>
                       <BranchesOutlined aria-hidden />
                       <span className="workspace-rail-label">Branch:</span>
-                      <code>{workspace.attributes.branch}</code>
+                      <code>{workspace.branch}</code>
                     </li>
                   )}
                   <li>
@@ -724,11 +787,11 @@ export const WorkspaceDetails = ({
                       {executionMode === "..." ? "..." : executionMode.charAt(0).toUpperCase() + executionMode.slice(1)}
                     </Link>
                   </li>
-                  {workspace.attributes.folder && (
+                  {workspace.folder && (
                     <li>
                       <FolderOutlined aria-hidden />
                       <span className="workspace-rail-label">Working directory:</span>
-                      <code>{workspace.attributes.folder}</code>
+                      <code>{workspace.folder}</code>
                     </li>
                   )}
                   <li>
@@ -780,20 +843,24 @@ export const WorkspaceDetails = ({
                   <Typography.Title level={4} id="workspace-rail-tags">
                     Tags
                   </Typography.Title>
-                  <Tags organizationId={organizationId} workspaceId={id!} manageWorkspace={manageWorkspace} />
+                  <Tags organizationId={organizationId} workspaceId={id} manageWorkspace={manageWorkspace} />
                 </section>
               </aside>
             </Col>
           </Row>
         );
       case "2":
-        return jobVisible ? (
-          <Suspense fallback={<LoadingFallback />}>
-            <DetailsJob jobId={jobId!} workspaceName={workspaceName} canApprove={approveJob} />
-          </Suspense>
-        ) : (
-          <RunList jobs={jobs} onRunClick={changeJob} runLink={runLink} />
-        );
+        if (jobVisible && jobId) {
+          return (
+            <Suspense fallback={<LoadingFallback />}>
+              <DetailsJob key={jobId} jobId={jobId} workspaceName={workspaceName} canApprove={approveJob} />
+            </Suspense>
+          );
+        }
+        if (jobs === null) {
+          return <LoadingFallback />;
+        }
+        return <RunList jobs={jobs} templates={templates} onRunClick={changeJob} runLink={runLink} />;
       case "3":
         return (
           <Suspense fallback={<LoadingFallback />}>
@@ -802,12 +869,15 @@ export const WorkspaceDetails = ({
               setStateDetailsVisible={setStateDetailsVisible}
               stateDetailsVisible={stateDetailsVisible}
               workspace={workspace}
-              onRollback={loadWorkspace}
+              onRollback={workspaceReload.reload}
               manageState={manageState}
             />
           </Suspense>
         );
       case "4":
+        if (variables === null || envVariables === null) {
+          return <LoadingFallback />;
+        }
         return (
           <Variables
             vars={variables}
@@ -817,12 +887,12 @@ export const WorkspaceDetails = ({
             collectionEnvVars={collectionEnvVariables}
             globalVariables={globalVariables}
             globalEnvVariables={globalEnvVariables}
-            reload={() => loadWorkspace(false)}
+            reload={reloadVariables}
           />
         );
       case "5":
-        return templates ? (
-          <Schedules schedules={schedule} manageWorkspace={manageWorkspace} reload={() => loadWorkspace(false)} />
+        return templates && namedSchedules ? (
+          <Schedules schedules={namedSchedules} manageWorkspace={manageWorkspace} reload={workspaceReload.reload} />
         ) : (
           <p>Loading...</p>
         );
@@ -830,7 +900,7 @@ export const WorkspaceDetails = ({
         return (
           <RunTriggers
             organizationId={organizationId}
-            workspaceId={id!}
+            workspaceId={id}
             workspaceName={workspaceName}
             manageWorkspace={manageWorkspace}
           />
@@ -841,10 +911,10 @@ export const WorkspaceDetails = ({
             <WorkspaceSettings
               workspace={workspace}
               vcsProvider={vcsProvider}
-              orgTemplates={orgTemplates}
+              orgTemplates={templates ?? []}
               manageWorkspace={manageWorkspace}
               planJob={planJob}
-              onWorkspaceUpdate={() => loadWorkspace(false)}
+              onWorkspaceUpdate={workspaceReload.reload}
               activeSection={settingsSection || "general"}
             />
           </Suspense>
@@ -870,49 +940,33 @@ export const WorkspaceDetails = ({
   // Settings pages drop the header entirely; General settings shows the ID as a field.
   const showWorkspaceId = !isSettings;
 
+  const actionWorkspace = useMemo(() => workspace && toActionWorkspace(workspace), [workspace]);
+
   const pageActions =
     !loading && workspace && !isSettings ? (
       <Space orientation="horizontal">
         {actions &&
           actions
-            .reduce((acc: ActionWithSettings[], action: ActionWithSettings) => {
-              if (!action.attributes.displayCriteria) {
-                acc.push(action);
-                return acc;
+            .flatMap((action): PageAction[] => {
+              if (!action.displayCriteria) {
+                return [action];
               }
-
-              let displayCriteria;
-              try {
-                displayCriteria = JSON.parse(action.attributes.displayCriteria);
-              } catch (error) {
-                console.error("Error parsing displayCriteria JSON:", error);
-                return acc;
-              }
-
-              for (const criteria of displayCriteria) {
-                const settings = evaluateCriteria(criteria, {
-                  workspace: workspace,
-                  state: contextState,
-                  resources: resources,
-                  apiUrl: apiUrl(""),
-                  settings: action.settings,
-                });
-                if (settings) {
-                  action.settings = settings; // Attach settings to the action
-                  acc.push(action);
-                  break;
-                }
-              }
-
-              return acc;
-            }, [])
-            .filter((action) => action?.attributes.type === "Workspace/Action")
+              const settings = matchDisplayCriteria(action.displayCriteria, {
+                workspace: actionWorkspace,
+                state: contextState,
+                resources: resources,
+                apiUrl: apiUrl(""),
+                settings: action.settings,
+              });
+              return settings ? [{ ...action, settings }] : [];
+            })
+            .filter((action) => action.type === "Workspace/Action")
             .map((action, index) => (
               <Suspense key={index} fallback={<LoadingFallback />}>
                 <ActionLoader
-                  action={action?.attributes.action}
+                  action={action.action}
                   context={{
-                    workspace: workspace,
+                    workspace: actionWorkspace,
                     state: contextState,
                     resources: resources,
                     apiUrl: apiUrl(""),
@@ -924,18 +978,20 @@ export const WorkspaceDetails = ({
         <Button
           type="default"
           htmlType="button"
-          onClick={() => confirmLockButton(workspace.attributes.locked)}
-          icon={workspace.attributes.locked ? <UnlockOutlined /> : <LockOutlined />}
+          onClick={() => confirmLockButton(workspace.locked)}
+          icon={workspace.locked ? <UnlockOutlined aria-hidden /> : <LockOutlined aria-hidden />}
           disabled={!manageWorkspace}
         >
-          {workspace.attributes.locked ? "Unlock" : "Lock"}
+          {workspace.locked ? "Unlock" : "Lock"}
         </Button>
         <CreateJob
           changeJob={changeJob}
           planJob={planJob}
           resources={resources}
+          templates={templates}
+          onOpen={() => loadTemplates(workspaceRequests.current.signal)}
           disabledReason={
-            workspace.attributes.source === "empty" && workspace.attributes.branch === "remote-content"
+            workspace.source === "empty" && workspace.branch === "remote-content"
               ? "This CLI/API driven workspace has no applied configuration yet. Upload and apply a configuration with the terraform CLI/API before using Run now."
               : undefined
           }
@@ -953,7 +1009,7 @@ export const WorkspaceDetails = ({
           ? { title: loadError.includes("permission") ? "Access Denied" : "Error", message: loadError }
           : undefined
       }
-      loading={!loadError && (loading || !workspace || !variables || !jobs)}
+      loading={!loadError && (loading || !workspace)}
       loadingText="Loading Workspace..."
       actions={pageActions}
     >
@@ -966,17 +1022,17 @@ export const WorkspaceDetails = ({
                 <Typography.Text type="secondary"> ID: {id} </Typography.Text>
               </Paragraph>
             )}
-            {isSettings ? null : workspace.attributes?.description === "" ? (
+            {isSettings ? null : workspace.description === "" ? (
               <Link className="workspace-button" to={workspaceSettingsPath} onClick={() => setActiveKey("6")}>
                 Add workspace description
               </Link>
             ) : (
-              <Typography.Text type="secondary">{workspace.attributes.description}</Typography.Text>
+              <Typography.Text type="secondary">{workspace.description}</Typography.Text>
             )}
             {!isSettings && (
               <div className="workspace-status-strip">
                 <Typography.Text>
-                  {workspace.attributes.locked ? (
+                  {workspace.locked ? (
                     <>
                       <LockOutlined /> Locked
                     </>
@@ -987,7 +1043,7 @@ export const WorkspaceDetails = ({
                   )}
                 </Typography.Text>
                 <PolicyStatusTag
-                  status={workspace.attributes?.policyComplianceStatus}
+                  status={workspace.policyComplianceStatus}
                   organizationId={organizationId}
                   workspaceId={id}
                   clickable
@@ -996,23 +1052,25 @@ export const WorkspaceDetails = ({
                   <ProfileOutlined /> Resources <span className="workspace-status-value">{resources.length}</span>
                 </Typography.Text>
                 <span className="workspace-status-iac">
-                  {getIaCIconById(workspace.attributes?.iacType)}
+                  {getIaCIconById(workspace.iacType)}
                   <Typography.Text>
-                    {getIaCNameById(workspace.attributes?.iacType)}{" "}
+                    {getIaCNameById(workspace.iacType)}{" "}
                     <Link to={workspaceSettingsPath} onClick={() => setActiveKey("6")} className="workspace-button">
-                      {workspace.attributes.terraformVersion}
+                      {workspace.terraformVersion}
                     </Link>
                   </Typography.Text>
                 </span>
                 <Typography.Text>
                   <ClockCircleOutlined /> Updated{" "}
-                  <span className="workspace-status-value">{relativeTime(lastRun) ?? "never executed"}</span>
+                  <span className="workspace-status-value">
+                    {relativeTime(workspace.lastJobDate) ?? "never executed"}
+                  </span>
                 </Typography.Text>
-                {workspace.attributes.locked && (
+                {workspace.locked && (
                   <Alert
                     className="workspace-status-lock"
                     title="Lock Description"
-                    description={workspace.attributes.lockDescription}
+                    description={workspace.lockDescription}
                     type="warning"
                     showIcon
                   />

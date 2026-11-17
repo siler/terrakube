@@ -1,4 +1,4 @@
-import { getJobOutputRequestUrl, getPublicApiOrigin, isTerrakubeApiUrl } from "../outputUrl";
+import { getApiRequestUrl, getPublicApiOrigin, isTerrakubeApiUrl } from "../outputUrl";
 
 describe("outputUrl helpers", () => {
   beforeEach(() => {
@@ -21,13 +21,19 @@ describe("outputUrl helpers", () => {
     const outputUrl =
       "http://api.railway.internal:8080/tfoutput/v1/organization/org-id/job/30/step/step-id?download=false";
 
-    expect(getJobOutputRequestUrl(outputUrl)).toBe(
+    expect(getApiRequestUrl(outputUrl)).toBe(
       "https://api.example.com/tfoutput/v1/organization/org-id/job/30/step/step-id?download=false"
     );
   });
 
+  it("rewrites internal tfstate URLs to the public API origin", () => {
+    expect(
+      getApiRequestUrl("https://api.other.example.com/tfstate/v1/organization/org-id/workspace/ws-id/state/7.json")
+    ).toBe("https://api.example.com/tfstate/v1/organization/org-id/workspace/ws-id/state/7.json");
+  });
+
   it("resolves relative tfoutput paths against the public API origin", () => {
-    expect(getJobOutputRequestUrl("/tfoutput/v1/organization/org-id/job/30/step/step-id")).toBe(
+    expect(getApiRequestUrl("/tfoutput/v1/organization/org-id/job/30/step/step-id")).toBe(
       "https://api.example.com/tfoutput/v1/organization/org-id/job/30/step/step-id"
     );
   });
@@ -35,12 +41,12 @@ describe("outputUrl helpers", () => {
   it("leaves external non-Terrakube URLs untouched", () => {
     const outputUrl = "https://storage.example.com/logs/step-id.txt";
 
-    expect(getJobOutputRequestUrl(outputUrl)).toBe(outputUrl);
+    expect(getApiRequestUrl(outputUrl)).toBe(outputUrl);
     expect(isTerrakubeApiUrl(outputUrl)).toBe(false);
   });
 
   it("detects public Terrakube URLs after rewriting", () => {
-    const outputUrl = getJobOutputRequestUrl("http://api.railway.internal:8080/tfoutput/v1/organization/org-id/job/30");
+    const outputUrl = getApiRequestUrl("http://api.railway.internal:8080/tfoutput/v1/organization/org-id/job/30");
 
     expect(isTerrakubeApiUrl(outputUrl)).toBe(true);
   });

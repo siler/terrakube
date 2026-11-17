@@ -1,3 +1,4 @@
+import type { FormValues } from "./api/writeBodies";
 import { VcsType as GeneratedVcsType } from "./generated/apiResources";
 // Shared
 
@@ -13,6 +14,7 @@ export type RelationshipArray = {
 export type IncludedItem<T> = {
   type: string;
 } & T;
+
 export type TofuRelease = {
   tag_name: string;
 };
@@ -82,6 +84,7 @@ export type ApiResponse<T> = {
   data: T;
 };
 
+/** An organization as the UI lists it, with the workspace counts it fetches separately. */
 export type FlatOrganization = {
   id: string;
 } & OrganizationAttributes;
@@ -126,6 +129,7 @@ export enum JobStatus {
   NeverExecuted = "NeverExecuted",
 }
 
+// Jobs
 export enum JobVia {
   Ui = "UI",
   Cli = "CLI",
@@ -237,6 +241,11 @@ export enum VcsType {
   AZURE_SP_MI = "AZURE_SP_MI",
   PUBLIC = "PUBLIC",
 }
+
+// VCS
+
+export const VcsTypeOrUnknown = { ...GeneratedVcsType, UNKNOWN: "UNKNOWN" } as const;
+export type VcsTypeOrUnknown = (typeof VcsTypeOrUnknown)[keyof typeof VcsTypeOrUnknown];
 
 export enum VcsTypeExtended {
   GITHUB = "GITHUB",
@@ -406,17 +415,15 @@ export type FlatVariable = {
   id: string;
 } & VariableAttributes;
 
-export type CreateVariableForm = {
-  sensitive: boolean;
-} & UpdateVariableForm;
+// Variables
 
-export type UpdateVariableForm = {
-  key: string;
-  value: string;
-  hcl: boolean;
-  category: VariableCategory;
-  description: string;
-};
+// The forms never hold null or the server-computed incomplete flag, so both are stripped from the write attributes.
+export type CreateVariableForm = Pick<
+  FormValues<"variable">,
+  "category" | "description" | "hcl" | "key" | "sensitive" | "value"
+>;
+
+export type UpdateVariableForm = Omit<CreateVariableForm, "sensitive">;
 
 // Tags
 export type Tag = {
@@ -648,15 +655,16 @@ export type AgentAttributes = {
 };
 
 // States
+/** A resource instance read from a workspace state, in either state format. */
 export type Resource = {
   name: string;
   provider: string;
   type: string;
-  module?: string;
+  /** "root_module" for root resources, otherwise the module address, e.g. "module.foo". */
+  module: string;
   index?: string | number;
-  values: Record<string, any>;
-  depends_on: string;
-  showDrawer: (data: Resource) => void;
+  values: Record<string, unknown>;
+  depends_on: string[];
 };
 export type ErrorResource = {
   name: string;
@@ -696,7 +704,13 @@ export type StateOutput = {
     };
   };
 };
-export type StateOutputValue = { sensitive?: boolean; value: string; type: string };
+
+/** A resource as a state diagram node carries it. */
+export type ResourceNodeData = Resource & { showDrawer: (data: Resource) => void };
+
+// State output
+/** A state output as the outputs table shows it: sensitive values masked, others as display text. */
+export type StateOutputValue = { type: string; value: string };
 
 export type StateOutputResource = {
   address: string;
@@ -743,6 +757,7 @@ export type PolicyExemptionAttributes = {
   expiresAt: string;
 } & AuditFieldBase;
 
+// Policy Governance (OPA)
 export type PolicyViolationItem = {
   ruleId: string;
   address?: string;
@@ -785,8 +800,3 @@ export type PolicyEvaluationContext = {
   shadowSoftViolations?: number;
   results?: PolicyEvaluationResultItem[];
 };
-
-// VCS
-
-export const VcsTypeOrUnknown = { ...GeneratedVcsType, UNKNOWN: "UNKNOWN" } as const;
-export type VcsTypeOrUnknown = (typeof VcsTypeOrUnknown)[keyof typeof VcsTypeOrUnknown];
