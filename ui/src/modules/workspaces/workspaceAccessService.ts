@@ -1,7 +1,10 @@
 import axiosInstance from "@/config/axiosConfig";
+import type { CreateBody, UpdateBody } from "@/domain/api/writeBodies";
+import type { ApiAttributes } from "@/domain/generated/apiResources";
 import { apiPost } from "@/modules/api/apiWrapper";
 import { ApiResponse } from "@/modules/api/types";
 
+/** A team's access to a workspace, with the API's unset permissions read as their defaults. */
 export type WorkspaceAccessModel = {
   id: string;
   name: string;
@@ -13,13 +16,11 @@ export type WorkspaceAccessModel = {
   destroyJob: boolean;
 };
 
-export type WorkspaceAccessPermissions = {
-  manageWorkspace: boolean;
-  manageState: boolean;
-  planJob: boolean;
-  approveJob: boolean;
-  destroyJob: boolean;
-};
+/** The permissions a custom role grants, as written back to the API; `Pick` fails if one isn't an access attribute. */
+export type WorkspaceAccessPermissions = Pick<
+  ApiAttributes["access"],
+  Exclude<keyof WorkspaceAccessModel, "id" | "name" | "role">
+>;
 
 async function listWorkspaceAccess(
   _organizationId: string,
@@ -50,18 +51,13 @@ async function listWorkspaceAccess(
     }`,
   };
 
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, {
+  const tempData = await apiPost("/graphql/api/v1", body, (data): any => data, {
     dataWrapped: true,
     contentType: "application/json",
   });
 
   if (tempData.isError) {
-    return {
-      isError: true,
-      responseCode: tempData.responseCode,
-      error: tempData.error,
-      data: [],
-    };
+    return tempData;
   }
 
   const edges = tempData.data?.workspace?.edges?.[0]?.node?.access?.edges ?? [];
@@ -90,7 +86,7 @@ async function addWorkspaceAccess(
   role: string,
   permissions?: WorkspaceAccessPermissions
 ): Promise<void> {
-  const body = {
+  const body: CreateBody<"access"> = {
     data: {
       type: "access",
       attributes: {
@@ -113,7 +109,7 @@ async function updateWorkspaceAccess(
   role: string,
   permissions?: WorkspaceAccessPermissions
 ): Promise<void> {
-  const body = {
+  const body: UpdateBody<"access"> = {
     data: {
       id: accessId,
       type: "access",

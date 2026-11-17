@@ -1,7 +1,7 @@
 import formatSshUrl from "@/modules/workspaces/utils/formatSshUrl";
-import { VcsType } from "../../../domain/types";
+import { VcsTypeOrUnknown } from "../../../domain/types";
 
-export default function (normalizedSource: string): VcsType {
+export default function (normalizedSource: string): VcsTypeOrUnknown {
   const githubEndpoints = ["github.com", "ghe.com"];
   const devOpsEndpints = ["visualstudio.com", "dev.azure.com"];
   const gitlabEndpoints = ["gitlab.com"];
@@ -12,14 +12,15 @@ export default function (normalizedSource: string): VcsType {
   try {
     hostname = new URL(fixedUrl).hostname;
   } catch {
-    return VcsType.UNKNOWN;
+    return VcsTypeOrUnknown.UNKNOWN;
   }
   // ghe.com uses subdomain
-  if (githubEndpoints.includes(hostname) || githubEndpoints.some((h) => hostname.endsWith(h))) return VcsType.GITHUB;
+  if (githubEndpoints.includes(hostname) || githubEndpoints.some((h) => hostname.endsWith(h)))
+    return VcsTypeOrUnknown.GITHUB;
   // visualstudio.com uses subdomin
   if (devOpsEndpints.includes(hostname) || devOpsEndpints.some((h) => hostname.endsWith(h)))
-    return VcsType.AZURE_DEVOPS;
-  if (gitlabEndpoints.includes(hostname)) return VcsType.GITLAB;
-  if (bitbucketEndpoints.includes(hostname)) return VcsType.BITBUCKET;
-  return VcsType.UNKNOWN;
+    return VcsTypeOrUnknown.AZURE_DEVOPS;
+  if (gitlabEndpoints.includes(hostname)) return VcsTypeOrUnknown.GITLAB;
+  if (bitbucketEndpoints.includes(hostname)) return VcsTypeOrUnknown.BITBUCKET;
+  return VcsTypeOrUnknown.UNKNOWN;
 }

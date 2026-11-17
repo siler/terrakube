@@ -10,8 +10,8 @@ import {
 } from "@ant-design/icons";
 import { useEffect, useId, useMemo, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
-import { WorkspaceListItem } from "@/modules/workspaces/types";
-import { TagModel } from "@/modules/organizations/types";
+import type { WorkspaceListItem } from "@/modules/workspaces/workspaceService";
+import { TagModel } from "@/modules/organizations/organizationService";
 import WorkspaceTagChips from "@/modules/workspaces/components/WorkspaceTagChips";
 import WorkspaceStatusTag from "@/components/display/WorkspaceStatusTag";
 import PolicyStatusTag from "@/components/display/PolicyStatusTag";
@@ -132,9 +132,7 @@ function WorkspaceRow({
         <div className="workspace-name-line1">
           <span
             className="workspace-status-icon"
-            style={
-              { "--workspace-status-color": item.lastStatus && statusColors[item.lastStatus] } as React.CSSProperties
-            }
+            style={{ "--workspace-status-color": item.lastStatus && statusColors[item.lastStatus] }}
           >
             {getWorkspaceStatusIcon(item.lastStatus)}
           </span>
@@ -228,6 +226,7 @@ export default function WorkspaceTable({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const isGrouped = !!groups;
   const collapsible = isGrouped && !!onToggleGroup;
+  const groupKeys = groups?.map((group) => group.key) ?? [];
   const isControlled = controlledPage !== undefined && controlledPageSize !== undefined && !!onPageChange;
   const page = controlledPage ?? internalPage;
   const pageSize = controlledPageSize ?? internalPageSize;
@@ -264,12 +263,7 @@ export default function WorkspaceTable({
             type="link"
             size="small"
             disabled={groupsForcedOpen}
-            onClick={() =>
-              onSetGroupsCollapsed(
-                groups!.map((group) => group.key),
-                false
-              )
-            }
+            onClick={() => onSetGroupsCollapsed(groupKeys, false)}
           >
             Expand all
           </Button>
@@ -277,12 +271,7 @@ export default function WorkspaceTable({
             type="link"
             size="small"
             disabled={groupsForcedOpen}
-            onClick={() =>
-              onSetGroupsCollapsed(
-                groups!.map((group) => group.key),
-                true
-              )
-            }
+            onClick={() => onSetGroupsCollapsed(groupKeys, true)}
           >
             Collapse all
           </Button>
@@ -334,8 +323,8 @@ export default function WorkspaceTable({
         </div>
       </div>
 
-      {isGrouped
-        ? groups!.map((group) => {
+      {groups
+        ? groups.map((group) => {
             const isExpanded = expandedGroups.has(group.key);
             const isCollapsed = collapsible && !groupsForcedOpen && !!collapsedGroups?.has(group.key);
             const visibleItems = isControlled || isExpanded ? group.items : group.items.slice(0, GROUP_PREVIEW_SIZE);
@@ -363,7 +352,9 @@ export default function WorkspaceTable({
                       aria-disabled={groupsForcedOpen || undefined}
                       title={groupsForcedOpen ? "Groups stay open while searching" : undefined}
                       onClick={() => {
-                        if (!groupsForcedOpen) onToggleGroup!(group.key);
+                        if (!groupsForcedOpen) {
+                          onToggleGroup?.(group.key);
+                        }
                       }}
                     >
                       {heading}

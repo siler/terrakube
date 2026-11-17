@@ -5,8 +5,8 @@ import { Link } from "react-router-dom";
 import WorkspaceStatusTag from "@/components/display/WorkspaceStatusTag";
 import VcsLogo from "@/components/display/VcsLogo";
 import LastRun from "@/modules/workspaces/components/LastRun";
-import { WorkspaceListItem, WorkspacePageRequest } from "@/modules/workspaces/types";
-import workspaceService from "@/modules/workspaces/workspaceService";
+import { WorkspacePageRequest } from "@/modules/workspaces/types";
+import workspaceService, { WorkspaceListItem } from "@/modules/workspaces/workspaceService";
 import { WorkspaceSortOption } from "@/modules/workspaces/utils/workspaceSort";
 import getVcsNameFromUrl from "@/modules/workspaces/utils/getVcsNameFromUrl";
 import getVcsTypeFromUrl from "@/modules/workspaces/utils/getVcsTypeFromUrl";
@@ -65,7 +65,7 @@ export default function ProjectWorkspaces({ orgid, projectId }: Props) {
       const response = await workspaceService.listWorkspacePage(request, false);
       if (sequence !== requestSequence.current) return;
 
-      if (response.isError || !response.data) {
+      if (response.isError) {
         if (!loaded) {
           setError({
             title: response.error?.status || "Failed to load workspaces",

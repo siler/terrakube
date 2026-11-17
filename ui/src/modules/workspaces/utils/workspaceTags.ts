@@ -1,4 +1,4 @@
-import { TagModel } from "@/modules/organizations/types";
+import { TagModel } from "@/modules/organizations/organizationService";
 import { WorkspaceTagBinding } from "@/modules/workspaces/types";
 
 /** The key of a tag binding, falling back to its id while the organization tag list is still loading. */

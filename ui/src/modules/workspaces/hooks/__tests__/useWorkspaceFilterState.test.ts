@@ -24,6 +24,22 @@ describe("useWorkspaceFilterState", () => {
     expect(result.current.search).toBe("billing");
   });
 
+  it("accepts a stored 'All' and generated status values, and falls back to 'All' otherwise", () => {
+    sessionStorage.setItem("filterValue", "All");
+    sessionStorage.setItem("policyFilter", "COMPLIANT");
+    const { result } = renderHook(() => useWorkspaceFilterState());
+    expect(result.current.status).toBe("All");
+    expect(result.current.policyStatus).toBe("COMPLIANT");
+  });
+
+  it("falls back to 'All' for stored statuses the API no longer serialises", () => {
+    sessionStorage.setItem("filterValue", "bogus");
+    sessionStorage.setItem("policyFilter", "ALWAYS_GREEN");
+    const { result } = renderHook(() => useWorkspaceFilterState());
+    expect(result.current.status).toBe("All");
+    expect(result.current.policyStatus).toBe("All");
+  });
+
   it("initializes projectId from sessionStorage and groupByProject from localStorage", () => {
     sessionStorage.setItem("projectFilter", "proj-1");
     localStorage.setItem("groupByProject", "false");

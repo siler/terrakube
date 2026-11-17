@@ -7,32 +7,32 @@ import {
   StopOutlined,
   ClockCircleOutlined,
 } from "@ant-design/icons";
-import { JobStatus } from "../../../domain/types";
+import { JobStatus } from "../../../domain/generated/apiResources";
 
-export function getWorkspaceStatusIcon(status?: string) {
+export function getWorkspaceStatusIcon(status?: string | null) {
   switch (status) {
-    case JobStatus.Completed:
-    case JobStatus.NoChanges:
+    case JobStatus.completed:
+    case JobStatus.noChanges:
       return <CheckCircleOutlined />;
-    case JobStatus.Running:
+    case JobStatus.running:
       return <SyncOutlined spin />;
-    case JobStatus.WaitingApproval:
+    case JobStatus.waitingApproval:
       return <ExclamationCircleOutlined />;
-    case JobStatus.NotExecuted:
+    case JobStatus.notExecuted:
       return <CheckCircleOutlined />;
-    case "NeverExecuted":
+    case JobStatus.NeverExecuted:
       return <InfoCircleOutlined />;
-    case JobStatus.Rejected:
+    case JobStatus.rejected:
       return <CloseCircleOutlined />;
-    case JobStatus.Cancelled:
-    case JobStatus.Failed:
+    case JobStatus.cancelled:
+    case JobStatus.failed:
       return <StopOutlined />;
-    case JobStatus.Queue:
-    case JobStatus.Pending:
+    case JobStatus.queue:
+    case JobStatus.pending:
       return <ClockCircleOutlined />;
-    case JobStatus.Approved:
+    case JobStatus.approved:
       return <CheckCircleOutlined />;
-    case JobStatus.Unknown:
+    case JobStatus.unknown:
       return <ExclamationCircleOutlined />;
     default:
       return <ClockCircleOutlined />;

@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import WorkspaceFilter from "../WorkspaceFilter";
 import organizationService from "@/modules/organizations/organizationService";
-import { WorkspaceTagFilter } from "@/modules/workspaces/types";
+import type { ComponentProps } from "react";
 
 jest.mock("@/modules/organizations/organizationService", () => ({
   __esModule: true,
@@ -10,7 +10,7 @@ jest.mock("@/modules/organizations/organizationService", () => ({
   },
 }));
 
-const mockListOrganizationTags = organizationService.listOrganizationTags as jest.Mock;
+const mockListOrganizationTags = jest.mocked(organizationService.listOrganizationTags);
 
 const baseProps = {
   organizationId: "org-1",
@@ -18,21 +18,23 @@ const baseProps = {
   onStatusChange: jest.fn(),
   search: "",
   onSearchChange: jest.fn(),
-  tagFilters: [] as WorkspaceTagFilter[],
+  tagFilters: [],
   onTagFiltersChange: jest.fn(),
-  projectId: null as string | null,
+  projectId: null,
   onProjectIdChange: jest.fn(),
   groupByProject: true,
   onGroupByProjectChange: jest.fn(),
   onTagsLoaded: jest.fn(),
-  sortOption: "name_asc" as const,
+  sortOption: "name_asc",
   onSortChange: jest.fn(),
-};
+} satisfies ComponentProps<typeof WorkspaceFilter>;
 
 describe("WorkspaceFilter", () => {
   beforeEach(() => {
     Object.values(baseProps).forEach((v) => {
-      if (typeof v === "function") (v as jest.Mock).mockClear?.();
+      if (jest.isMockFunction(v)) {
+        v.mockClear();
+      }
     });
     mockListOrganizationTags.mockResolvedValue([]);
   });
@@ -77,7 +79,10 @@ describe("WorkspaceFilter", () => {
     );
 
     fireEvent.mouseDown(screen.getByText("All projects"));
-    const projectSelect = container.querySelector(".workspace-project-select") as HTMLElement;
+    const projectSelect = container.querySelector(".workspace-project-select");
+    if (!(projectSelect instanceof HTMLElement)) {
+      throw new Error("Expected the compact project select to render");
+    }
     fireEvent.change(within(projectSelect).getByRole("combobox"), { target: { value: "bill" } });
 
     expect(screen.getByText("billing-project")).toBeInTheDocument();

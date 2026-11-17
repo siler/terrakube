@@ -19,9 +19,6 @@ export function parseIconField(iconField: string | undefined, orgId: string): { 
 export function getOrgIcon(iconName: string, color: string, fontSize = 40) {
   const IconComponent = getFaIcon(iconName) || FaBuilding;
   return (
-    <IconComponent
-      className="org-icon"
-      style={{ "--org-icon-color": color, "--org-icon-size": `${fontSize}px` } as React.CSSProperties}
-    />
+    <IconComponent className="org-icon" style={{ "--org-icon-color": color, "--org-icon-size": `${fontSize}px` }} />
   );
 }

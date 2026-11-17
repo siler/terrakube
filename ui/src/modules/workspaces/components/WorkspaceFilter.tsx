@@ -2,8 +2,7 @@ import { CloseOutlined, DeleteOutlined, DownOutlined, PlusOutlined, SearchOutlin
 import { Button, Input, Popover, Select, Switch, Tag } from "antd";
 import clsx from "classnames";
 import { useEffect, useMemo, useState } from "react";
-import organizationService from "@/modules/organizations/organizationService";
-import { TagModel } from "@/modules/organizations/types";
+import organizationService, { TagModel } from "@/modules/organizations/organizationService";
 import { WorkspaceTagFilter } from "@/modules/workspaces/types";
 import { formatWorkspaceTag } from "../utils/workspaceTags";
 import WorkspaceTagLabel from "./WorkspaceTagLabel";
