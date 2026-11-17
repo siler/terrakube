@@ -11,7 +11,7 @@ type Props = {
   open: boolean;
   onCancel: () => void;
   onCreated: () => void;
-  action: (data?: CreateTokenForm) => Promise<ApiResponse<CreatedToken>>;
+  action: (data: CreateTokenForm) => Promise<ApiResponse<CreatedToken>>;
   shortlivedTokens?: boolean;
 };
 
