@@ -334,10 +334,10 @@ describe("narrow viewport (below md)", () => {
 
   beforeEach(() => {
     localStorage.clear();
-    window.matchMedia = ((query: string) => ({
+    window.matchMedia = (query: string): MediaQueryList => ({
       ...originalMatchMedia(query),
       matches: query.includes("767.98px"),
-    })) as typeof window.matchMedia;
+    });
   });
 
   afterEach(() => {
@@ -409,7 +409,11 @@ describe("narrow viewport (below md)", () => {
     expect(document.querySelector(".app-sidebar-backdrop")).not.toHaveAttribute("inert");
     expect(document.getElementById("app-sidebar")).not.toHaveAttribute("inert");
 
-    fireEvent.click(document.querySelector(".app-sidebar-backdrop")!);
+    const backdrop = document.querySelector(".app-sidebar-backdrop");
+    if (backdrop === null) {
+      throw new Error("Expected the sidebar backdrop");
+    }
+    fireEvent.click(backdrop);
 
     expect(content).not.toHaveAttribute("inert");
     expect(toggle.closest("header")).not.toHaveAttribute("inert");
@@ -444,29 +448,40 @@ describe("narrow viewport (below md)", () => {
 
   it("removes inert and moves focus into the sidebar when the window grows to desktop with the drawer open", async () => {
     let mobile = true;
-    const listeners: ((event: { matches: boolean }) => void)[] = [];
-    window.matchMedia = ((query: string) => ({
+    const listeners: EventListenerOrEventListenerObject[] = [];
+    window.matchMedia = (query: string): MediaQueryList => ({
       ...originalMatchMedia(query),
       get matches() {
         return query.includes("767.98px") && mobile;
       },
-      addEventListener: (_type: string, listener: (event: { matches: boolean }) => void) => {
-        if (query.includes("767.98px")) listeners.push(listener);
+      addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+        if (query.includes("767.98px")) {
+          listeners.push(listener);
+        }
       },
       removeEventListener: () => undefined,
-    })) as unknown as typeof window.matchMedia;
+    });
     render(renderWithPage());
     await screen.findByText("Teams");
     fireEvent.click(screen.getByLabelText("Open navigation"));
     expect(screen.getByTestId("content")).toHaveAttribute("inert");
 
     mobile = false;
-    act(() => listeners.forEach((listener) => listener({ matches: false })));
+    const change = Object.assign(new Event("change"), { matches: false });
+    act(() =>
+      listeners.forEach((listener) =>
+        typeof listener === "function" ? listener(change) : listener.handleEvent(change)
+      )
+    );
 
     expect(screen.getByTestId("content")).not.toHaveAttribute("inert");
     expect(screen.queryByLabelText("Open navigation")).not.toBeInTheDocument();
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.getElementById("app-sidebar")).toContainElement(document.activeElement as HTMLElement);
+    const focused = document.activeElement;
+    if (!(focused instanceof HTMLElement)) {
+      throw new Error("Expected focus on an HTML element");
+    }
+    expect(document.getElementById("app-sidebar")).toContainElement(focused);
   });
 
   it("leaves the drawer open when Escape was already handled or comes from a dropdown", async () => {

@@ -5,35 +5,33 @@ import OrganizationTable from "@/modules/organizations/components/OrganizationTa
 import OrganizationGridItem from "@/modules/organizations/components/OrganizationGrid/OrganizationGridItem";
 import WorkspaceTable from "@/modules/workspaces/components/WorkspaceTable/WorkspaceTable";
 import WorkspaceCard from "@/modules/workspaces/components/WorkspaceCard";
+import type { FlatOrganization } from "@/domain/types";
+import { workspaceListItem } from "@/testUtils/workspaceListItem";
+import type { WorkspaceListItem } from "@/modules/workspaces/workspaceService";
 
 jest.mock("@/modules/permissions/useOrgPermissions", () => ({
   useOrgPermissions: () => ({ permissions: { managePermission: false }, loading: false }),
 }));
 
-const org = {
+const org: FlatOrganization = {
   id: "org-1",
   name: "Acme Corp",
   description: "desc",
   executionMode: "remote",
   workspaceCount: 2,
-  icon: null,
+  icon: undefined,
   workspaceStatusCounts: {},
-} as any;
+};
 
-const workspace = {
+const workspace = workspaceListItem({
   id: "ws-1",
   name: "My Workspace",
   description: "",
-  lastStatus: null,
-  lastRun: null,
   terraformVersion: "1.5.0",
   iacType: "terraform",
-  normalizedSource: null,
   branch: "main",
   locked: false,
-  projectId: null,
-  projectName: null,
-} as any;
+});
 
 test("organization table row is a real anchor pointing at the org workspaces URL", () => {
   render(
@@ -66,7 +64,7 @@ test("workspace card list item overlays a real anchor that stacks above the card
   // The overlay must carry a positive z-index to sit above the card.
   render(
     <MemoryRouter>
-      <List
+      <List<WorkspaceListItem>
         dataSource={[workspace]}
         renderItem={(item) => (
           <List.Item style={{ position: "relative" }}>

@@ -23,7 +23,7 @@ describe("JsonViewer", () => {
 
   it("expands and collapses a node, and all nodes at once", () => {
     render(<JsonViewer value={state} label="State" />);
-    const toggle = screen.getByText('"password_length"').closest("button")!;
+    const toggle = screen.getByRole("button", { name: /"password_length"/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(screen.getByText('"sensitive"')).toBeInTheDocument();
@@ -112,6 +112,11 @@ describe("resolvePath and matchingPaths", () => {
     expect(resolvePath(state, "resources[0].type")).toEqual({ value: "random_password" });
     expect(resolvePath(state, "resources[1]")).toBeUndefined();
     expect(resolvePath(state, "random password")).toBeUndefined();
+  });
+
+  it("does not resolve inherited members such as an array's length", () => {
+    expect(resolvePath(state, "resources.length")).toBeUndefined();
+    expect(resolvePath(state, "outputs.toString")).toBeUndefined();
   });
 
   it("collects matches with their ancestors", () => {

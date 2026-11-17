@@ -138,6 +138,15 @@ export function JsonTree({
   return <JsonNode name={name} value={value} path="" depth={0} last options={options} />;
 }
 
+// Arrays only expose their in-range indexes, so a path cannot reach `length` or other inherited members.
+const childAt = (container: Container, segment: string): { value: unknown } | undefined => {
+  if (Array.isArray(container)) {
+    const index = Number(segment);
+    return /^\d+$/.test(segment) && index < container.length ? { value: container[index] } : undefined;
+  }
+  return Object.prototype.hasOwnProperty.call(container, segment) ? { value: container[segment] } : undefined;
+};
+
 const PATH = /^(?:[\w$-]+|\[\d+\])(?:\.[\w$-]+|\[\d+\])*$/;
 
 /** Resolves `resources[0].instances` against the value; undefined when the text is not a path that exists. */
@@ -145,8 +154,9 @@ export function resolvePath(value: unknown, text: string): { value: unknown } | 
   if (!PATH.test(text)) return undefined;
   let current = value;
   for (const segment of text.match(/[^.[\]]+/g) ?? []) {
-    if (!isContainer(current) || !Object.prototype.hasOwnProperty.call(current, segment)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
+    const child = isContainer(current) ? childAt(current, segment) : undefined;
+    if (!child) return undefined;
+    current = child.value;
   }
   return { value: current };
 }
@@ -190,7 +200,8 @@ export default function JsonViewer({ value, text, label }: Props) {
   const parsed = useMemo(() => {
     if (text === undefined) return { ok: true, value };
     try {
-      return { ok: true, value: JSON.parse(text) as unknown };
+      const parsedValue: unknown = JSON.parse(text);
+      return { ok: true, value: parsedValue };
     } catch {
       return { ok: false, value: undefined };
     }

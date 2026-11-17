@@ -6,11 +6,32 @@ jest.mock("@/config/authConfig", () => ({
   mgr: { signinRedirect: jest.fn() },
 }));
 
-const mockSigninRedirect = mgr.signinRedirect as jest.Mock;
+const mockSigninRedirect = jest.mocked(mgr.signinRedirect);
 
 describe("Login", () => {
   beforeEach(() => {
     mockSigninRedirect.mockReset();
+    localStorage.clear();
+  });
+
+  it("applies the stored theme", () => {
+    localStorage.setItem("terrakube-color-scheme", "blue");
+    localStorage.setItem("terrakube-theme-mode", "dark");
+
+    render(<Login />);
+
+    expect(document.documentElement).toHaveAttribute("data-color-scheme", "blue");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  });
+
+  it("falls back to the default theme when the stored one is unknown", () => {
+    localStorage.setItem("terrakube-color-scheme", "neon");
+    localStorage.setItem("terrakube-theme-mode", "sepia");
+
+    render(<Login />);
+
+    expect(document.documentElement).toHaveAttribute("data-color-scheme", "terrakube");
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
   });
 
   it("shows an error instead of doing nothing when the identity provider is unreachable", async () => {

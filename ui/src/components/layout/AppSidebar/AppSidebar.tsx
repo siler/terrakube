@@ -200,7 +200,11 @@ export default function AppSidebar({
   ]);
 
   const handleOrgMenuClick = (key: string) => {
-    ensureOrganizationName(orgIdFromUrl!, organizationName, setOrganizationName, () => {
+    if (!orgIdFromUrl) {
+      setDefaultSelected([key]);
+      return;
+    }
+    ensureOrganizationName(orgIdFromUrl, organizationName, setOrganizationName, () => {
       setDefaultSelected([key]);
     });
   };

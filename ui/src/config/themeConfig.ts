@@ -1,7 +1,10 @@
 import { type ThemeConfig, theme } from "antd";
 
-export type ColorSchemeOption = "blue" | "terrakube";
-export type ThemeMode = "light" | "dark";
+export const colorSchemeOptions = ["blue", "terrakube"] as const;
+export type ColorSchemeOption = (typeof colorSchemeOptions)[number];
+
+export const themeModeOptions = ["light", "dark"] as const;
+export type ThemeMode = (typeof themeModeOptions)[number];
 
 const darkThemeTokens = {
   // Backgrounds - rich dark, not pure black
