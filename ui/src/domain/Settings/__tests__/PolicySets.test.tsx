@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { PolicySetsSettings } from "../PolicySets";
+import { linkIncluded } from "@/testUtils/fixtureLinkage";
 
 window._env_ = {
   REACT_APP_AUTHORITY: "http://localhost/authority",
@@ -12,18 +13,46 @@ window._env_ = {
   REACT_APP_REGISTRY_URI: "http://localhost:8080/registry",
 };
 
-const getMock = jest.fn();
-const deleteMock = jest.fn();
+type Response = { data: unknown };
+
+const getMock = jest.fn<Promise<Response>, [string]>();
+const deleteMock = jest.fn<Promise<Response>, [string]>();
+const postMock = jest.fn<Promise<Response>, [string, unknown, unknown]>();
+const patchMock = jest.fn<Promise<Response>, [string, unknown, unknown]>();
+
+// Answers only the exact URLs given, so a request that drops a field fails the test.
+const respondTo = (routes: Record<string, unknown>) =>
+  getMock.mockImplementation((url) =>
+    url in routes ? Promise.resolve({ data: routes[url] }) : Promise.reject(new Error(`Unexpected GET ${url}`))
+  );
+
+const POLICY_SETS_URL =
+  "policy_set?include=notificationConfiguration&fields[policy_set]=name,description,enforcementLevel,shadowEnforcementLevel,global,overrideTeam,repository,branch,folder,organization,attachments,notificationConfiguration&fields[notification_configuration]=name,channelType";
+const editUrl = (id: string) =>
+  `policy_set/${id}?fields[policy_set]=name,description,enforcementLevel,shadowEnforcementLevel,overrideTeam,global,repository,branch,folder,opaVersion,vcs,notificationConfiguration`;
+const attachmentsUrl = (id: string) => `policy_set/${id}/attachments?fields[policy_attachment]=workspace,project,tag`;
+// The delete sweep deletes by id; the required policySet linkage keeps the fieldset non-empty.
+const attachmentsIdUrl = (id: string) => `policy_set/${id}/attachments?fields[policy_attachment]=policySet`;
+const teamsUrl = "organization/org-1/team?fields[team]=name";
+// The reference pickers request a name per row; every route the edit page fires must be answered.
+const referenceRoutes = {
+  "organization/org-1/vcs?fields[vcs]=name": { data: [] },
+  "organization/org-1/workspace?fields[workspace]=name": { data: [] },
+  "organization/org-1/project?fields[project]=name": { data: [] },
+  "organization/org-1/tag?fields[tag]=name": { data: [] },
+  "organization/org-1/notificationConfiguration?fields[notification_configuration]=name": { data: [] },
+  [teamsUrl]: { data: [] },
+};
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
   default: {
-    get: (...args: unknown[]) => getMock(...args),
-    delete: (...args: unknown[]) => deleteMock(...args),
-    post: jest.fn().mockResolvedValue({ data: { data: { id: "new-id" } } }),
-    patch: jest.fn().mockResolvedValue({ data: { data: { id: "edit-id" } } }),
+    get: (...args: [string]) => getMock(...args),
+    delete: (...args: [string]) => deleteMock(...args),
+    post: (...args: [string, unknown, unknown]) => postMock(...args),
+    patch: (...args: [string, unknown, unknown]) => patchMock(...args),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error ? err.message : "Error"),
 }));
 
 describe("PolicySetsSettings", () => {
@@ -34,10 +63,13 @@ describe("PolicySetsSettings", () => {
         name: "security-baseline",
         description: "Enforces enterprise encryption and access control",
         enforcementLevel: "HARD_MANDATORY",
+        shadowEnforcementLevel: null,
         global: true,
+        overrideTeam: null,
         repository: "https://github.com/org/opa-policies",
         branch: "main",
         folder: "/baseline",
+        opaVersion: null,
       },
       relationships: {
         organization: { data: { id: "org-1" } },
@@ -56,10 +88,13 @@ describe("PolicySetsSettings", () => {
         overrideTeam: "secops",
         repository: "https://github.com/org/tag-policies",
         branch: "main",
+        folder: null,
+        opaVersion: null,
       },
       relationships: {
         organization: { data: { id: "org-1" } },
         attachments: { data: [{ id: "att-1" }, { id: "att-2" }] },
+        notificationConfiguration: { data: null },
       },
     },
     {
@@ -68,13 +103,18 @@ describe("PolicySetsSettings", () => {
         name: "advisory-checks",
         description: "Advises on deprecated cloud resource types",
         enforcementLevel: "ADVISORY",
+        shadowEnforcementLevel: null,
         global: false,
+        overrideTeam: null,
         repository: "https://github.com/org/advisory-policies",
         branch: "develop",
+        folder: null,
+        opaVersion: null,
       },
       relationships: {
         organization: { data: { id: "org-1" } },
         attachments: { data: [{ id: "att-3" }] },
+        notificationConfiguration: { data: null },
       },
     },
   ];
@@ -93,11 +133,10 @@ describe("PolicySetsSettings", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
-    getMock.mockImplementation((url: string) => {
-      if (url.includes("policy_set")) {
-        return Promise.resolve({ data: { data: samplePolicySets, included: sampleIncluded } });
-      }
-      return Promise.resolve({ data: { data: [] } });
+    postMock.mockResolvedValue({ data: { data: { id: "new-id" } } });
+    patchMock.mockResolvedValue({ data: { data: { id: "edit-id" } } });
+    respondTo({
+      [POLICY_SETS_URL]: { data: samplePolicySets, included: sampleIncluded },
     });
   });
 
@@ -261,7 +300,7 @@ describe("PolicySetsSettings", () => {
   });
 
   it("renders empty state when no policy sets configured", async () => {
-    getMock.mockResolvedValue({ data: { data: [] } });
+    respondTo({ [POLICY_SETS_URL]: { data: [] } });
 
     render(
       <MemoryRouter initialEntries={["/organizations/org-1/settings/policies"]}>
@@ -282,6 +321,8 @@ describe("PolicySetsSettings", () => {
   });
 
   it("renders create form when editorMode is new", async () => {
+    respondTo(referenceRoutes);
+
     render(
       <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/new"]}>
         <Routes>
@@ -307,12 +348,7 @@ describe("PolicySetsSettings", () => {
       { id: "team-1", attributes: { name: "security-admins" } },
       { id: "team-2", attributes: { name: "platform-team" } },
     ];
-    getMock.mockImplementation((url: string) => {
-      if (url.includes("/team")) {
-        return Promise.resolve({ data: { data: sampleTeams } });
-      }
-      return Promise.resolve({ data: { data: [] } });
-    });
+    respondTo({ ...referenceRoutes, [teamsUrl]: { data: sampleTeams } });
 
     render(
       <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/new"]}>
@@ -339,28 +375,26 @@ describe("PolicySetsSettings", () => {
         name: "tagging-rules",
         description: "Requires tags",
         enforcementLevel: "SOFT_MANDATORY",
+        shadowEnforcementLevel: null,
         overrideTeam: "secops",
+        global: false,
         repository: "https://github.com/org/tag-policies",
         branch: "main",
+        folder: null,
+        opaVersion: null,
       },
-      relationships: {},
     };
 
-    getMock.mockImplementation((url: string) => {
-      if (url.startsWith("policy_set/ps-2")) {
-        return Promise.resolve({ data: { data: editItem } });
-      }
-      if (url.includes("/team")) {
-        return Promise.resolve({
-          data: {
-            data: [
-              { id: "team-1", attributes: { name: "secops" } },
-              { id: "team-2", attributes: { name: "security-admins" } },
-            ],
-          },
-        });
-      }
-      return Promise.resolve({ data: { data: [] } });
+    respondTo({
+      ...referenceRoutes,
+      [editUrl("ps-2")]: linkIncluded(editUrl("ps-2"), { data: editItem }),
+      [attachmentsUrl("ps-2")]: { data: [] },
+      [teamsUrl]: {
+        data: [
+          { id: "team-1", attributes: { name: "secops" } },
+          { id: "team-2", attributes: { name: "security-admins" } },
+        ],
+      },
     });
 
     render(
@@ -378,10 +412,16 @@ describe("PolicySetsSettings", () => {
       expect(screen.getByRole("heading", { name: "Edit policy set" })).toBeInTheDocument();
       expect(screen.getByText("secops")).toBeInTheDocument();
     });
+
+    // The override team options come from the teams read; open the select to prove it loaded.
+    fireEvent.mouseDown(screen.getByTestId("policy-set-override-team-select"));
+    expect(
+      await screen.findByText("security-admins", { selector: ".ant-select-item-option-content" })
+    ).toBeInTheDocument();
   });
 
   it("renders OPA version input field with placeholder in create form", async () => {
-    getMock.mockResolvedValue({ data: { data: [] } });
+    respondTo(referenceRoutes);
 
     render(
       <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/new"]}>
@@ -411,18 +451,20 @@ describe("PolicySetsSettings", () => {
         name: "custom-opa-set",
         description: "Custom OPA version test",
         enforcementLevel: "HARD_MANDATORY",
+        shadowEnforcementLevel: null,
+        overrideTeam: null,
+        global: false,
         opaVersion: "0.68.0",
         repository: "https://github.com/org/policies",
         branch: "main",
+        folder: null,
       },
-      relationships: {},
     };
 
-    getMock.mockImplementation((url: string) => {
-      if (url.startsWith("policy_set/ps-3")) {
-        return Promise.resolve({ data: { data: editItem } });
-      }
-      return Promise.resolve({ data: { data: [] } });
+    respondTo({
+      ...referenceRoutes,
+      [editUrl("ps-3")]: linkIncluded(editUrl("ps-3"), { data: editItem }),
+      [attachmentsUrl("ps-3")]: { data: [] },
     });
 
     render(
@@ -440,12 +482,11 @@ describe("PolicySetsSettings", () => {
       expect(screen.getByRole("heading", { name: "Edit policy set" })).toBeInTheDocument();
     });
 
-    const opaVersionInput = screen.getByTestId("policy-set-opa-version-input") as HTMLInputElement;
-    expect(opaVersionInput.value).toBe("0.68.0");
+    expect(screen.getByTestId("policy-set-opa-version-input")).toHaveValue("0.68.0");
   });
 
   it("deletes a policy set only after its name is typed", async () => {
-    deleteMock.mockResolvedValue({});
+    deleteMock.mockResolvedValue({ data: null });
     render(
       <MemoryRouter initialEntries={["/organizations/org-1/settings/policies"]}>
         <Routes>
@@ -468,13 +509,27 @@ describe("PolicySetsSettings", () => {
   });
 
   it("offers deletion in a danger zone on the edit page", async () => {
-    getMock.mockImplementation((url: string) =>
-      url.startsWith("policy_set/ps-3")
-        ? Promise.resolve({
-            data: { data: { id: "ps-3", attributes: { name: "advisory-checks" }, relationships: {} } },
-          })
-        : Promise.resolve({ data: { data: [] } })
-    );
+    respondTo({
+      ...referenceRoutes,
+      [editUrl("ps-3")]: linkIncluded(editUrl("ps-3"), {
+        data: {
+          id: "ps-3",
+          attributes: {
+            name: "advisory-checks",
+            description: null,
+            enforcementLevel: "ADVISORY",
+            shadowEnforcementLevel: null,
+            overrideTeam: null,
+            global: false,
+            repository: null,
+            branch: null,
+            folder: null,
+            opaVersion: null,
+          },
+        },
+      }),
+      [attachmentsUrl("ps-3")]: { data: [] },
+    });
 
     render(
       <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/edit/ps-3"]}>
@@ -490,5 +545,185 @@ describe("PolicySetsSettings", () => {
     expect(await screen.findByRole("heading", { name: "Destruction and deletion" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete this policy set" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Update policy set" })).toBeInTheDocument();
+  });
+
+  it("sends the typed create body for a policy set", async () => {
+    respondTo({ ...referenceRoutes, [attachmentsIdUrl("new-id")]: { data: [] } });
+
+    render(
+      <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/new"]}>
+        <Routes>
+          <Route
+            path="/organizations/:orgid/settings/policies/new"
+            element={<PolicySetsSettings editorMode="new" managePermission={true} />}
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "baseline" } });
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "https://github.com/org/opa.git" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create policy set" }));
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(
+        "policy_set",
+        {
+          data: {
+            type: "policy_set",
+            attributes: {
+              name: "baseline",
+              enforcementLevel: "HARD_MANDATORY",
+              shadowEnforcementLevel: null,
+              overrideTeam: null,
+              global: false,
+              repository: "https://github.com/org/opa.git",
+              branch: "main",
+              folder: "/",
+              opaVersion: null,
+            },
+            relationships: {
+              organization: { data: { type: "organization", id: "org-1" } },
+            },
+          },
+        },
+        expect.anything()
+      )
+    );
+  });
+
+  it("sends the typed update body and replaces attachments on save", async () => {
+    respondTo({
+      ...referenceRoutes,
+      [editUrl("ps-2")]: linkIncluded(editUrl("ps-2"), {
+        data: {
+          id: "ps-2",
+          attributes: {
+            name: "tagging-rules",
+            description: "Requires cost center and env tags",
+            enforcementLevel: "SOFT_MANDATORY",
+            shadowEnforcementLevel: "HARD_MANDATORY",
+            overrideTeam: "secops",
+            global: false,
+            repository: "https://github.com/org/tag-policies",
+            branch: "main",
+            folder: null,
+            opaVersion: null,
+          },
+        },
+      }),
+      [attachmentsUrl("ps-2")]: {
+        data: [{ id: "att-1", relationships: { workspace: { data: { type: "workspace", id: "ws-1" } } } }],
+      },
+      [attachmentsIdUrl("ps-2")]: { data: [{ id: "att-1" }] },
+    });
+    deleteMock.mockResolvedValue({ data: null });
+
+    render(
+      <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/edit/ps-2"]}>
+        <Routes>
+          <Route
+            path="/organizations/:orgid/settings/policies/edit/:id"
+            element={<PolicySetsSettings editorMode="edit" editorId="ps-2" managePermission={true} />}
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Update policy set" }));
+
+    await waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith(
+        "policy_set/ps-2",
+        {
+          data: {
+            type: "policy_set",
+            id: "ps-2",
+            attributes: {
+              name: "tagging-rules",
+              description: "Requires cost center and env tags",
+              enforcementLevel: "SOFT_MANDATORY",
+              shadowEnforcementLevel: "HARD_MANDATORY",
+              overrideTeam: "secops",
+              global: false,
+              repository: "https://github.com/org/tag-policies",
+              branch: "main",
+              folder: "/",
+              opaVersion: null,
+            },
+            relationships: {
+              organization: { data: { type: "organization", id: "org-1" } },
+              notificationConfiguration: { data: null },
+            },
+          },
+        },
+        expect.anything()
+      )
+    );
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(
+        "policy_set/ps-2/attachments",
+        {
+          data: {
+            type: "policy_attachment",
+            relationships: {
+              policySet: { data: { type: "policy_set", id: "ps-2" } },
+              workspace: { data: { type: "workspace", id: "ws-1" } },
+            },
+          },
+        },
+        expect.anything()
+      )
+    );
+    expect(deleteMock).toHaveBeenCalledWith("policy_set/ps-2/attachments/att-1");
+  });
+
+  it("sends a blank OPA version as null so the set inherits the default", async () => {
+    respondTo({ ...referenceRoutes, [attachmentsIdUrl("new-id")]: { data: [] } });
+
+    render(
+      <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/new"]}>
+        <Routes>
+          <Route
+            path="/organizations/:orgid/settings/policies/new"
+            element={<PolicySetsSettings editorMode="new" managePermission={true} />}
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "baseline" } });
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "https://github.com/org/opa.git" } });
+    fireEvent.change(screen.getByTestId("policy-set-opa-version-input"), { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Create policy set" }));
+
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("policy_set", expect.anything(), expect.anything()));
+    expect(postMock.mock.calls[0][1]).toMatchObject({ data: { attributes: { opaVersion: null } } });
+  });
+
+  it("skips the attachment sync when the create response names no id", async () => {
+    postMock.mockResolvedValue({ data: {} });
+    respondTo({ ...referenceRoutes });
+
+    render(
+      <MemoryRouter initialEntries={["/organizations/org-1/settings/policies/new"]}>
+        <Routes>
+          <Route
+            path="/organizations/:orgid/settings/policies/new"
+            element={<PolicySetsSettings editorMode="new" managePermission={true} />}
+          />
+          <Route path="/organizations/:orgid/settings/policies" element={<p>policy list</p>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "baseline" } });
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "https://github.com/org/opa.git" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create policy set" }));
+
+    expect(await screen.findByText("policy list")).toBeInTheDocument();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(getMock.mock.calls.some(([url]) => url.includes("/attachments"))).toBe(false);
   });
 });

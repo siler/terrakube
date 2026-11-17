@@ -10,15 +10,16 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { Link } from "react-router-dom";
+import { type PolicySetRow } from "../policySetFields";
 import { attachmentsLabel, enforcementLabel, renderEnforcementTag } from "./policySetLabels";
 import "../PolicySets.css";
 
 type Props = {
-  item: any;
+  item: PolicySetRow;
   attachmentsCount: number;
   managePermission: boolean;
   onEdit: (id: string) => void;
-  onDelete: (item: any) => void;
+  onDelete: (item: PolicySetRow) => void;
   orgid: string;
   notificationConfig?: { name: string; channelType?: string };
 };
@@ -33,8 +34,6 @@ export const PolicySetCard: React.FC<Props> = ({
   orgid,
   notificationConfig,
 }) => {
-  const attrs = item.attributes || {};
-
   return (
     <article className="policy-set-card" data-testid={`policy-set-card-${item.id}`}>
       <div className="policy-set-card-body">
@@ -43,42 +42,42 @@ export const PolicySetCard: React.FC<Props> = ({
             to={`/organizations/${orgid}/settings/policies/edit/${item.id}`}
             data-testid={`policy-set-title-link-${item.id}`}
           >
-            {attrs.name}
+            {item.name}
           </Link>
-          {renderEnforcementTag(attrs.enforcementLevel)}
-          {attrs.shadowEnforcementLevel && <Tag>Shadow: {enforcementLabel(attrs.shadowEnforcementLevel)}</Tag>}
-          {attrs.global ? <Tag icon={<GlobalOutlined />}>Global</Tag> : <Tag>{attachmentsLabel(attachmentsCount)}</Tag>}
+          {renderEnforcementTag(item.enforcementLevel)}
+          {item.shadowEnforcementLevel && <Tag>Shadow: {enforcementLabel(item.shadowEnforcementLevel)}</Tag>}
+          {item.global ? <Tag icon={<GlobalOutlined />}>Global</Tag> : <Tag>{attachmentsLabel(attachmentsCount)}</Tag>}
         </div>
 
-        {attrs.description && (
+        {item.description && (
           <Typography.Paragraph type="secondary" className="policy-set-card-description">
-            {attrs.description}
+            {item.description}
           </Typography.Paragraph>
         )}
 
         <div className="policy-set-card-meta">
-          {attrs.repository && (
+          {item.repository && (
             <span className="policy-mono">
               <GlobalOutlined />
-              {attrs.repository}
+              {item.repository}
             </span>
           )}
-          {attrs.branch && (
+          {item.branch && (
             <span className="policy-mono">
               <BranchesOutlined />
-              {attrs.branch}
+              {item.branch}
             </span>
           )}
-          {attrs.folder && (
+          {item.folder && (
             <span className="policy-mono">
               <FolderOutlined />
-              {attrs.folder}
+              {item.folder}
             </span>
           )}
-          {attrs.overrideTeam && (
+          {item.overrideTeam && (
             <span>
               <TeamOutlined />
-              Override team: {attrs.overrideTeam}
+              Override team: {item.overrideTeam}
             </span>
           )}
           {notificationConfig && (
@@ -95,14 +94,14 @@ export const PolicySetCard: React.FC<Props> = ({
           icon={<EditOutlined />}
           onClick={() => onEdit(item.id)}
           disabled={!managePermission}
-          aria-label={`Edit ${attrs.name}`}
+          aria-label={`Edit ${item.name}`}
           data-testid={`edit-policy-set-btn-${item.id}`}
         />
         <Button
           icon={<DeleteOutlined />}
           onClick={() => onDelete(item)}
           disabled={!managePermission}
-          aria-label={`Delete ${attrs.name}`}
+          aria-label={`Delete ${item.name}`}
           data-testid={`delete-policy-set-btn-${item.id}`}
         />
       </Flex>
