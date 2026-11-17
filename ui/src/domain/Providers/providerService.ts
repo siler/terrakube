@@ -1,42 +1,68 @@
 import axiosInstance, { axiosRegistry } from "../../config/axiosConfig";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import { rowFrom } from "../api/flattenDocument";
+import type { CreateBody, UpdateBody, WriteAttributes } from "../api/writeBodies";
 import {
-  ProviderModel,
-  ProviderVersionModel,
-  ProviderImplementationModel,
-  TerraformRegistrySearchResult,
   TerraformRegistryProviderVersions,
   TerraformRegistryProviderDownload,
   TerraformRegistryProviderDetails,
 } from "./types";
+import { parseProviderDetails, parseProviderDownload, parseProviderVersions } from "./registryParse";
 import { VersionStatus } from "@/components/modals/VersionStatusModal";
+import { parseApiDocument } from "@/domain/api/parseDocument";
 
 const JSON_API_CONTENT_TYPE = "application/vnd.api+json";
 
+// The public-registry pages only check which provider names the organization already has.
+const PROVIDER_NAME_FIELDS = fields.provider("name");
+export type ProviderNameRow = Row<typeof PROVIDER_NAME_FIELDS>;
+
+// The details page shows the provider's identity and every version's status details.
+const PROVIDER_DETAILS_FIELDS = fields.provider("name", "description", "registryNamespace", "imported", {
+  version: ["versionNumber", "protocols", "status", "deprecationMessage"],
+});
+export type ProviderDetailsRow = Row<typeof PROVIDER_DETAILS_FIELDS>;
+
+// Deletion walks the versions and their implementations by linkage alone.
+const PROVIDER_DELETE_FIELDS = fields.provider({ version: fields.version({ implementation: ids }) });
+
+// What each create response echoes, read back through the same fragments the reads use.
+const PROVIDER_CREATED_FIELDS = fields.provider("name", "description", "imported", "registryNamespace");
+const VERSION_CREATED_FIELDS = fields.version("versionNumber", "protocols", "status", "deprecationMessage");
+const IMPLEMENTATION_CREATED_FIELDS = fields.implementation(
+  "os",
+  "arch",
+  "filename",
+  "downloadUrl",
+  "shasumsUrl",
+  "shasumsSignatureUrl",
+  "shasum",
+  "keyId",
+  "asciiArmor",
+  "trustSignature",
+  "source",
+  "sourceUrl"
+);
+export type ProviderCreatedRow = Row<typeof PROVIDER_CREATED_FIELDS>;
+export type VersionCreatedRow = Row<typeof VERSION_CREATED_FIELDS>;
+export type ImplementationCreatedRow = Row<typeof IMPLEMENTATION_CREATED_FIELDS>;
+
 // Terrakube API functions
 
-export const listProviders = async (orgId: string): Promise<{ data: ProviderModel[] }> => {
-  const response = await axiosInstance.get(`organization/${orgId}/provider`);
-  return response.data;
-};
+export const listProviders = async (orgId: string): Promise<ProviderNameRow[]> =>
+  api.organization(orgId).provider().select(PROVIDER_NAME_FIELDS);
 
-export const getProvider = async (
-  orgId: string,
-  providerId: string
-): Promise<{
-  data: ProviderModel;
-  included?: (ProviderVersionModel | ProviderImplementationModel)[];
-}> => {
-  const response = await axiosInstance.get(`organization/${orgId}/provider/${providerId}?include=version`);
-  return response.data;
-};
+export const getProvider = async (orgId: string, providerId: string): Promise<ProviderDetailsRow> =>
+  api.organization(orgId).provider(providerId).select(PROVIDER_DETAILS_FIELDS);
 
 export const createProvider = async (
   orgId: string,
   name: string,
   description: string,
   options?: { imported?: boolean; registryNamespace?: string }
-): Promise<{ data: ProviderModel }> => {
-  const attributes: Record<string, unknown> = {
+): Promise<{ data: ProviderCreatedRow }> => {
+  const attributes: WriteAttributes<"provider"> = {
     name,
     description,
   };
@@ -46,22 +72,19 @@ export const createProvider = async (
   if (options?.registryNamespace) {
     attributes.registryNamespace = options.registryNamespace;
   }
-
-  const response = await axiosInstance.post(
-    `organization/${orgId}/provider`,
-    {
-      data: {
-        type: "provider",
-        attributes,
-      },
+  const body: CreateBody<"provider"> = {
+    data: {
+      type: "provider",
+      attributes,
     },
-    {
-      headers: {
-        "Content-Type": JSON_API_CONTENT_TYPE,
-      },
-    }
-  );
-  return response.data;
+  };
+
+  const response = await axiosInstance.post<unknown>(`organization/${orgId}/provider`, body, {
+    headers: {
+      "Content-Type": JSON_API_CONTENT_TYPE,
+    },
+  });
+  return { data: rowFrom(PROVIDER_CREATED_FIELDS, parseApiDocument(response.data)) };
 };
 
 export const updateVersionStatus = async (
@@ -70,11 +93,10 @@ export const updateVersionStatus = async (
   versionId: string,
   attributes: Required<VersionStatus>
 ): Promise<void> => {
-  await axiosInstance.patch(
-    `organization/${orgId}/provider/${providerId}/version/${versionId}`,
-    { data: { type: "version", id: versionId, attributes } },
-    { headers: { "Content-Type": JSON_API_CONTENT_TYPE } }
-  );
+  const body: UpdateBody<"version"> = { data: { type: "version", id: versionId, attributes } };
+  await axiosInstance.patch(`organization/${orgId}/provider/${providerId}/version/${versionId}`, body, {
+    headers: { "Content-Type": JSON_API_CONTENT_TYPE },
+  });
 };
 
 export const createVersion = async (
@@ -82,25 +104,22 @@ export const createVersion = async (
   providerId: string,
   versionNumber: string,
   protocols: string
-): Promise<{ data: ProviderVersionModel }> => {
-  const response = await axiosInstance.post(
-    `organization/${orgId}/provider/${providerId}/version`,
-    {
-      data: {
-        type: "version",
-        attributes: {
-          versionNumber,
-          protocols,
-        },
+): Promise<{ data: VersionCreatedRow }> => {
+  const body: CreateBody<"version"> = {
+    data: {
+      type: "version",
+      attributes: {
+        versionNumber,
+        protocols,
       },
     },
-    {
-      headers: {
-        "Content-Type": JSON_API_CONTENT_TYPE,
-      },
-    }
-  );
-  return response.data;
+  };
+  const response = await axiosInstance.post<unknown>(`organization/${orgId}/provider/${providerId}/version`, body, {
+    headers: {
+      "Content-Type": JSON_API_CONTENT_TYPE,
+    },
+  });
+  return { data: rowFrom(VERSION_CREATED_FIELDS, parseApiDocument(response.data)) };
 };
 
 export const createImplementation = async (
@@ -121,22 +140,23 @@ export const createImplementation = async (
     source: string;
     sourceUrl: string;
   }
-): Promise<{ data: ProviderImplementationModel }> => {
-  const response = await axiosInstance.post(
-    `organization/${orgId}/provider/${providerId}/version/${versionId}/implementation`,
-    {
-      data: {
-        type: "implementation",
-        attributes: impl,
-      },
+): Promise<{ data: ImplementationCreatedRow }> => {
+  const body: CreateBody<"implementation"> = {
+    data: {
+      type: "implementation",
+      attributes: impl,
     },
+  };
+  const response = await axiosInstance.post<unknown>(
+    `organization/${orgId}/provider/${providerId}/version/${versionId}/implementation`,
+    body,
     {
       headers: {
         "Content-Type": JSON_API_CONTENT_TYPE,
       },
     }
   );
-  return response.data;
+  return { data: rowFrom(IMPLEMENTATION_CREATED_FIELDS, parseApiDocument(response.data)) };
 };
 
 /**
@@ -144,41 +164,22 @@ export const createImplementation = async (
  * The backend has no cascade delete, so we must delete children first.
  */
 export const deleteProviderCascade = async (orgId: string, providerId: string): Promise<void> => {
-  // 1. Get provider with versions and implementations
-  const response = await axiosInstance.get(
-    `organization/${orgId}/provider/${providerId}?include=version,version.implementation`
-  );
-
-  const included = response.data.included || [];
-
-  // Collect implementation IDs and version IDs
-  const implementations: { id: string; versionId: string }[] = [];
-  const versionIds: string[] = [];
-
-  for (const item of included) {
-    if (item.type === "version") {
-      versionIds.push(item.id);
-    }
-    if (item.type === "implementation") {
-      implementations.push({
-        id: item.id,
-        versionId: item.relationships?.version?.data?.id || "",
-      });
-    }
-  }
+  // 1. Get the provider's versions and their implementations
+  const provider = await api.organization(orgId).provider(providerId).select(PROVIDER_DELETE_FIELDS);
+  const versions = provider?.version ?? [];
 
   // 2. Delete all implementations first
-  for (const impl of implementations) {
-    if (impl.versionId) {
+  for (const version of versions) {
+    for (const implementation of version.implementation ?? []) {
       await axiosInstance.delete(
-        `organization/${orgId}/provider/${providerId}/version/${impl.versionId}/implementation/${impl.id}`
+        `organization/${orgId}/provider/${providerId}/version/${version.id}/implementation/${implementation.id}`
       );
     }
   }
 
   // 3. Delete all versions
-  for (const versionId of versionIds) {
-    await axiosInstance.delete(`organization/${orgId}/provider/${providerId}/version/${versionId}`);
+  for (const version of versions) {
+    await axiosInstance.delete(`organization/${orgId}/provider/${providerId}/version/${version.id}`);
   }
 
   // 4. Delete the provider itself
@@ -188,26 +189,16 @@ export const deleteProviderCascade = async (orgId: string, providerId: string): 
 // Keep simple delete for backward compatibility
 export const deleteProvider = deleteProviderCascade;
 
-// Terraform Registry API functions (via backend proxy to avoid CORS)
-
-export const searchTerraformRegistry = async (query: string): Promise<TerraformRegistrySearchResult> => {
-  const response = await axiosRegistry.get("/registry/v1/providers", {
-    params: {
-      q: query,
-      limit: 20,
-    },
-  });
-  return response.data;
-};
+// Terraform Registry API functions (via backend proxy to avoid CORS).
 
 export const getProviderVersions = async (
   namespace: string,
   name: string
 ): Promise<TerraformRegistryProviderVersions> => {
-  const response = await axiosRegistry.get(
+  const response = await axiosRegistry.get<unknown>(
     `/registry/v1/providers/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/versions`
   );
-  return response.data;
+  return parseProviderVersions(response.data);
 };
 
 export const getPublicProvider = async (
@@ -218,8 +209,8 @@ export const getPublicProvider = async (
   const path =
     `/registry/v1/providers/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}` +
     (version ? `/${encodeURIComponent(version)}` : "");
-  const response = await axiosRegistry.get(path);
-  return response.data;
+  const response = await axiosRegistry.get<unknown>(path);
+  return parseProviderDetails(response.data);
 };
 
 export const getProviderDownload = async (
@@ -229,10 +220,10 @@ export const getProviderDownload = async (
   os: string,
   arch: string
 ): Promise<TerraformRegistryProviderDownload> => {
-  const response = await axiosRegistry.get(
+  const response = await axiosRegistry.get<unknown>(
     `/registry/v1/providers/${namespace}/${name}/${version}/download/${os}/${arch}`
   );
-  return response.data;
+  return parseProviderDownload(response.data);
 };
 
 // Import provider from Terraform Registry to Terrakube
@@ -243,7 +234,7 @@ export const importProvider = async (
   version: string,
   description?: string,
   prefetchedVersions?: TerraformRegistryProviderVersions
-): Promise<{ provider: ProviderModel; version: ProviderVersionModel }> => {
+): Promise<{ provider: ProviderCreatedRow; version: VersionCreatedRow }> => {
   // 1. Get versions from registry (or use pre-fetched data to avoid duplicate call)
   const versionsData = prefetchedVersions || (await getProviderVersions(namespace, name));
   const versionInfo = versionsData.versions.find((v) => v.version === version);
