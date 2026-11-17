@@ -12,9 +12,15 @@ describe("computePlanTotals", () => {
         { address: "b", actions: ["delete", "create"] },
       ],
       "300": [{ address: "c", actions: ["delete"] }],
-    } as never);
+    });
 
     expect(totals).toEqual({ create: 1, update: 0, delete: 1, replace: 1 });
-    expect(formatPlanSummary(totals!)).toBe("1 to add, 0 to change, 1 to destroy, 1 to replace");
+    expect(totals && formatPlanSummary(totals)).toBe("1 to add, 0 to change, 1 to destroy, 1 to replace");
+  });
+
+  it("does not count a fallback action that names an Object.prototype member", () => {
+    const totals = computePlanTotals({ "100": [{ address: "a", action: "toString" }] });
+
+    expect(totals).toEqual({ create: 0, update: 0, delete: 0, replace: 0 });
   });
 });

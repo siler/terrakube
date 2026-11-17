@@ -14,16 +14,19 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { AxiosResponse } from "axios";
 import { cloneElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ORGANIZATION_ARCHIVE } from "../../config/actionTypes";
-import axiosInstance, { axiosAuxiliary } from "../../config/axiosConfig";
+import axios from "axios";
+import axiosInstance, { axiosAuxiliary, getErrorMessage } from "../../config/axiosConfig";
 import { useAbortController, usePolling, useStructuredOutputStream } from "../../hooks";
 import WorkspaceStatusTag from "@/components/display/WorkspaceStatusTag";
 import { getWorkspaceStatusIcon } from "../../modules/workspaces/utils/workspaceStatusIcon";
 import { getWorkspaceStatusText } from "../../modules/workspaces/utils/workspaceStatusText";
-import { formatJobVia, IncludedItem, Job, JobStep, Workspace } from "../types";
+import { formatJobVia, JobStep, STEP_FIELDS, PolicyEvaluationContext } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import type { UpdateBody } from "../api/writeBodies";
 import {
   ContextAvailability,
   StructuredOutputMarker,
@@ -63,9 +66,41 @@ import {
 import { relativeTime } from "@/modules/utils/dates";
 import { formatExecutionDuration } from "./executionDuration";
 import { PolicyChecksOutput } from "./PolicyChecksOutput";
-import { PolicyEvaluationContext } from "../types";
+import { normalizePolicyEvaluation } from "./policyEvaluation";
+import { isOneOf, isRecord } from "@/modules/utils/typeGuards";
 import "./runTokens.css";
 import "./Details.css";
+
+const RUN_JOB_FIELDS = fields.job(
+  "status",
+  "output",
+  "prCommentError",
+  "prNumber",
+  "commitId",
+  "createdBy",
+  "createdDate",
+  "via",
+  "approvedBy",
+  "approvedAt",
+  "approvalTeam",
+  "overrideBranch",
+  "variableNames",
+  "triggeredByJobId",
+  "cascadeDepth",
+  {
+    step: STEP_FIELDS,
+    workspace: ["source", "branch", { vcs: ["name"] }],
+    organization: ids,
+  }
+);
+
+type RunJob = Row<typeof RUN_JOB_FIELDS>;
+
+const STEP_DELIVERY_FIELDS = fields.job({
+  step: ["status", "deliveryState", "executionDurationMs", "executionPhase"],
+});
+
+const UPSTREAM_JOB_FIELDS = fields.job({ workspace: ["name"] });
 
 // How much longer to keep re-checking while the API recovers a step's output from storage.
 const RECOVERY_RECONCILE_EXTRA_MS = 240_000;
@@ -79,6 +114,22 @@ type Props = {
 };
 
 const INCOMPLETE_VARIABLE_GUARD_STEP_NAME = "Incomplete sensitive variables";
+
+const LIVE_PHASES = ["plan", "apply"] as const;
+
+// One live context push: the plan or apply step that just changed, normalized by the caller.
+type LiveStructuredOutput = {
+  phase: (typeof LIVE_PHASES)[number];
+  changes: unknown;
+  jobDiagnostics: unknown;
+};
+
+const parseLiveStructuredOutput = (value: unknown): LiveStructuredOutput | undefined => {
+  if (!isRecord(value) || !isOneOf(LIVE_PHASES, value.phase)) {
+    return undefined;
+  }
+  return { phase: value.phase, changes: value.changes, jobDiagnostics: value.jobDiagnostics };
+};
 
 const UI_TYPE_STORAGE_KEY = "terrakube.jobDetails.uiType";
 
@@ -103,7 +154,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   const [loading, setLoading] = useState(false);
   // One flag for approve, discard and cancel: a second click while the PATCH is in flight is a bug, not intent.
   const [actionPending, setActionPending] = useState(false);
-  const [job, setJob] = useState<AxiosResponse<Job>>();
+  const [job, setJob] = useState<RunJob>();
   const [workspaceSource, setWorkspaceSource] = useState<string>();
   const [workspaceDefaultBranch, setWorkspaceDefaultBranch] = useState<string>();
   const [workspaceVcsName, setWorkspaceVcsName] = useState<string>();
@@ -183,7 +234,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     return error instanceof Error && (error.name === "AbortError" || error.name === "CanceledError");
   };
 
-  const parseIncompleteVariableGuard = (jobOutput?: string): IncompleteVariableGuard | null => {
+  const parseIncompleteVariableGuard = (jobOutput?: string | null): IncompleteVariableGuard | null => {
     if (jobOutput == null) {
       return null;
     }
@@ -216,7 +267,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     };
   };
 
-  const isIncompleteVariableGuardStep = (stepName?: string) => {
+  const isIncompleteVariableGuardStep = (stepName?: string | null) => {
     return stepName === INCOMPLETE_VARIABLE_GUARD_STEP_NAME;
   };
 
@@ -245,7 +296,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     );
   };
 
-  const renderPrCommentErrorAlert = (prCommentError: string, prNumber?: number) => {
+  const renderPrCommentErrorAlert = (prCommentError: string, prNumber?: number | null) => {
     return (
       <Alert
         type="warning"
@@ -273,7 +324,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   );
 
   const onChange = (e: RadioChangeEvent) => {
-    const nextUIType = e.target.value as "structured" | "console";
+    const nextUIType = e.target.value === "console" ? "console" : "structured";
     setUIType(nextUIType);
     try {
       localStorage.setItem(UI_TYPE_STORAGE_KEY, nextUIType);
@@ -367,7 +418,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   };
 
   const renderStepExtra = (item: JobStep) => {
-    const guard = parseIncompleteVariableGuard(job?.data?.attributes.output);
+    const guard = parseIncompleteVariableGuard(job?.output);
     if (guard != null && isIncompleteVariableGuardStep(item.name)) {
       return null;
     }
@@ -403,7 +454,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   };
 
   const renderStepContent = (item: JobStep) => {
-    const guard = parseIncompleteVariableGuard(job?.data?.attributes.output);
+    const guard = parseIncompleteVariableGuard(job?.output);
     const isGuardStep = guard != null && isIncompleteVariableGuardStep(item.name);
 
     return (
@@ -432,18 +483,17 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
 
   const patchStatus = (status: "approved" | "rejected" | "cancelled", successText: string, failText: string) => {
     setActionPending(true);
+    const body: UpdateBody<"job"> = { data: { type: "job", id: jobId, attributes: { status } } };
     return axiosInstance
-      .patch(
-        `organization/${organizationId}/job/${jobId}`,
-        { data: { type: "job", id: jobId, attributes: { status } } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      )
+      .patch(`organization/${organizationId}/job/${jobId}`, body, {
+        headers: { "Content-Type": "application/vnd.api+json" },
+      })
       .then(async () => {
         message.success(successText);
         await refreshJobDetails();
       })
-      .catch((error) => {
-        message.error(`${failText}: ${error?.response?.data?.errors?.[0]?.detail ?? error.message}`);
+      .catch((error: unknown) => {
+        message.error(`${failText}: ${getErrorMessage(error)}`);
       })
       .finally(() => setActionPending(false));
   };
@@ -456,7 +506,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
       className: "run-status-icon",
       "data-status": item.status,
       "aria-hidden": true,
-    } as Record<string, unknown>);
+    });
   };
 
   const handleApprove = () => patchStatus("approved", "Run approved", "Could not approve run");
@@ -472,24 +522,26 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   // The upstream run of a job started by a run trigger. Resolved separately because the job
   // only carries the id, and the link needs the workspace it belongs to. Run triggers never
   // cross organizations, so the current one is always the right place to look.
-  const upstreamJobId = job?.data?.attributes?.triggeredByJobId;
+  const upstreamJobId = job?.triggeredByJobId;
   useEffect(() => {
     if (!upstreamJobId || !organizationId) {
       setTriggeredBy(null);
       return;
     }
-    axiosInstance
-      .get(`organization/${organizationId}/job/${upstreamJobId}?include=workspace`)
-      .then((response) => {
-        const workspace = (response.data.included ?? []).find((item: any) => item.type === "workspace");
-        setTriggeredBy({
-          jobId: upstreamJobId,
-          workspaceId: workspace?.id ?? "",
-          workspaceName: workspace?.attributes?.name ?? "",
-        });
-      })
-      // The upstream run may have been pruned from history; the id alone is still worth showing.
-      .catch(() => setTriggeredBy({ jobId: upstreamJobId, workspaceId: "", workspaceName: "" }));
+    api
+      .organization(organizationId)
+      .job(String(upstreamJobId))
+      .select(UPSTREAM_JOB_FIELDS)
+      .then(
+        ({ workspace }) =>
+          setTriggeredBy({
+            jobId: upstreamJobId,
+            workspaceId: workspace?.id ?? "",
+            workspaceName: workspace?.name ?? "",
+          }),
+        // The upstream run may have been pruned from history; the id alone is still worth showing.
+        () => setTriggeredBy({ jobId: upstreamJobId, workspaceId: "", workspaceName: "" })
+      );
   }, [upstreamJobId, organizationId]);
 
   const loadJob = useCallback(async () => {
@@ -497,85 +549,40 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     const signal = getJobSignal();
 
     try {
-      const response = await axiosInstance.get(`organization/${organizationId}/job/${jobId}?include=step,workspace`, {
-        signal,
-      });
+      const runJob = await api
+        .organization(organizationId ?? "")
+        .job(jobId)
+        .select(RUN_JOB_FIELDS)
+        .signal(signal);
       if (requestId !== jobRequestRef.current) {
         return;
       }
 
-      setJob(response.data);
+      setJob(runJob);
 
-      const included = response.data.included ?? [];
-      const stepEntries = included.filter((item: any) => item.type === "step");
-      const workspaceEntry: Workspace | undefined = included.find(
-        (item: IncludedItem<Workspace>) => item.type === "workspace"
-      );
-      const incompleteVariableGuard = parseIncompleteVariableGuard(response.data.data.attributes.output);
+      const incompleteVariableGuard = parseIncompleteVariableGuard(runJob.output);
 
       // Steps render immediately from their entity data; each StepConsole fetches its own log
       // lazily (on expand) via useStepLog, so first paint never blocks on log fetches and the
       // 5s poll below refreshes step *status* only.
-      const stepsPromise = Promise.resolve(
-        stepEntries.map((stepItem: any) => ({
-          id: stepItem.id,
-          stepNumber: stepItem.attributes.stepNumber,
-          status: stepItem.attributes.status,
-          output: stepItem.attributes.output,
-          name: stepItem.attributes.name,
-          executionDurationMs: stepItem.attributes.executionDurationMs,
-          executionPhase: stepItem.attributes.executionPhase,
-          outputLog:
-            incompleteVariableGuard != null && isIncompleteVariableGuardStep(stepItem.attributes.name)
-              ? incompleteVariableGuard.rawMessage
-              : "",
-          deliveryState: parseDeliveryState(stepItem.attributes.deliveryState),
-        }))
-      );
+      const jobSteps: JobStep[] = runJob.step.map((stepItem) => ({
+        id: stepItem.id,
+        stepNumber: stepItem.stepNumber,
+        status: stepItem.status,
+        output: stepItem.output ?? "",
+        name: stepItem.name ?? "",
+        outputLog:
+          incompleteVariableGuard != null && isIncompleteVariableGuardStep(stepItem.name)
+            ? incompleteVariableGuard.rawMessage
+            : "",
+        deliveryState: parseDeliveryState(stepItem.deliveryState),
+        executionDurationMs: stepItem.executionDurationMs,
+        executionPhase: stepItem.executionPhase,
+      }));
 
-      const workspacePromise = workspaceEntry
-        ? (async () => {
-            const workspaceResponse = await axiosInstance.get(
-              `organization/${organizationId}/workspace/${workspaceEntry.id}`,
-              { signal }
-            );
-            const vcsId = workspaceResponse.data.data.relationships.vcs.data?.id;
-
-            if (!vcsId) {
-              return {
-                source: workspaceEntry.attributes.source,
-                branch: workspaceEntry.attributes.branch,
-                vcsName: undefined,
-              };
-            }
-
-            const vcsDataResponse = await axiosInstance.get(`organization/${organizationId}/vcs/${vcsId}`, {
-              signal,
-            });
-
-            return {
-              source: workspaceEntry.attributes.source,
-              branch: workspaceEntry.attributes.branch,
-              vcsName: vcsDataResponse.data.data.attributes.name,
-            };
-          })()
-        : Promise.resolve(undefined);
-
-      const [jobSteps, workspaceData] = await Promise.all([stepsPromise, workspacePromise]);
-      if (requestId !== jobRequestRef.current) {
-        return;
-      }
-
-      if (workspaceData) {
-        setWorkspaceSource(workspaceData.source);
-        setWorkspaceDefaultBranch(workspaceData.branch);
-        setWorkspaceVcsName(workspaceData.vcsName);
-      } else {
-        setWorkspaceSource(undefined);
-        setWorkspaceDefaultBranch(undefined);
-        setWorkspaceVcsName(undefined);
-      }
-
+      setWorkspaceSource(runJob.workspace?.source);
+      setWorkspaceDefaultBranch(runJob.workspace?.branch);
+      setWorkspaceVcsName(runJob.workspace?.vcs?.name ?? undefined);
       setSteps(jobSteps.sort(sortbyName));
     } catch (error) {
       if (isAbortError(error)) return;
@@ -583,7 +590,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   }, [getJobSignal, jobId, organizationId]);
 
   // Only the per-step status and delivery state, for the re-checks after a run ends: the full job
-  // reload also fetches the workspace and its VCS, which is wasted work on every retry.
+  // reload also carries every job field and the workspace, which is wasted work on every retry.
   const loadStepDelivery = useCallback(async () => {
     if (!organizationId || !jobId) {
       return;
@@ -592,21 +599,24 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     const requestId = ++stepDeliveryRequestRef.current;
     const signal = getStepDeliverySignal();
     try {
-      const response = await axiosInstance.get(`organization/${organizationId}/job/${jobId}?include=step`, { signal });
+      const { step: stepEntries } = await api
+        .organization(organizationId)
+        .job(jobId)
+        .select(STEP_DELIVERY_FIELDS)
+        .signal(signal);
       if (requestId !== stepDeliveryRequestRef.current) {
         return;
       }
-      const stepEntries: any[] = (response.data.included ?? []).filter((item: any) => item.type === "step");
       setSteps((previous) =>
         previous.map((step) => {
           const entry = stepEntries.find((candidate) => candidate.id === step.id);
           return entry
             ? {
                 ...step,
-                status: entry.attributes.status,
-                deliveryState: parseDeliveryState(entry.attributes.deliveryState),
-                executionDurationMs: entry.attributes.executionDurationMs,
-                executionPhase: entry.attributes.executionPhase,
+                status: entry.status,
+                deliveryState: parseDeliveryState(entry.deliveryState),
+                executionDurationMs: entry.executionDurationMs,
+                executionPhase: entry.executionPhase,
               }
             : step;
         })
@@ -622,47 +632,50 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     const apiOrigin = apiUrl("");
 
     try {
-      const response = await axiosAuxiliary.get(`${apiOrigin}/context/v1/${jobId}`, {
+      const response = await axiosAuxiliary.get<unknown>(`${apiOrigin}/context/v1/${jobId}`, {
         signal,
         auxClass: "context",
       });
       if (requestId !== contextRequestRef.current) {
         return;
       }
-      const availability = parseContextAvailability(response?.data, response?.status);
+      const data = response.data;
+      const context = isRecord(data) ? data : {};
+      const availability = parseContextAvailability(data, response.status);
       setContextAvailability(availability);
       if (availability === "persisted") {
         setContextEverPersisted(true);
       }
-      setOutputMarker(parseStructuredOutputMarker(response?.data));
-      const noChangeStepId = parseNoChangePlanStepId(response?.data);
+      setOutputMarker(parseStructuredOutputMarker(data));
+      const noChangeStepId = parseNoChangePlanStepId(data);
       if (noChangeStepId != null) {
         setNoChangePlanStepId(noChangeStepId);
       }
-      setUITemplates(normalizeUITemplates(response?.data?.terrakubeUI));
+      setUITemplates(normalizeUITemplates(context.terrakubeUI));
       // Merge (not replace) plan/apply/diagnostics - this REST snapshot can lag behind the live
       // SSE stream (useStructuredOutputStream's effect below), which pushes per-step updates as
       // soon as the executor emits them. Replacing wholesale on every 5s poll would intermittently
       // wipe out a step's just-pushed live data with a stale snapshot that hasn't caught up yet.
       setPlanStructuredOutput((previous) => ({
         ...previous,
-        ...normalizeStructuredPlanOutput(response?.data?.planStructuredOutput),
+        ...normalizeStructuredPlanOutput(context.planStructuredOutput),
       }));
       setApplyStructuredOutput((previous) => ({
         ...previous,
-        ...normalizeStructuredApplyOutput(response?.data?.applyStructuredOutput),
+        ...normalizeStructuredApplyOutput(context.applyStructuredOutput),
       }));
-      setTerraformOutputs(normalizeStructuredOutputs(response?.data?.terraformOutputs));
-      setJobDiagnostics((previous) => ({ ...previous, ...normalizeJobDiagnostics(response?.data?.jobDiagnostics) }));
-      if (response?.data?.policyEvaluation) {
-        setPolicyEvaluation(response.data.policyEvaluation);
+      setTerraformOutputs(normalizeStructuredOutputs(context.terraformOutputs));
+      setJobDiagnostics((previous) => ({ ...previous, ...normalizeJobDiagnostics(context.jobDiagnostics) }));
+      const evaluation = normalizePolicyEvaluation(context.policyEvaluation);
+      if (evaluation != null) {
+        setPolicyEvaluation(evaluation);
       }
     } catch (error) {
       if (isAbortError(error)) return;
       if (requestId !== contextRequestRef.current) return;
       // A failed/controlled context response must not clear already-loaded structured state and
       // must never bounce the whole page back to its loading spinner.
-      const httpStatus = (error as { response?: { status?: number } })?.response?.status;
+      const httpStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
       setContextAvailability(httpStatus != null && httpStatus >= 500 ? "unavailable" : "pending");
     }
   }, [getContextSignal, jobId]);
@@ -696,7 +709,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     },
     {
       interval: 5000,
-      enabled: Boolean(jobId) && !isTerminalStatus(job?.data?.attributes.status),
+      enabled: Boolean(jobId) && !isTerminalStatus(job?.status),
       immediate: false,
     }
   );
@@ -705,7 +718,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   // terminal transition (and on any status transition) re-fetch context, and keep a bounded,
   // context-only reconciliation running - job metadata and console stay untouched by this.
   useEffect(() => {
-    const status = job?.data?.attributes.status;
+    const status = job?.status;
     if (status === previousJobStatusRef.current) {
       return;
     }
@@ -723,7 +736,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
       setRecoveryGaveUp(false);
       setReconcileUntil(Date.now() + 60_000);
     }
-  }, [job?.data?.attributes.status, jobId, loadContext]);
+  }, [job?.status, jobId, loadContext]);
 
   // Bounded exponential backoff while reconciling. Re-runs whenever loadContext updates
   // contextAvailability, so it schedules the next retry or stops.
@@ -766,17 +779,12 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     loadStepDelivery,
   ]);
 
-  type LiveStructuredOutput = {
-    phase: "plan" | "apply";
-    changes: Record<string, unknown>;
-    jobDiagnostics: Record<string, unknown>;
-  };
-
-  const isJobRunning = job?.data?.attributes.status === "running";
+  const isJobRunning = job?.status === "running";
   const liveStructuredOutput = useStructuredOutputStream<LiveStructuredOutput | null>({
     url: `${apiUrl("")}/context/v1/${jobId}/stream`,
     enabled: Boolean(jobId) && (isJobRunning || reconcileUntil != null),
     initial: null,
+    parse: parseLiveStructuredOutput,
   });
 
   useEffect(() => {
@@ -850,7 +858,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     },
   };
   // The confirm modal only stands while the run still allows its action (same conditions as the buttons).
-  const currentStatus = job?.data?.attributes.status;
+  const currentStatus = job?.status;
   const isConfirmActionAllowed = (action: "approve" | "discard" | "cancel") =>
     action === "cancel"
       ? currentStatus === "running" || currentStatus === "pending"
@@ -870,8 +878,8 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
   }, [jobId]);
 
   const renderActionBar = () => {
-    const status = job?.data?.attributes.status;
-    const approvalTeam = job?.data?.attributes.approvalTeam;
+    const status = job?.status;
+    const approvalTeam = job?.approvalTeam;
 
     if (status === "waitingApproval" && !hasPolicyBlockingViolations) {
       return (
@@ -943,11 +951,11 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     return null;
   };
 
-  const renderSourceFacts = (attributes: Job["attributes"]) => {
+  const renderSourceFacts = (attributes: RunJob) => {
     if (workspaceDefaultBranch === "remote-content") {
       return <p className="run-facts-note">CLI-driven workflow: no VCS source for this run.</p>;
     }
-    const overrideBranch = (attributes as { overrideBranch?: string }).overrideBranch;
+    const { overrideBranch } = attributes;
     const facts = [
       { label: "Source", value: workspaceSource, mono: true },
       { label: "Default branch", value: workspaceDefaultBranch, mono: true },
@@ -980,7 +988,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
         ? { color: "warning", text: "Action required" }
         : { color: "success", text: "Compliant" };
 
-  if (loading || !job?.data || !steps) {
+  if (loading || !job || !steps) {
     return (
       <Spin spinning description="Loading run...">
         <div className="run-detail-loading" />
@@ -988,7 +996,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
     );
   }
 
-  const attributes = job.data.attributes;
+  const attributes = job;
   const commitId = attributes.commitId && attributes.commitId !== "000000000" ? attributes.commitId : undefined;
   const guard = parseIncompleteVariableGuard(attributes.output);
   // Only a run that is over can have been closed by Terrakube; the line in the output means nothing on one that is not.
@@ -1007,7 +1015,7 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
       <header className="run-header">
         <div className="job-headline">
           <WorkspaceStatusTag status={attributes.status} />
-          <h2 className="job-headline-title">Run #{job.data.id}</h2>
+          <h2 className="job-headline-title">Run #{job.id}</h2>
           {(workspaceName || commitId) && (
             <span className="job-headline-meta">
               {workspaceName}
@@ -1071,10 +1079,10 @@ export const DetailsJob = ({ jobId, workspaceName, canApprove = false }: Props) 
                 <PolicyChecksOutput
                   policyEvaluation={policyEvaluation}
                   jobId={jobId}
-                  organizationId={organizationId || job.data.relationships?.organization?.data?.id}
-                  workspaceId={job.data.relationships?.workspace?.data?.id}
+                  organizationId={organizationId || job.organization?.id}
+                  workspaceId={job.workspace?.id}
                   status={attributes.status}
-                  approvalTeam={attributes.approvalTeam}
+                  approvalTeam={attributes.approvalTeam ?? undefined}
                   canApprove={canApprove}
                   onOverrideSuccess={() => {
                     void refreshJobDetails();

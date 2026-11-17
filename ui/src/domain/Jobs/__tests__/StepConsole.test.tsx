@@ -1,10 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { StepConsole } from "../StepConsole";
+import type { useStepLog } from "../../../hooks";
+import { JobStatus } from "@/domain/generated/apiResources";
+import type { JobStep } from "../../types";
 
-const mockUseStepLog = jest.fn();
+const mockUseStepLog = jest.fn<ReturnType<typeof useStepLog>, Parameters<typeof useStepLog>>();
 
 jest.mock("../../../hooks", () => ({
-  useStepLog: (...args: unknown[]) => mockUseStepLog(...args),
+  useStepLog: (...args: Parameters<typeof useStepLog>) => mockUseStepLog(...args),
 }));
 
 jest.mock("../TerminalOutput", () => ({
@@ -17,7 +20,16 @@ jest.mock("../LiveTerminalOutput", () => ({
   LiveTerminalOutput: () => <div data-testid="live" />,
 }));
 
-const item = { id: "s1", name: "Terraform Apply", stepNumber: 1, status: "failed", output: "", outputLog: "" } as never;
+const item: JobStep = {
+  id: "s1",
+  name: "Terraform Apply",
+  stepNumber: 1,
+  status: JobStatus.failed,
+  output: "",
+  outputLog: "",
+  executionDurationMs: null,
+  executionPhase: null,
+};
 
 const renderConsole = () =>
   render(
@@ -71,7 +83,7 @@ it("shows no warning while the log is loading or failed to load", () => {
 });
 
 describe("a step that was not executed", () => {
-  const notExecutedApply = { ...(item as object), status: "notExecuted" } as never;
+  const notExecutedApply: JobStep = { ...item, status: JobStatus.notExecuted };
 
   const renderNotExecuted = () =>
     render(

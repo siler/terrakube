@@ -10,9 +10,16 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import AnsiImport from "ansi-to-react";
 import { splitLines } from "../ansiChunks";
+import { isRecord } from "@/modules/utils/typeGuards";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const Ansi: any = (AnsiImport as any).default ?? AnsiImport;
+type AnsiComponent = typeof AnsiImport;
+
+const isAnsiComponent = (value: unknown): value is AnsiComponent => typeof value === "function";
+
+// ansi-to-react ships both a CJS default and an ESM interop wrapper depending on the bundler.
+const ansiModule: unknown = AnsiImport;
+const Ansi: AnsiComponent =
+  isRecord(ansiModule) && isAnsiComponent(ansiModule.default) ? ansiModule.default : AnsiImport;
 
 function makeLog(lines: number): string[] {
   const out: string[] = [];
