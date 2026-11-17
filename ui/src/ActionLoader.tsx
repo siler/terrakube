@@ -4,10 +4,12 @@ import { VscAzure } from "react-icons/vsc";
 import { antdIcons, getIcon } from "./config/iconList";
 import axiosInstance from "./config/axiosConfig";
 import { reportDeprecatedScope } from "./modules/actions/deprecations";
+import { ActionComponent, ActionContext, isActionComponent } from "./actionComponent";
+
 // Heavy deps (sucrase, antd, dayjs, luxon, react-markdown, react-vis)
 // are loaded lazily inside loadComponent() — they would otherwise dominate the main bundle.
 // Compiled components are cached by action string so re-renders skip the transpile step entirely.
-const compiledComponentCache = new Map<string, any>();
+const compiledComponentCache = new Map<string, ActionComponent>();
 // react-icons are statically imported by name so the bundler tree-shakes them down to a
 // handful of icons instead of pulling the entire react-icons/si set (~2500 icons / 5 MB).
 const exposedReactIcons = {
@@ -103,25 +105,13 @@ const pickAntdComponents = (mod: Record<string, unknown>, names: string[]) => {
 const resolveAntdIcons = (names: string[]) => {
   const out: Record<string, unknown> = {};
   for (const name of names) {
-    out[name] = antdIcons[name as keyof typeof antdIcons] ?? getIcon(name);
+    out[name] = getIcon(name);
   }
   return out;
 };
 
-const reactIconNames = Object.keys(exposedReactIcons);
-
-const getRequiredReactIcons = (componentString: string) =>
-  reactIconNames.filter((name) => componentString.includes(name));
-
-const pickReactIcons = (names: string[]) => {
-  const out: Record<string, unknown> = {};
-  for (const name of names) {
-    const icon = exposedReactIcons[name as keyof typeof exposedReactIcons];
-    if (icon) out[name] = icon;
-    else console.error(`Icon ${name} not exposed by ActionLoader`);
-  }
-  return out;
-};
+const pickReactIcons = (componentString: string): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(exposedReactIcons).filter(([name]) => componentString.includes(name)));
 
 type Props = {
   children: ReactNode;
@@ -137,7 +127,7 @@ class ErrorBoundary extends Component<Props, State> {
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(_: Error) {
+  static getDerivedStateFromError() {
     return { hasError: true };
   }
 
@@ -154,8 +144,8 @@ class ErrorBoundary extends Component<Props, State> {
   }
 }
 
-const ActionLoader = ({ action, context }: { action: any; context: any }) => {
-  const [Component, setComponent] = useState<any>(null);
+const ActionLoader = ({ action, context }: { action: string; context: ActionContext }) => {
+  const [Component, setComponent] = useState<ActionComponent | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -190,21 +180,19 @@ const ActionLoader = ({ action, context }: { action: any; context: any }) => {
         const DateTime = luxon?.DateTime;
         const dayjs = dayjsModule.default;
         reportDeprecatedScope(componentString, action);
-        const ReactMarkdown = (ReactMarkdownModule as any).default ?? ReactMarkdownModule;
-        const antdAny = antd as any;
-        const { Panel } = antdAny.Collapse;
-        const { Paragraph, Text } = antdAny.Typography;
-        const { RangePicker } = antdAny.DatePicker;
-        const { Crosshair, Hint, HorizontalGridLines, LineSeries, VerticalGridLines, XAxis, XYPlot, YAxis } =
-          reactVis as any;
+        const { default: ReactMarkdown } = ReactMarkdownModule;
+        const antdExports: Record<string, unknown> = { ...antd };
+        const { Panel } = antd.Collapse;
+        const { Paragraph, Text } = antd.Typography;
+        const { RangePicker } = antd.DatePicker;
+        const { Crosshair, Hint, HorizontalGridLines, LineSeries, VerticalGridLines, XAxis, XYPlot, YAxis } = reactVis;
 
         const requiredAntdComponents = getRequiredAntdComponents(componentString);
         const requiredAntdIcons = getRequiredAntdIcons(componentString);
-        const requiredReactIcons = getRequiredReactIcons(componentString);
 
-        const importedAntdComponents = pickAntdComponents(antd as Record<string, unknown>, requiredAntdComponents);
+        const importedAntdComponents = pickAntdComponents(antdExports, requiredAntdComponents);
         const importedIcons = resolveAntdIcons(requiredAntdIcons);
-        const importedReactIcons = pickReactIcons(requiredReactIcons);
+        const importedReactIcons = pickReactIcons(componentString);
 
         // Bind the component before transpiling. Sucrase prepends helper
         // functions when the action uses optional chaining or nullish
@@ -216,7 +204,7 @@ const ActionLoader = ({ action, context }: { action: any; context: any }) => {
           production: true,
         }).code;
 
-        const scopeContext: Record<string, any> = {
+        const scopeContext: Record<string, unknown> = {
           React,
           useEffect,
           useState,
@@ -236,7 +224,7 @@ const ActionLoader = ({ action, context }: { action: any; context: any }) => {
           DateTime, // deprecated, see modules/actions/deprecations.ts
           dayjs,
           ReactMarkdown,
-          ...(antd as Record<string, unknown>),
+          ...antdExports,
           ...importedAntdComponents,
           ...importedIcons,
           ...importedReactIcons,
@@ -246,7 +234,10 @@ const ActionLoader = ({ action, context }: { action: any; context: any }) => {
         const functionArgs = functionParams.map((key) => scopeContext[key]);
 
         const createComponent = new Function(...functionParams, `${transpiledCode}\nreturn __ActionComponent;`);
-        const component = createComponent(...functionArgs);
+        const component: unknown = Reflect.apply(createComponent, undefined, functionArgs);
+        if (!isActionComponent(component)) {
+          throw new Error("action did not evaluate to a React component");
+        }
 
         compiledComponentCache.set(action, component);
 
@@ -257,12 +248,6 @@ const ActionLoader = ({ action, context }: { action: any; context: any }) => {
         if (cancelled) return;
         console.error("Error creating component:", err);
         setError(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        setComponent(
-          () =>
-            function ActionLoadError() {
-              return <div>Error loading component</div>;
-            }
-        );
       }
     };
 

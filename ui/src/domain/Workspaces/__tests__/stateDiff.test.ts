@@ -141,5 +141,16 @@ describe("diffState", () => {
       expect(text).not.toMatch(/"b[12]"|"t[12]"/);
       expect(text).toContain('"y"');
     });
+
+    it("ignores a malformed path step and still masks the well-formed paths", () => {
+      const paths = [[null], [{ type: "get_attr", value: "length" }, 7], ...result];
+      const diff = diffState(
+        state({ result: "old-pw", length: 8 }, paths),
+        state({ result: "new-pw", length: 9 }, paths)
+      );
+      const text = JSON.stringify(diff);
+      expect(text).not.toMatch(/-pw/);
+      expect(text).toContain(JSON.stringify(["length", { kind: "changed", prev: 8, next: 9 }]));
+    });
   });
 });
