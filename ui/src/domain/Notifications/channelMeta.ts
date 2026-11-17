@@ -1,5 +1,5 @@
 import { ApiOutlined, SlackOutlined, TeamOutlined } from "@ant-design/icons";
-import { NotificationChannelType } from "../types";
+import { NotificationChannelType } from "../generated/apiResources";
 
 type ChannelMeta = {
   value: NotificationChannelType;
@@ -47,3 +47,13 @@ export const CHANNEL_META: Record<NotificationChannelType, ChannelMeta> = {
 };
 
 export const CHANNEL_ORDER: NotificationChannelType[] = ["SLACK", "TEAMS", "WEBHOOK"];
+
+const CHANNEL_TYPES: readonly string[] = Object.values(NotificationChannelType);
+
+/** True when the value is a channel type this UI knows how to describe. */
+export const isNotificationChannelType = (value: unknown): value is NotificationChannelType =>
+  typeof value === "string" && CHANNEL_TYPES.includes(value);
+
+/** The display metadata for a channel type, or undefined for a missing or unrecognised one. */
+export const channelMetaFor = (value: unknown): ChannelMeta | undefined =>
+  isNotificationChannelType(value) ? CHANNEL_META[value] : undefined;

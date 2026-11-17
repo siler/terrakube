@@ -5,7 +5,7 @@ import {
   QuestionCircleOutlined,
   SyncOutlined,
 } from "@ant-design/icons";
-import { JobStatus } from "../types";
+import type { JobStatus } from "@/domain/generated/apiResources";
 
 type JobStatusGroup = {
   key: string;
@@ -23,7 +23,7 @@ export const JOB_STATUS_GROUPS: JobStatusGroup[] = [
     icon: ClockCircleOutlined,
     statuses: [
       {
-        value: JobStatus.WaitingApproval,
+        value: "waitingApproval",
         label: "Waiting for approval",
         hint: "Includes manual run approvals and soft-mandatory policy reviews",
       },
@@ -35,8 +35,8 @@ export const JOB_STATUS_GROUPS: JobStatusGroup[] = [
     color: "success",
     icon: CheckCircleOutlined,
     statuses: [
-      { value: JobStatus.Completed, label: "Completed" },
-      { value: JobStatus.NoChanges, label: "Completed (no changes)" },
+      { value: "completed", label: "Completed" },
+      { value: "noChanges", label: "Completed (no changes)" },
     ],
   },
   {
@@ -46,12 +46,12 @@ export const JOB_STATUS_GROUPS: JobStatusGroup[] = [
     icon: ExclamationCircleOutlined,
     statuses: [
       {
-        value: JobStatus.Failed,
+        value: "failed",
         label: "Failed",
         hint: "Includes run errors and hard-mandatory policy violations",
       },
-      { value: JobStatus.Rejected, label: "Rejected" },
-      { value: JobStatus.Cancelled, label: "Cancelled" },
+      { value: "rejected", label: "Rejected" },
+      { value: "cancelled", label: "Cancelled" },
     ],
   },
   {
@@ -60,10 +60,10 @@ export const JOB_STATUS_GROUPS: JobStatusGroup[] = [
     color: "processing",
     icon: SyncOutlined,
     statuses: [
-      { value: JobStatus.Pending, label: "Pending" },
-      { value: JobStatus.Approved, label: "Approved" },
-      { value: JobStatus.Queue, label: "Queued" },
-      { value: JobStatus.Running, label: "Running" },
+      { value: "pending", label: "Pending" },
+      { value: "approved", label: "Approved" },
+      { value: "queue", label: "Queued" },
+      { value: "running", label: "Running" },
     ],
   },
   {
@@ -72,9 +72,9 @@ export const JOB_STATUS_GROUPS: JobStatusGroup[] = [
     color: "default",
     icon: QuestionCircleOutlined,
     statuses: [
-      { value: JobStatus.NotExecuted, label: "Not executed" },
-      { value: JobStatus.Unknown, label: "Unknown" },
-      { value: JobStatus.NeverExecuted, label: "Never executed" },
+      { value: "notExecuted", label: "Not executed" },
+      { value: "unknown", label: "Unknown" },
+      { value: "NeverExecuted", label: "Never executed" },
     ],
   },
 ];

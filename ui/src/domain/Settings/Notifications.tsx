@@ -1,4 +1,4 @@
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import { NotificationConfigurationList } from "@/domain/Notifications/NotificationConfigurationList";
 
 type Props = {
@@ -8,10 +8,10 @@ type Props = {
 };
 
 export const OrgNotifications = ({ editorMode, editorId, managePermission = true }: Props) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   return (
     <NotificationConfigurationList
-      orgId={orgid!}
+      orgId={orgid}
       basePath={`/organizations/${orgid}/settings/notifications`}
       editorMode={editorMode}
       editorId={editorId}
