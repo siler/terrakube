@@ -1,5 +1,5 @@
 import { API_SCHEMA, type ApiAttributes, type ApiTypeName } from "../generated/apiResources";
-import { isRecord } from "@/modules/utils/guards";
+import { isRecord } from "@/modules/utils/typeGuards";
 import type { AttributeName, IsMany, RelationshipName, TargetOf } from "./schemaTypes";
 
 /** Selects a relationship's linkage (`{ id }`) without including the related resource. */
