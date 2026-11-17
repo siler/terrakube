@@ -1,7 +1,7 @@
 import { CloudServerOutlined, ExportOutlined } from "@ant-design/icons";
 import { Link, useParams } from "react-router-dom";
 import { parseProviderDescription } from "../Modules/registryHelpers";
-import { FlatProvider } from "./types";
+import { FlatProvider } from "./providerFields";
 import "../Modules/Module.css";
 
 type Params = {
@@ -18,7 +18,7 @@ export const ProviderList = ({ providers }: Props) => {
   return (
     <ul className="registry-cards">
       {providers.map((item) => {
-        const { text, source } = parseProviderDescription(item.description);
+        const { text, source } = parseProviderDescription(item.description ?? "");
         return (
           <li key={item.id} className="registry-card">
             <span className="registry-card-icon" aria-hidden="true">

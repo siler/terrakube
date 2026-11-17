@@ -24,8 +24,7 @@ import VersionStatusModal, {
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import { parseProviderDescription, registryHostname } from "../Modules/registryHelpers";
 import { compareVersions } from "../Workspaces/Workspaces";
-import { getProvider, deleteProviderCascade, updateVersionStatus } from "./providerService";
-import { ProviderModel, ProviderVersionModel } from "./types";
+import { getProvider, deleteProviderCascade, updateVersionStatus, type ProviderDetailsRow } from "./providerService";
 import "../Modules/Module.css";
 
 type Props = {
@@ -37,16 +36,12 @@ type Params = {
   providerid: string;
 };
 
-type VersionInfo = {
-  id: string;
-  versionNumber: string;
-  protocols: string;
-} & VersionStatus;
+type VersionInfo = ProviderDetailsRow["version"][number];
 
 export const ProviderDetails = ({ organizationName }: Props) => {
   const { orgid, providerid } = useParams<Params>();
   const navigate = useNavigate();
-  const [provider, setProvider] = useState<ProviderModel | null>(null);
+  const [provider, setProvider] = useState<ProviderDetailsRow | null>(null);
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -64,18 +59,10 @@ export const ProviderDetails = ({ organizationName }: Props) => {
     setLoading(true);
     setError(undefined);
     getProvider(orgid, providerid)
-      .then((response) => {
-        setProvider(response.data);
+      .then((provider) => {
+        setProvider(provider);
 
-        const versionList: VersionInfo[] = [];
-        if (response.included) {
-          response.included.forEach((item) => {
-            if (item.type === "version") {
-              const v = item as ProviderVersionModel;
-              versionList.push({ id: v.id, ...v.attributes });
-            }
-          });
-        }
+        const versionList = [...(provider?.version ?? [])];
         versionList.sort((a, b) => compareVersions(b.versionNumber, a.versionNumber));
         setVersions(versionList);
         const initial = recommendedVersion(versionList) ?? versionList[0];
@@ -90,9 +77,9 @@ export const ProviderDetails = ({ organizationName }: Props) => {
       .finally(() => setLoading(false));
   }, [orgid, providerid]);
 
-  const providerName = provider?.attributes.name || "";
-  const namespace = provider?.attributes.registryNamespace || "";
-  const { text: description, source } = parseProviderDescription(provider?.attributes.description);
+  const providerName = provider?.name || "";
+  const namespace = provider?.registryNamespace || "";
+  const { text: description, source } = parseProviderDescription(provider?.description ?? "");
 
   const handleDelete = useCallback(() => {
     if (!orgid || !providerid) return;
@@ -102,9 +89,9 @@ export const ProviderDetails = ({ organizationName }: Props) => {
         message.success(`Provider ${providerName} deleted`);
         navigate(`/organizations/${orgid}/registry?tab=providers`);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         console.error("Error deleting provider:", error);
-        message.error("Failed to delete provider: " + (error?.message || "Unknown error"));
+        message.error("Failed to delete provider: " + getErrorMessage(error));
       })
       .finally(() => setDeleting(false));
   }, [orgid, providerid, providerName, navigate]);
@@ -361,9 +348,7 @@ export const ProviderDetails = ({ organizationName }: Props) => {
           <>
             This permanently deletes <strong>{providerName}</strong> and all {versions.length} of its versions from the{" "}
             {organizationName} registry. Configurations that require <code>{address}</code> fail on their next init.
-            {provider?.attributes.imported
-              ? " You can add it again from the public registry."
-              : " This cannot be undone."}
+            {provider?.imported ? " You can add it again from the public registry." : " This cannot be undone."}
           </>
         }
         onConfirm={() => {
