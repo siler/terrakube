@@ -23,8 +23,19 @@ import {
 } from "antd";
 import { useEffect, useState } from "react";
 import axiosInstance, { getErrorMessage } from "@/config/axiosConfig";
+import {
+  api,
+  fields,
+  type CreateBody,
+  type FormValues,
+  type RelationshipBody,
+  type Row,
+  type UpdateBody,
+  type WriteAttributes,
+} from "@/domain/api";
 import { apiPost } from "@/modules/api/apiWrapper";
-import { JobStatus, NotificationChannelType, NotificationMessageStyle, Template } from "../types";
+import { JobStatus } from "@/domain/generated/apiResources";
+import { createdResourceId } from "@/domain/api/document";
 import { ChannelPicker } from "./ChannelPicker";
 import { CHANNEL_META } from "./channelMeta";
 import { JOB_STATUS_GROUPS } from "./jobStatusGroups";
@@ -44,17 +55,18 @@ type Props = {
   managePermission?: boolean;
 };
 
-type ConfigurationForm = {
-  name: string;
-  description?: string;
-  channelType: NotificationChannelType;
-  destinationUrl: string;
-  signingSecret?: string;
-  active: boolean;
-  messageStyle: NotificationMessageStyle;
+type ConfigurationForm = Pick<
+  FormValues<"notification_configuration">,
+  "name" | "channelType" | "destinationUrl" | "active" | "messageStyle"
+> & {
+  description?: FormValues<"notification_configuration">["description"];
+  signingSecret?: FormValues<"notification_configuration">["signingSecret"];
 };
 
 const JSONAPI_HEADERS = { "Content-Type": "application/vnd.api+json" };
+
+const TEMPLATE_NAME_FIELDS = fields.template("name");
+type TemplateRow = Row<typeof TEMPLATE_NAME_FIELDS>;
 
 const TOTAL_STATUS_COUNT = JOB_STATUS_GROUPS.reduce((total, group) => total + group.statuses.length, 0);
 
@@ -70,9 +82,9 @@ export const EditNotificationConfiguration = ({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
   const [form] = Form.useForm<ConfigurationForm>();
-  const [triggerIds, setTriggerIds] = useState<Record<string, string>>({});
+  const [triggerIds, setTriggerIds] = useState<Partial<Record<JobStatus, string>>>({});
   const [selectedStatuses, setSelectedStatuses] = useState<JobStatus[]>([]);
-  const [availableTemplates, setAvailableTemplates] = useState<Template[]>([]);
+  const [availableTemplates, setAvailableTemplates] = useState<TemplateRow[]>([]);
   // Empty means "applies to every template" - this only ever narrows which templates a
   // configuration fires for, so an empty selection is the same as no filter at all.
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
@@ -91,15 +103,16 @@ export const EditNotificationConfiguration = ({
     : `organization/${orgId}/notificationConfiguration`;
 
   useEffect(() => {
-    axiosInstance
-      .get(`organization/${orgId}/template`)
-      .then((response) => {
-        const templatesList = (response.data.data as Template[]).filter(
-          (t) => t.attributes.name !== "Terraform-Plan/Apply-Cli" && t.attributes.name !== "Terraform-Plan/Destroy-Cli"
+    void (async () => {
+      try {
+        const templates = await api.organization(orgId).template().select(TEMPLATE_NAME_FIELDS);
+        setAvailableTemplates(
+          templates.filter((t) => t.name !== "Terraform-Plan/Apply-Cli" && t.name !== "Terraform-Plan/Destroy-Cli")
         );
-        setAvailableTemplates(templatesList);
-      })
-      .catch((err) => message.error(getErrorMessage(err) || "Failed to load templates"));
+      } catch (err) {
+        message.error(getErrorMessage(err) || "Failed to load templates");
+      }
+    })();
   }, [orgId]);
 
   useEffect(() => {
@@ -120,7 +133,10 @@ export const EditNotificationConfiguration = ({
           }
         }`,
       };
-      apiPost<unknown, any>("/graphql/api/v1", body, { dataWrapped: true, contentType: "application/json" })
+      apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
+        dataWrapped: true,
+        contentType: "application/json",
+      })
         .then((response: any) => {
           const node = response?.data?.notification_configuration?.edges?.[0]?.node;
           if (!node) return;
@@ -159,26 +175,29 @@ export const EditNotificationConfiguration = ({
   }, [channelType, destinationUrl]);
 
   const saveTriggers = async (savedConfigId: string) => {
-    const existingStatuses = Object.keys(triggerIds);
-    const toCreate = selectedStatuses.filter((s) => !existingStatuses.includes(s));
-    const toDelete = existingStatuses.filter((s) => !selectedStatuses.includes(s as JobStatus));
+    const toCreate = selectedStatuses.filter((s) => triggerIds[s] === undefined);
+    const toDelete = Object.values(JobStatus).flatMap((status) => {
+      const triggerId = triggerIds[status];
+      return triggerId && !selectedStatuses.includes(status) ? [triggerId] : [];
+    });
 
     // Sub-resource operations by ID (unlike the org/workspace-nested create path
     // above) go through the root collection name, which Elide derives from the
     // entity's @Entity(name=...) - snake_case, not the camelCase relationship
     // field name used for nested creation.
     await Promise.all(
-      toCreate.map((status) =>
-        axiosInstance.post(
-          `notification_configuration/${savedConfigId}/triggers`,
-          { data: { type: "notification_trigger", attributes: { jobStatus: status } } },
-          { headers: JSONAPI_HEADERS }
-        )
-      )
+      toCreate.map((status) => {
+        const body: CreateBody<"notification_trigger"> = {
+          data: { type: "notification_trigger", attributes: { jobStatus: status } },
+        };
+        return axiosInstance.post(`notification_configuration/${savedConfigId}/triggers`, body, {
+          headers: JSONAPI_HEADERS,
+        });
+      })
     );
     await Promise.all(
-      toDelete.map((status) =>
-        axiosInstance.delete(`notification_configuration/${savedConfigId}/triggers/${triggerIds[status]}`, {
+      toDelete.map((triggerId) =>
+        axiosInstance.delete(`notification_configuration/${savedConfigId}/triggers/${triggerId}`, {
           headers: { "Content-Type": undefined },
         })
       )
@@ -189,11 +208,12 @@ export const EditNotificationConfiguration = ({
   // diffing against what was previously selected, and Elide supports replacing a to-many
   // relationship wholesale via PATCH .../relationships/{name}.
   const saveTemplates = async (savedConfigId: string) => {
-    await axiosInstance.patch(
-      `notification_configuration/${savedConfigId}/relationships/templates`,
-      { data: selectedTemplateIds.map((id) => ({ type: "template", id })) },
-      { headers: JSONAPI_HEADERS }
-    );
+    const body: RelationshipBody<"notification_configuration", "templates"> = {
+      data: selectedTemplateIds.map((id) => ({ type: "template", id })),
+    };
+    await axiosInstance.patch(`notification_configuration/${savedConfigId}/relationships/templates`, body, {
+      headers: JSONAPI_HEADERS,
+    });
   };
 
   const onFinish = async (values: ConfigurationForm) => {
@@ -201,38 +221,42 @@ export const EditNotificationConfiguration = ({
       message.error("Select at least one trigger status");
       return;
     }
-    const body = {
-      data: {
-        type: "notification_configuration",
-        attributes: {
-          name: values.name,
-          description: values.description,
-          channelType: values.channelType,
-          destinationUrl: values.destinationUrl,
-          signingSecret: values.channelType === "WEBHOOK" ? values.signingSecret : undefined,
-          active: values.active,
-          messageStyle: values.messageStyle,
-        },
-      },
+    const attributes: WriteAttributes<"notification_configuration"> = {
+      name: values.name,
+      description: values.description,
+      channelType: values.channelType,
+      destinationUrl: values.destinationUrl,
+      // The stored secret is never loaded into the form, so an empty field means "keep it", not "clear it".
+      signingSecret: values.channelType === "WEBHOOK" && values.signingSecret ? values.signingSecret : undefined,
+      active: values.active,
+      messageStyle: values.messageStyle,
     };
     try {
-      let savedId = configId;
+      let savedId: string;
       if (mode === "create") {
-        const res = await axiosInstance.post(basePath, body, { headers: JSONAPI_HEADERS });
-        savedId = res.data.data.id;
+        const body: CreateBody<"notification_configuration"> = {
+          data: { type: "notification_configuration", attributes },
+        };
+        const res = await axiosInstance.post<unknown>(basePath, body, { headers: JSONAPI_HEADERS });
+        const createdId = createdResourceId(res.data);
+        if (!createdId) {
+          throw new Error("The server did not return the new notification's id");
+        }
+        savedId = createdId;
         message.success("Notification created");
       } else {
-        await axiosInstance.patch(
-          `notification_configuration/${configId}`,
-          { data: { id: configId, ...body.data } },
-          { headers: JSONAPI_HEADERS }
-        );
+        if (!configId) throw new Error("No notification is selected to update");
+        const body: UpdateBody<"notification_configuration"> = {
+          data: { type: "notification_configuration", id: configId, attributes },
+        };
+        await axiosInstance.patch(`notification_configuration/${configId}`, body, { headers: JSONAPI_HEADERS });
+        savedId = configId;
         message.success("Notification updated");
       }
-      await saveTriggers(savedId!);
-      await saveTemplates(savedId!);
+      await saveTriggers(savedId);
+      await saveTemplates(savedId);
       onDone();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to save notification configuration");
     }
   };
@@ -264,7 +288,7 @@ export const EditNotificationConfiguration = ({
       }
       setTestResult("success");
       message.success("Test notification sent");
-    } catch (err: any) {
+    } catch (err) {
       setTestResult("error");
       message.error(getErrorMessage(err) || "Failed to send test notification");
     } finally {
@@ -392,7 +416,7 @@ export const EditNotificationConfiguration = ({
               placeholder="All templates"
               value={selectedTemplateIds}
               onChange={setSelectedTemplateIds}
-              options={availableTemplates.map((t) => ({ value: t.id, label: t.attributes.name }))}
+              options={availableTemplates.map((t) => ({ value: t.id, label: t.name ?? "" }))}
             />
           </Form.Item>
         </SettingsSection>

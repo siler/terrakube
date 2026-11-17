@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
+import { BellOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { Avatar, Button, List, message, Tag, Typography } from "antd";
 import "./Notifications.css";
 import { Loading } from "@/components/feedback/Loading";
@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import axiosInstance, { getErrorMessage, isPermissionError } from "@/config/axiosConfig";
 import { apiPost } from "@/modules/api/apiWrapper";
 import { NotificationConfiguration } from "../types";
-import { CHANNEL_META } from "./channelMeta";
+import { channelMetaFor } from "./channelMeta";
 import { EditNotificationConfiguration } from "./EditNotificationConfiguration";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
@@ -39,11 +39,8 @@ export const NotificationConfigurationList = ({
   const [localEditingId, setLocalEditingId] = useState<string>();
   const [pendingDelete, setPendingDelete] = useState<NotificationConfiguration | null>(null);
   const routed = basePath != null;
-  const mode: "list" | "create" | "edit" = routed
-    ? editorMode === "new"
-      ? "create"
-      : (editorMode ?? "list")
-    : localMode;
+  const routedMode = editorMode === "new" ? "create" : (editorMode ?? "list");
+  const mode: "list" | "create" | "edit" = routed ? routedMode : localMode;
   const editingId = routed ? editorId : localEditingId;
   const openCreate = () => (routed ? navigate(`${basePath}/new`) : setLocalMode("create"));
   const openEdit = (id: string) => {
@@ -55,8 +52,8 @@ export const NotificationConfigurationList = ({
     }
   };
   const closeEditor = () => {
-    if (routed) {
-      navigate(basePath!);
+    if (basePath != null) {
+      navigate(basePath);
     } else {
       setLocalMode("list");
       setLocalEditingId(undefined);
@@ -87,7 +84,10 @@ export const NotificationConfigurationList = ({
         }
       }`,
     };
-    apiPost<unknown, any>("/graphql/api/v1", body, { dataWrapped: true, contentType: "application/json" })
+    apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
+      dataWrapped: true,
+      contentType: "application/json",
+    })
       .then((response: any) => {
         if (!response?.data) {
           // A GraphQL error still resolves this promise (HTTP 200 with an
@@ -175,8 +175,8 @@ export const NotificationConfigurationList = ({
   }
 
   const renderItem = (item: NotificationConfiguration, inherited: boolean) => {
-    const meta = CHANNEL_META[item.attributes.channelType];
-    const ChannelIcon = meta.icon;
+    const meta = channelMetaFor(item.attributes.channelType);
+    const ChannelIcon = meta?.icon ?? BellOutlined;
     const name = item.attributes.name;
     return (
       <List.Item
@@ -211,7 +211,7 @@ export const NotificationConfigurationList = ({
           description={
             <>
               <div>
-                <Tag>{meta.label}</Tag>
+                <Tag>{meta?.label ?? item.attributes.channelType ?? "Unknown channel"}</Tag>
                 {!item.attributes.active && <Tag color="warning">Disabled</Tag>}
               </div>
               {item.attributes.description && (

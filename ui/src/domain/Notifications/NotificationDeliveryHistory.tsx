@@ -8,12 +8,15 @@ import {
 import { Button, List, Spin, Tag, Typography, message } from "antd";
 import { useEffect, useState } from "react";
 import axiosInstance, { getErrorMessage } from "@/config/axiosConfig";
-import { NotificationChannelType } from "../types";
+import { NotificationChannelType } from "../generated/apiResources";
+import { isOneOf, isRecord } from "@/modules/utils/guards";
 import { CHANNEL_META } from "./channelMeta";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Notifications.css";
 
-type DeliveryStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
+const DELIVERY_STATUSES = ["PENDING", "SENDING", "SENT", "FAILED"] as const;
+
+type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
 
 type Delivery = {
   id: string;
@@ -26,6 +29,21 @@ type Delivery = {
   lastError: string | null;
   createdDate: string;
 };
+
+const isNullableString = (value: unknown): value is string | null => value === null || typeof value === "string";
+
+// A row the history cannot render (unknown status or channel) is dropped rather than crashing the list.
+const isDelivery = (value: unknown): value is Delivery =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.jobId === "number" &&
+  typeof value.configurationName === "string" &&
+  isOneOf(Object.values(NotificationChannelType), value.channelType) &&
+  isOneOf(DELIVERY_STATUSES, value.status) &&
+  typeof value.attemptCount === "number" &&
+  isNullableString(value.lastAttemptAt) &&
+  isNullableString(value.lastError) &&
+  typeof value.createdDate === "string";
 
 type Props = {
   workspaceId: string;
@@ -48,8 +66,8 @@ export const NotificationDeliveryHistory = ({ workspaceId }: Props) => {
   const loadDeliveries = () => {
     setLoading(true);
     return axiosInstance
-      .get(`${origin}/notification/v1/workspace/${workspaceId}/deliveries?limit=10`)
-      .then((response) => setDeliveries(response.data))
+      .get<unknown>(`${origin}/notification/v1/workspace/${workspaceId}/deliveries?limit=10`)
+      .then((response) => setDeliveries(Array.isArray(response.data) ? response.data.filter(isDelivery) : []))
       .catch((err) => message.error(getErrorMessage(err) || "Failed to load notification delivery history"))
       .finally(() => setLoading(false));
   };

@@ -149,4 +149,43 @@ describe("NotificationConfigurationList", () => {
     await waitFor(() => expect(apiPost).toHaveBeenCalled());
     expect(screen.queryByText("Org Slack Alerts")).not.toBeInTheDocument();
   });
+
+  it("still lists configurations whose channel type is missing or unknown", async () => {
+    const node = (id: string, name: string, channelType: string | null) => ({
+      node: { id, name, channelType, active: true, workspace: { edges: [] } },
+    });
+    (apiPost as jest.Mock).mockResolvedValue({
+      isError: false,
+      responseCode: 200,
+      data: {
+        organization: {
+          edges: [
+            {
+              node: {
+                notificationConfiguration: {
+                  edges: [
+                    node("c1", "Legacy Pager", "PAGERDUTY"),
+                    node("c2", "Untyped", null),
+                    node("c3", "Org Slack Alerts", "SLACK"),
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <NotificationConfigurationList orgId="org-1" managePermission={true} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText("Legacy Pager")).toBeInTheDocument());
+    expect(screen.getByText("PAGERDUTY")).toBeInTheDocument();
+    expect(screen.getByText("Untyped")).toBeInTheDocument();
+    expect(screen.getByText("Unknown channel")).toBeInTheDocument();
+    expect(screen.getByText("Slack")).toBeInTheDocument();
+  });
 });
