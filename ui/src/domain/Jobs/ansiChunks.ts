@@ -1,9 +1,15 @@
 import { createElement, Fragment, ReactElement, ReactNode, useMemo } from "react";
 import AnsiImport from "ansi-to-react";
+import { isRecord } from "@/modules/utils/typeGuards";
+
+type AnsiComponent = typeof AnsiImport;
+
+const isAnsiComponent = (value: unknown): value is AnsiComponent => typeof value === "function";
 
 // ansi-to-react ships both a CJS default and an ESM interop wrapper depending on the bundler.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const Ansi: any = (AnsiImport as any).default ?? AnsiImport;
+const ansiModule: unknown = AnsiImport;
+const Ansi: AnsiComponent =
+  isRecord(ansiModule) && isAnsiComponent(ansiModule.default) ? ansiModule.default : AnsiImport;
 
 /**
  * Split a log blob into lines. `text.split("\n")` already keeps a trailing empty element only when

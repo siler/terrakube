@@ -91,7 +91,7 @@ export function LogViewport({
       ref={containerRef}
       className={clsx("log-viewport", className)}
       onScroll={handleScroll}
-      style={{ "--log-line-height": `${lineHeight}px` } as React.CSSProperties}
+      style={{ "--log-line-height": `${lineHeight}px` }}
     >
       <div className="log-viewport-spacer" style={{ height: totalHeight }}>
         <div className="log-viewport-window" style={{ top: start * lineHeight }}>

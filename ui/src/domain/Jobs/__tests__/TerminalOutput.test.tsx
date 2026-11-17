@@ -10,7 +10,7 @@ jest.mock("ansi-to-react", () => {
 });
 
 jest.mock("antd", () => {
-  const actual = jest.requireActual("antd");
+  const actual = jest.requireActual<typeof import("antd")>("antd");
   return {
     ...actual,
     message: { success: jest.fn(), error: jest.fn() },
@@ -51,7 +51,7 @@ describe("TerminalOutput", () => {
 
   it("toggles Follow on click", () => {
     render(<TerminalOutput {...defaultProps} />);
-    const followBtn = screen.getByText("Follow").closest("button")!;
+    const followBtn = screen.getByRole("button", { name: /Follow/ });
     expect(followBtn.className).toContain("terminal-toolbar-btn--active");
 
     fireEvent.click(followBtn);
@@ -66,7 +66,7 @@ describe("TerminalOutput", () => {
     Object.assign(navigator, { clipboard: { writeText } });
 
     render(<TerminalOutput {...defaultProps} outputLog={"[31mred[0m"} />);
-    fireEvent.click(screen.getByText("Copy").closest("button")!);
+    fireEvent.click(screen.getByRole("button", { name: /Copy/ }));
 
     expect(writeText).toHaveBeenCalledWith("red");
   });
@@ -77,7 +77,7 @@ describe("TerminalOutput", () => {
     const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
     render(<TerminalOutput {...defaultProps} stepName="apply" outputLog={"[32mok[0m"} />);
-    fireEvent.click(screen.getByText("Download").closest("button")!);
+    fireEvent.click(screen.getByRole("button", { name: /Download/ }));
 
     expect(global.URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(clickSpy).toHaveBeenCalled();
@@ -98,7 +98,7 @@ describe("TerminalOutput", () => {
     const onRetry = jest.fn();
     render(<TerminalOutput {...defaultProps} error onRetry={onRetry} />);
 
-    fireEvent.click(screen.getByText("Retry").closest("button")!);
+    fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
 
     expect(onRetry).toHaveBeenCalled();
     expect(screen.queryByTestId("ansi")).not.toBeInTheDocument();

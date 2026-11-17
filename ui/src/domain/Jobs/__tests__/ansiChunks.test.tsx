@@ -1,19 +1,18 @@
 import { render } from "@testing-library/react";
 import { splitLines, useAnsiLines, __clearAnsiLineCache } from "../ansiChunks";
 
-const parseCalls: string[] = [];
+// The `mock` prefix lets the hoisted jest.mock factory reference it.
+const mockParseCalls: string[] = [];
+const parseCalls = mockParseCalls;
 
 jest.mock("ansi-to-react", () => {
-  const React = jest.requireActual("react");
+  const React = jest.requireActual<typeof import("react")>("react");
   const Ansi = ({ children }: { children: string }) => {
-    // recorded here rather than in the factory so the outer array stays referenced
-    (globalThis as unknown as { __ansiCalls: string[] }).__ansiCalls.push(children);
+    mockParseCalls.push(children);
     return React.createElement("span", null, children);
   };
   return { __esModule: true, default: Ansi };
 });
-
-(globalThis as unknown as { __ansiCalls: string[] }).__ansiCalls = parseCalls;
 
 const LogView = ({ text }: { text: string }) => {
   const lines = useAnsiLines(text);

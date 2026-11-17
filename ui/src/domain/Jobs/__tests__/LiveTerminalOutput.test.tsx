@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { LiveTerminalOutput } from "../LiveTerminalOutput";
 import { useLogStream, usePolling } from "../../../hooks";
-import { JobStatus, JobStep } from "../../types";
+import { JobStatus } from "@/domain/generated/apiResources";
+import { JobStep } from "../../types";
 
 jest.mock("../../../hooks", () => ({
   useLogStream: jest.fn(),
@@ -33,7 +34,7 @@ jest.mock("../TerminalOutput", () => ({
 const makeStep = (overrides: Partial<JobStep>): JobStep => ({
   id: "step-1",
   name: "Plan",
-  status: JobStatus.Running,
+  status: JobStatus.running,
   stepNumber: 1,
   output: "",
   outputLog: "",
@@ -42,39 +43,39 @@ const makeStep = (overrides: Partial<JobStep>): JobStep => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  (usePolling as jest.Mock).mockReturnValue({ clear: jest.fn() });
+  jest.mocked(usePolling).mockReturnValue({ clear: jest.fn() });
 });
 
 describe("LiveTerminalOutput", () => {
   it("renders the live stream text for a running step", () => {
-    (useLogStream as jest.Mock).mockReturnValue({ text: "streamed line" });
+    jest.mocked(useLogStream).mockReturnValue({ text: "streamed line" });
 
-    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.Running })} />);
+    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.running })} />);
 
     expect(screen.getByTestId("terminal")).toHaveTextContent("streamed line");
   });
 
   it("shows a waiting placeholder until the running stream sends something", () => {
-    (useLogStream as jest.Mock).mockReturnValue({ text: "" });
+    jest.mocked(useLogStream).mockReturnValue({ text: "" });
 
-    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.Running })} />);
+    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.running })} />);
 
     expect(screen.getByTestId("terminal")).toHaveTextContent("Waiting for output");
   });
 
   it("does not connect the stream for a non-running step", () => {
-    (useLogStream as jest.Mock).mockReturnValue({ text: "" });
+    jest.mocked(useLogStream).mockReturnValue({ text: "" });
 
-    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.Completed })} />);
+    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.completed })} />);
 
     expect(useLogStream).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
   });
 
   it("caps a very long live stream to a trailing window and marks it truncated", () => {
     const huge = Array.from({ length: 6000 }, (_, i) => `line ${i}`).join("\n");
-    (useLogStream as jest.Mock).mockReturnValue({ text: huge });
+    jest.mocked(useLogStream).mockReturnValue({ text: huge });
 
-    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.Running })} />);
+    render(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.running })} />);
 
     const terminal = screen.getByTestId("terminal");
     expect(terminal).toHaveAttribute("data-truncated", "true");
@@ -84,20 +85,20 @@ describe("LiveTerminalOutput", () => {
 
   it("enables polling only once the SSE stream reports repeated failure", () => {
     let capturedOnStatus: ((s: { failed: boolean }) => void) | undefined;
-    (useLogStream as jest.Mock).mockImplementation((opts) => {
+    jest.mocked(useLogStream).mockImplementation((opts) => {
       capturedOnStatus = opts.onStatus;
       return { text: "partial" };
     });
 
     const { rerender } = render(
-      <LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.Running })} />
+      <LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.running })} />
     );
 
-    expect((usePolling as jest.Mock).mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ enabled: false }));
+    expect(jest.mocked(usePolling).mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ enabled: false }));
 
     capturedOnStatus?.({ failed: true });
-    rerender(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.Running })} />);
+    rerender(<LiveTerminalOutput jobId="1" organizationId="org-1" item={makeStep({ status: JobStatus.running })} />);
 
-    expect((usePolling as jest.Mock).mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ enabled: true }));
+    expect(jest.mocked(usePolling).mock.calls.at(-1)?.[1]).toEqual(expect.objectContaining({ enabled: true }));
   });
 });

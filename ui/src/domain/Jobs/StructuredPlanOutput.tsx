@@ -11,6 +11,7 @@ import {
 import { Empty, message } from "antd";
 import type { ChangeEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import type { IconType } from "react-icons";
 import { FaAws, FaDiscord, FaDocker, FaGithub, FaGitlab, FaGoogle, FaMicrosoft, FaSlack } from "react-icons/fa6";
 import {
   SiCloudflare,
@@ -34,11 +35,16 @@ import {
 } from "react-icons/si";
 import { stripAnsi } from "./stripAnsi";
 import { ApplyChange, Diagnostic, PlanChange, TerraformOutputValue, getPlanChangeActionLabel } from "./structuredPlan";
+import { isRecord } from "@/modules/utils/typeGuards";
 import "./runTokens.css";
 import "./StructuredPlanOutput.css";
 
+// A plan change, optionally carrying the live progress an apply step adds.
+type RenderedChange = PlanChange &
+  Partial<Pick<ApplyChange, "elapsedSeconds" | "currentProvisioner" | "provisionerOutput">>;
+
 type Props = {
-  changes: PlanChange[] | ApplyChange[];
+  changes: RenderedChange[];
   outputLog?: string;
   applyMode?: boolean;
   outputs?: TerraformOutputValue[];
@@ -110,7 +116,7 @@ type SummaryCounts = {
 type PreparedChangeRow = {
   key: string;
   panelId: string;
-  change: PlanChange | ApplyChange;
+  change: RenderedChange;
   action: ActionName;
   resourceLabel: string;
   providerName: string;
@@ -336,21 +342,8 @@ const providerIconMap = {
   http: SiTerraform,
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  if (value === null) {
-    return false;
-  }
-
-  if (Array.isArray(value)) {
-    return false;
-  }
-
-  if (typeof value !== "object") {
-    return false;
-  }
-
-  return true;
-};
+// A Map so a provider named like an Object.prototype member (e.g. "constructor") finds no icon.
+const providerIcons = new Map<string, IconType>(Object.entries(providerIconMap));
 
 const isPrimitiveValue = (value: unknown) => {
   if (value === null) {
@@ -389,7 +382,7 @@ const tryParseJsonContainer = (value: string): Record<string, unknown> | unknown
   }
 
   try {
-    const parsed = JSON.parse(trimmed);
+    const parsed: unknown = JSON.parse(trimmed);
 
     if (Array.isArray(parsed) || isRecord(parsed)) {
       return parsed;
@@ -936,14 +929,14 @@ const renderDiffRows = (rows: DiffRow[], parentKey = "root"): ReactNode => {
   return rows.map((row, index) => {
     const rowKey = `${parentKey}-${row.key}-${index}`;
 
-    if (row.children?.length) {
+    if (row.kind === "group") {
       return (
         <div key={rowKey} className="structured-plan-diffGroup">
           <div className="structured-plan-diffGroupLabel">
             {row.label}
             {row.jsonEncoded ? <span className="structured-plan-jsonWrap">jsonencode({"{"}</span> : null}
           </div>
-          <div className="structured-plan-diffGroupChildren">{renderDiffRows(row.children, rowKey)}</div>
+          <div className="structured-plan-diffGroupChildren">{renderDiffRows(row.children ?? [], rowKey)}</div>
           {row.hiddenCount ? (
             <div className="structured-plan-hiddenCount">
               {row.hiddenCount} unchanged attribute{getPluralSuffix(row.hiddenCount)} hidden
@@ -956,7 +949,7 @@ const renderDiffRows = (rows: DiffRow[], parentKey = "root"): ReactNode => {
       );
     }
 
-    const leafKind = row.kind as Exclude<DiffRow["kind"], "group">;
+    const leafKind = row.kind;
     const marker = getDiffMarker(leafKind);
     const showUnknown = leafKind === "unknown";
     const showSensitive = leafKind === "sensitive";
@@ -1417,7 +1410,7 @@ export const StructuredPlanOutput = ({
   const preparedRows = useMemo<PreparedChangeRow[]>(() => {
     return changes.flatMap((change, index) => {
       const normalizedAction = normalizeActionName(getPlanChangeActionLabel(change.actions, change.action));
-      const applyDiagnostics = "diagnostics" in change ? (change as ApplyChange).diagnostics : undefined;
+      const applyDiagnostics = change.diagnostics;
 
       // No-op resources (nothing to create/update/destroy) are excluded from the structured view
       // entirely - matches `terraform plan`'s own CLI output, which never lists unchanged
@@ -1438,12 +1431,10 @@ export const StructuredPlanOutput = ({
       const resourceLabel = getResourceAddress(change);
       const providerName = getProviderName(change);
       const diff = buildResourceDiff(change, normalizedAction);
-      const applyStatus = "status" in change ? (change as ApplyChange).status : undefined;
-      const applyElapsedSeconds = "elapsedSeconds" in change ? (change as ApplyChange).elapsedSeconds : undefined;
-      const applyCurrentProvisioner =
-        "currentProvisioner" in change ? (change as ApplyChange).currentProvisioner : undefined;
-      const applyProvisionerOutput =
-        "provisionerOutput" in change ? (change as ApplyChange).provisionerOutput : undefined;
+      const applyStatus = change.status;
+      const applyElapsedSeconds = change.elapsedSeconds;
+      const applyCurrentProvisioner = change.currentProvisioner;
+      const applyProvisionerOutput = change.provisionerOutput;
       const driftAction = change.driftAction;
 
       return [
@@ -1819,7 +1810,7 @@ export const StructuredPlanOutput = ({
                       ["delete", summary.delete - summary.replace],
                       ["read", summary.read],
                       ["import", summary.import],
-                    ] as [ActionName, number][]
+                    ] satisfies [ActionName, number][]
                   ).map(([action, count]) => {
                     const label = `${actionMeta[action].filterLabel} (${count})`;
 
@@ -1928,8 +1919,7 @@ export const StructuredPlanOutput = ({
                   row.applyStatus === "not-started")
                   ? getApplyStatusMeta(row.action, row.applyStatus)
                   : null;
-              const normalizedProviderName = row.providerName.toLowerCase() as keyof typeof providerIconMap;
-              const ProviderIcon = providerIconMap[normalizedProviderName];
+              const ProviderIcon = providerIcons.get(row.providerName.toLowerCase());
 
               return (
                 <div

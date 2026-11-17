@@ -21,6 +21,14 @@ function fakeLayout(scrollHeight: number) {
   });
 }
 
+const scrollerOf = (container: HTMLElement): HTMLElement => {
+  const scroller = container.firstElementChild;
+  if (!(scroller instanceof HTMLElement)) {
+    throw new Error("LogViewport rendered no scroll container");
+  }
+  return scroller;
+};
+
 const lines = (n: number) => Array.from({ length: n }, (_, i) => createElement("span", null, `line ${i}`));
 
 afterEach(() => {
@@ -46,7 +54,7 @@ it("re-windows on scroll", () => {
     <LogViewport lines={lines(10_000)} followTail={false} lineHeight={LINE_HEIGHT} overscan={5} />
   );
 
-  const scroller = container.firstChild as HTMLDivElement;
+  const scroller = scrollerOf(container);
   act(() => {
     scroller.scrollTop = 5000 * LINE_HEIGHT;
     scroller.dispatchEvent(new Event("scroll"));
@@ -65,7 +73,7 @@ it("reports follow released when the user scrolls up and re-engaged at the botto
     <LogViewport lines={lines(200)} followTail onFollowChange={onFollowChange} lineHeight={LINE_HEIGHT} />
   );
 
-  const scroller = container.firstChild as HTMLDivElement;
+  const scroller = scrollerOf(container);
 
   act(() => {
     scroller.scrollTop = 100;

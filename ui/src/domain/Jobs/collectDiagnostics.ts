@@ -59,10 +59,6 @@ export const collectRunDiagnostics = ({
   const collected = new Map<string, RunDiagnostic>();
 
   const add = (diagnostic: Diagnostic, step: StepRef, address?: string) => {
-    // The stored output is not under our control: a null or malformed entry is skipped, not fatal.
-    if (diagnostic == null || typeof diagnostic !== "object") {
-      return;
-    }
     const key = keyOf(diagnostic, address);
     const existing = collected.get(key);
     if (existing) {
