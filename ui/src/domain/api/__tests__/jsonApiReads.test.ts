@@ -3,7 +3,7 @@ import axiosInstance from "@/config/axiosConfig";
 import { and, or } from "../rsqlFilter";
 import { api, fields } from "../../generated/apiPaths";
 import type { Row } from "../fieldSelection";
-import { axiosResponse } from "@/testUtils/axiosResponse";
+import { axiosResponse } from "@/testUtils/fakeAxiosResponse";
 
 // Names a member at compile time, so a missing one fails on the argument rather than yielding an unresolved type.
 const memberOf = <T>(_value: T, name: keyof T & string): string => name;

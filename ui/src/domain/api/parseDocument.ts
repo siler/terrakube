@@ -1,5 +1,5 @@
 import type { ApiDocument } from "./flattenDocument";
-import { isRecord } from "@/modules/utils/guards";
+import { isRecord } from "@/modules/utils/typeGuards";
 
 type Resource = Exclude<ApiDocument["data"], null | unknown[]>;
 
