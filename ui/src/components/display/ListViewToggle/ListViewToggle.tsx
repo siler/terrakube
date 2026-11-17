@@ -8,10 +8,9 @@ type Props = {
 
 export default function ListViewToggle({ value, onChange }: Props) {
   return (
-    <Segmented
+    <Segmented<ListViewMode>
       value={value}
-      onChange={(val) => {
-        const mode = val as ListViewMode;
+      onChange={(mode) => {
         setStoredListViewMode(mode);
         onChange(mode);
       }}

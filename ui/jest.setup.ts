@@ -23,14 +23,15 @@ window._env_ = {
 };
 
 // jsdom's test environment doesn't provide these globals, but react-router-dom needs them.
-global.TextEncoder = TextEncoder;
-global.TextDecoder = TextDecoder as typeof global.TextDecoder;
+// Node's implementations differ from the DOM typings in detail, so they are installed without claiming the DOM type.
+Object.defineProperty(global, "TextEncoder", { value: TextEncoder, writable: true });
+Object.defineProperty(global, "TextDecoder", { value: TextDecoder, writable: true });
 
 // jsdom throws "not implemented" for getComputedStyle(elt, pseudoElt) with a pseudo-element
 // argument (e.g. antd's Table scrollbar-size measurement calls it with '::-webkit-scrollbar').
 // Drop the pseudo-element argument so jsdom's real implementation handles the call instead.
 const originalGetComputedStyle = window.getComputedStyle.bind(window);
-window.getComputedStyle = ((elt: Element) => originalGetComputedStyle(elt)) as typeof window.getComputedStyle;
+window.getComputedStyle = (elt: Element) => originalGetComputedStyle(elt);
 
 // jsdom doesn't provide MessageChannel, but rc-select (antd Select's scheduling) and React 19's
 // `scheduler` both need one. A prior shim wrapped node:worker_threads' MessageChannel with
@@ -73,7 +74,7 @@ class FakeMessageChannel {
     this.port2._link(this.port1);
   }
 }
-global.MessageChannel = FakeMessageChannel as unknown as typeof global.MessageChannel;
+Object.defineProperty(global, "MessageChannel", { value: FakeMessageChannel, writable: true });
 
 // jsdom doesn't implement ResizeObserver, but antd's Table/rc-resize-observer needs one.
 global.ResizeObserver = class ResizeObserver {

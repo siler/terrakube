@@ -1,16 +1,19 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { axiosResponse } from "@/testUtils/fakeAxiosResponse";
+import { User } from "oidc-client-ts";
 import { MemoryRouter } from "react-router-dom";
 import { ApiDocsPage } from "../ApiDocsPage";
 import getUserFromStorage from "@/config/authUser";
 import { axiosRegistry } from "@/config/axiosConfig";
+import { isRecord } from "@/modules/utils/typeGuards";
 
 jest.mock("@/config/authUser");
-const mockGetUserFromStorage = getUserFromStorage as jest.Mock;
+const mockGetUserFromStorage = jest.mocked(getUserFromStorage);
 
 jest.mock("@/config/axiosConfig", () => ({
   axiosRegistry: { get: jest.fn() },
 }));
-const mockAxiosGet = axiosRegistry.get as jest.Mock;
+const mockAxiosGet = jest.mocked(axiosRegistry.get);
 
 const apiReferenceMock = jest.fn<null, [unknown]>(() => null);
 jest.mock("@scalar/api-reference-react", () => ({
@@ -20,6 +23,12 @@ jest.mock("@scalar/api-reference-react", () => ({
 
 const fakeSpec = { openapi: "3.0.1", info: { title: "Elide Service" }, paths: {} };
 
+const signedInUser = new User({
+  access_token: "token-123",
+  token_type: "Bearer",
+  profile: { iss: "https://issuer.test", sub: "user-1", aud: "terrakube", exp: 0, iat: 0 },
+});
+
 function renderApiDocsPage() {
   return render(
     <MemoryRouter>
@@ -28,12 +37,28 @@ function renderApiDocsPage() {
   );
 }
 
+const scalarConfiguration = (): Record<string, unknown> => {
+  const props = apiReferenceMock.mock.lastCall?.[0];
+  if (!isRecord(props) || !isRecord(props.configuration)) {
+    throw new Error("ApiReferenceReact was not rendered with a configuration");
+  }
+  return props.configuration;
+};
+
+const runOnBeforeRequest = (headers: { set: jest.Mock }) => {
+  const hook = scalarConfiguration().onBeforeRequest;
+  if (typeof hook !== "function") {
+    throw new Error("onBeforeRequest is not a function");
+  }
+  Reflect.apply(hook, undefined, [{ requestBuilder: { headers } }]);
+};
+
 describe("ApiDocsPage", () => {
   beforeEach(() => {
     apiReferenceMock.mockClear();
     mockGetUserFromStorage.mockReset();
     mockAxiosGet.mockReset();
-    mockAxiosGet.mockResolvedValue({ data: fakeSpec });
+    mockAxiosGet.mockResolvedValue(axiosResponse({ data: fakeSpec }));
   });
 
   it("fetches the spec from the API's /doc endpoint and passes it to Scalar as content", async () => {
@@ -42,21 +67,16 @@ describe("ApiDocsPage", () => {
     await waitFor(() => expect(apiReferenceMock).toHaveBeenCalled());
 
     expect(mockAxiosGet).toHaveBeenCalledWith("/doc");
-    expect(apiReferenceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ configuration: expect.objectContaining({ content: fakeSpec }) })
-    );
+    expect(scalarConfiguration().content).toEqual(fakeSpec);
   });
 
   it("attaches the signed-in user's bearer token to every request Scalar's 'Try it' fires", async () => {
-    mockGetUserFromStorage.mockReturnValue({ access_token: "token-123" });
+    mockGetUserFromStorage.mockReturnValue(signedInUser);
     renderApiDocsPage();
     await waitFor(() => expect(apiReferenceMock).toHaveBeenCalled());
 
-    const { configuration } = apiReferenceMock.mock.calls[0][0] as {
-      configuration: { onBeforeRequest: (input: { requestBuilder: { headers: { set: jest.Mock } } }) => void };
-    };
     const headers = { set: jest.fn() };
-    configuration.onBeforeRequest({ requestBuilder: { headers } });
+    runOnBeforeRequest(headers);
 
     expect(headers.set).toHaveBeenCalledWith("Authorization", "Bearer token-123");
   });
@@ -66,11 +86,8 @@ describe("ApiDocsPage", () => {
     renderApiDocsPage();
     await waitFor(() => expect(apiReferenceMock).toHaveBeenCalled());
 
-    const { configuration } = apiReferenceMock.mock.calls[0][0] as {
-      configuration: { onBeforeRequest: (input: { requestBuilder: { headers: { set: jest.Mock } } }) => void };
-    };
     const headers = { set: jest.fn() };
-    configuration.onBeforeRequest({ requestBuilder: { headers } });
+    runOnBeforeRequest(headers);
 
     expect(headers.set).not.toHaveBeenCalled();
   });
@@ -80,11 +97,7 @@ describe("ApiDocsPage", () => {
 
     await waitFor(() => expect(apiReferenceMock).toHaveBeenCalled());
 
-    expect(apiReferenceMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        configuration: expect.objectContaining({ baseServerURL: "https://terrakube-api.test" }),
-      })
-    );
+    expect(scalarConfiguration().baseServerURL).toBe("https://terrakube-api.test");
   });
 
   it("links 'Back to Terrakube' to the app shell", async () => {
@@ -92,5 +105,23 @@ describe("ApiDocsPage", () => {
     await waitFor(() => expect(apiReferenceMock).toHaveBeenCalled());
 
     expect(screen.getByText("Back to Terrakube").closest("a")).toHaveAttribute("href", "/");
+  });
+
+  it("shows an error instead of spinning forever when the spec request fails", async () => {
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockAxiosGet.mockRejectedValue(new Error("Network Error"));
+    renderApiDocsPage();
+
+    expect(await screen.findByText("Failed to load the API specification.")).toBeInTheDocument();
+    expect(apiReferenceMock).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("shows an error when /doc returns something other than a JSON object", async () => {
+    mockAxiosGet.mockResolvedValue(axiosResponse({ data: "<html>not a spec</html>" }));
+    renderApiDocsPage();
+
+    expect(await screen.findByText("Failed to load the API specification.")).toBeInTheDocument();
+    expect(apiReferenceMock).not.toHaveBeenCalled();
   });
 });

@@ -13,10 +13,9 @@ type Props = {
 
 // The width is a prop, so it reaches the stylesheet as a custom property. It is set on every section, never
 // left to the CSS default: custom properties inherit, so a nested section would otherwise take its parent's width.
-const maxWidthStyle = (maxWidth: number | string, min = 0) =>
-  ({
-    "--settings-section-max-width": typeof maxWidth === "number" ? `${Math.max(maxWidth, min)}px` : maxWidth,
-  }) as React.CSSProperties;
+const maxWidthStyle = (maxWidth: number | string, min = 0): React.CSSProperties => ({
+  "--settings-section-max-width": typeof maxWidth === "number" ? `${Math.max(maxWidth, min)}px` : maxWidth,
+});
 
 export default function SettingsSection({ title, description, children, danger, maxWidth = 720, extra }: Props) {
   if (danger) {
