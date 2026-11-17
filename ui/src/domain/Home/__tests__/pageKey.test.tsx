@@ -6,15 +6,18 @@ import { pageKey, workspacePage } from "../pageKey";
 // jsdom has no fetch Request, which the data router builds on every navigation. These routes have no
 // loaders, so the router only reads the URL and the abort signal.
 if (typeof globalThis.Request === "undefined") {
-  globalThis.Request = class {
-    url: string;
-    signal: AbortSignal;
-    method = "GET";
-    constructor(url: string, init?: { signal?: AbortSignal }) {
-      this.url = url;
-      this.signal = init?.signal ?? new AbortController().signal;
-    }
-  } as unknown as typeof Request;
+  Object.defineProperty(globalThis, "Request", {
+    configurable: true,
+    value: class {
+      url: string;
+      signal: AbortSignal;
+      method = "GET";
+      constructor(url: string, init?: { signal?: AbortSignal }) {
+        this.url = url;
+        this.signal = init?.signal ?? new AbortController().signal;
+      }
+    },
+  });
 }
 
 // Mirrors AppLayout: the page under the layout is keyed by pageKey().

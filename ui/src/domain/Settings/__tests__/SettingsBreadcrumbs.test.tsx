@@ -3,13 +3,14 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import axiosInstance from "../../../config/axiosConfig";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../../config/actionTypes";
 import { OrganizationSettings } from "../Settings";
+import { fakeUuid } from "@/testUtils/fakeUuid";
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
   default: { get: jest.fn() },
 }));
 jest.mock("@/components/forms/CodeEditor", () => ({ CodeEditor: () => null }));
-jest.spyOn(crypto, "randomUUID").mockReturnValue("uuid-1" as ReturnType<typeof crypto.randomUUID>);
+jest.spyOn(crypto, "randomUUID").mockReturnValue(fakeUuid(1));
 jest.mock("../PolicySets", () => ({ PolicySetsSettings: () => <div>policy sets</div> }));
 jest.mock("../../../modules/permissions/useOrgPermissions", () => ({
   useOrgPermissions: () => ({ permissions: { managePermission: true, managePolicies: true } }),

@@ -156,7 +156,7 @@ describe("States", () => {
 describe("stateRequestUrl", () => {
   const originalEnv = window._env_;
   const setEnv = (extra: Partial<typeof window._env_>) => {
-    window._env_ = { ...originalEnv, ...extra } as typeof window._env_;
+    window._env_ = Object.assign({}, originalEnv, extra);
   };
 
   afterEach(() => {

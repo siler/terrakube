@@ -51,6 +51,7 @@ const VARIABLES_COLUMS = (
           overlayClassName="tooltip"
           trigger={["hover"]}
         >
+          {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- a mouse shortcut; the row's Edit button is the keyboard path */}
           <div
             className={`workspace-variable-value workspace-variable-value--${manageWorkspace ? "editable" : "readonly"}`}
             {...(manageWorkspace && {
