@@ -1,5 +1,6 @@
 import { Button, Flex, Form, Modal } from "antd";
 import type { FormInstance } from "antd";
+import { isRecord } from "@/modules/utils/typeGuards";
 import "./CrudFormModal.css";
 
 type Props<T> = {
@@ -35,8 +36,10 @@ export default function CrudFormModal<T>({
 }: Props<T>) {
   const submit = () => {
     // Invalid fields show their own messages, so only validation failures are swallowed.
-    form.validateFields().then(onSubmit, (err) => {
-      if (!err?.errorFields) throw err;
+    form.validateFields().then(onSubmit, (err: unknown) => {
+      if (!isRecord(err) || !err.errorFields) {
+        throw err;
+      }
     });
   };
 

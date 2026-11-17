@@ -15,12 +15,11 @@ export default function LinkButton({ to, onClick, ...buttonProps }: Props) {
       {...buttonProps}
       href={buttonProps.disabled ? undefined : href}
       onClick={(event) => {
-        onClick?.(event as React.MouseEvent<HTMLButtonElement>);
+        onClick?.(event);
         if (event.defaultPrevented) {
           return;
         }
-        const mouse = event as React.MouseEvent;
-        if (mouse.metaKey || mouse.ctrlKey || mouse.shiftKey || mouse.altKey || mouse.button !== 0) {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
           return;
         }
         event.preventDefault();

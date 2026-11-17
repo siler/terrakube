@@ -1,5 +1,13 @@
 import { createContext, ReactNode, useContext, useState } from "react";
-import { ColorSchemeOption, ThemeMode, defaultColorScheme, defaultThemeMode } from "../config/themeConfig";
+import {
+  ColorSchemeOption,
+  ThemeMode,
+  colorSchemeOptions,
+  defaultColorScheme,
+  defaultThemeMode,
+  themeModeOptions,
+} from "../config/themeConfig";
+import { isOneOf } from "@/modules/utils/typeGuards";
 
 interface ThemeContextType {
   colorScheme: ColorSchemeOption;
@@ -15,8 +23,8 @@ const getStoredColorScheme = (): ColorSchemeOption => {
     return defaultColorScheme;
   }
 
-  const saved = localStorage.getItem("terrakube-color-scheme") as ColorSchemeOption | null;
-  return saved || defaultColorScheme;
+  const saved = localStorage.getItem("terrakube-color-scheme");
+  return isOneOf(colorSchemeOptions, saved) ? saved : defaultColorScheme;
 };
 
 const getStoredThemeMode = (): ThemeMode => {
@@ -24,8 +32,8 @@ const getStoredThemeMode = (): ThemeMode => {
     return defaultThemeMode;
   }
 
-  const saved = localStorage.getItem("terrakube-theme-mode") as ThemeMode | null;
-  return saved || defaultThemeMode;
+  const saved = localStorage.getItem("terrakube-theme-mode");
+  return isOneOf(themeModeOptions, saved) ? saved : defaultThemeMode;
 };
 
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {

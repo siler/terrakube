@@ -28,13 +28,12 @@ export function formatDateTimeWithZone(iso?: string | null): string {
   return formatLocal(iso, { dateStyle: "long", timeStyle: "long" });
 }
 
+const ORDINAL_SUFFIXES: Partial<Record<number, string>> = { 1: "st", 2: "nd", 3: "rd" };
+
 // "November 3rd, 2026": the long ordinal date format used next to token expirations.
 export function formatOrdinalDate(date: Dayjs): string {
   const day = date.date();
-  const suffix =
-    day % 100 >= 11 && day % 100 <= 13
-      ? "th"
-      : (({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[day % 10] ?? "th");
+  const suffix = day % 100 >= 11 && day % 100 <= 13 ? "th" : (ORDINAL_SUFFIXES[day % 10] ?? "th");
   return `${date.format("MMMM")} ${day}${suffix}, ${date.year()}`;
 }
 
