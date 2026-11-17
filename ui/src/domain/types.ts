@@ -1,3 +1,4 @@
+import { VcsType as GeneratedVcsType } from "./generated/apiResources";
 // Shared
 
 import { AuditFieldBase } from "@/modules/types";
@@ -790,3 +791,8 @@ export type PolicyEvaluationContext = {
   shadowSoftViolations?: number;
   results?: PolicyEvaluationResultItem[];
 };
+
+// VCS
+
+export const VcsTypeOrUnknown = { ...GeneratedVcsType, UNKNOWN: "UNKNOWN" } as const;
+export type VcsTypeOrUnknown = (typeof VcsTypeOrUnknown)[keyof typeof VcsTypeOrUnknown];

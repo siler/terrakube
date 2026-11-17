@@ -16,11 +16,13 @@ describe("useCollapsedProjectGroups", () => {
 
     act(() => result.current.toggle("proj-1"));
     expect(result.current.collapsed.has("proj-1")).toBe(true);
-    expect(JSON.parse(sessionStorage.getItem(collapsedGroupsStorageKey("user-1", "org-1"))!)).toEqual(["proj-1"]);
+    expect(JSON.parse(sessionStorage.getItem(collapsedGroupsStorageKey("user-1", "org-1")) ?? "null")).toEqual([
+      "proj-1",
+    ]);
 
     act(() => result.current.toggle("proj-1"));
     expect(result.current.collapsed.has("proj-1")).toBe(false);
-    expect(JSON.parse(sessionStorage.getItem(collapsedGroupsStorageKey("user-1", "org-1"))!)).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem(collapsedGroupsStorageKey("user-1", "org-1")) ?? "null")).toEqual([]);
   });
 
   it("restores the choices after the page is left and reopened", () => {

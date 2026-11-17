@@ -3,6 +3,7 @@ import workspaceService from "../workspaceService";
 import { Kind, parse } from "graphql";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { failure, successData } from "@/testUtils/apiResponse";
 
 jest.mock("@/modules/api/apiWrapper", () => ({
   __esModule: true,
@@ -70,12 +71,12 @@ describe("workspaceService.listWorkspaces", () => {
       },
     });
 
-    const result = await workspaceService.listWorkspaces("org-1");
+    const { workspaces } = successData(await workspaceService.listWorkspaces("org-1"));
 
-    expect(result.data!.workspaces.find((w) => w.id === "ws-1")?.locked).toBe(true);
-    expect(result.data!.workspaces.find((w) => w.id === "ws-1")?.policyComplianceStatus).toBe("COMPLIANT");
-    expect(result.data!.workspaces.find((w) => w.id === "ws-2")?.locked).toBe(false);
-    expect(result.data!.workspaces.find((w) => w.id === "ws-2")?.policyComplianceStatus).toBe("NON_COMPLIANT");
+    expect(workspaces.find((w) => w.id === "ws-1")?.locked).toBe(true);
+    expect(workspaces.find((w) => w.id === "ws-1")?.policyComplianceStatus).toBe("COMPLIANT");
+    expect(workspaces.find((w) => w.id === "ws-2")?.locked).toBe(false);
+    expect(workspaces.find((w) => w.id === "ws-2")?.policyComplianceStatus).toBe("NON_COMPLIANT");
   });
 });
 
@@ -190,17 +191,19 @@ describe("workspaceService.listWorkspacePage", () => {
       },
     });
 
-    const result = await workspaceService.listWorkspacePage({
-      organizationId: "org-1",
-      first: 20,
-      after: 20,
-      search: "platform",
-      status: "running",
-      policyStatus: "NON_COMPLIANT",
-      tagFilters: [{ tagId: "tag-1", value: "prod" }],
-      projectId: "project-1",
-      sort: "lastRun_desc",
-    });
+    const result = successData(
+      await workspaceService.listWorkspacePage({
+        organizationId: "org-1",
+        first: 20,
+        after: 20,
+        search: "platform",
+        status: "running",
+        policyStatus: "NON_COMPLIANT",
+        tagFilters: [{ tagId: "tag-1", value: "prod" }],
+        projectId: "project-1",
+        sort: "lastRun_desc",
+      })
+    );
 
     expect(mockApiPost).toHaveBeenCalledWith(
       "/graphql/api/v1",
@@ -220,17 +223,18 @@ describe("workspaceService.listWorkspacePage", () => {
             '(name=ini="*platform*",description=ini="*platform*");workspaceTag.tagId=="tag-1";workspaceTag.value=="prod";project.id=="project-1";lastJobStatus=="running";(policyComplianceStatus=isnull=true,policyComplianceStatus==UNKNOWN)',
         }),
       }),
+      expect.any(Function),
       { dataWrapped: true, contentType: "application/json" }
     );
-    expect(result.data?.organizationName).toBe("Acme");
+    expect(result.organizationName).toBe("Acme");
     expect(mockApiPost.mock.calls[0][1].query).toContain("filter: $filter");
     expect(mockApiPost.mock.calls[0][1].query).toContain("filter: $statusAll");
     expect(mockApiPost.mock.calls[0][1].query).toContain("policy_COMPLIANT: workspace");
-    expect(result.data?.pageInfo).toEqual({ endCursor: "40", hasNextPage: true, totalRecords: 42 });
-    expect(result.data?.statusCounts.running).toBe(5);
-    expect(result.data?.statusCounts.NeverExecuted).toBe(7);
-    expect(result.data?.policyCounts).toEqual({ All: 5, COMPLIANT: 3, NON_COMPLIANT: 1, EXEMPTED: 0, UNKNOWN: 1 });
-    expect(result.data?.workspaces[0]).toEqual(
+    expect(result.pageInfo).toEqual({ endCursor: "40", hasNextPage: true, totalRecords: 42 });
+    expect(result.statusCounts.running).toBe(5);
+    expect(result.statusCounts.NeverExecuted).toBe(7);
+    expect(result.policyCounts).toEqual({ All: 5, COMPLIANT: 3, NON_COMPLIANT: 1, EXEMPTED: 0, UNKNOWN: 1 });
+    expect(result.workspaces[0]).toEqual(
       expect.objectContaining({
         id: "ws-1",
         normalizedSource: "https://github.com/acme/platform",
@@ -307,25 +311,27 @@ describe("workspaceService.listWorkspacePage", () => {
   it("asks for nothing when the tag filters have no workspace in common", async () => {
     mockApiPost.mockResolvedValueOnce(tagMatchResponse([["ws-1"], ["ws-2"]])).mockResolvedValueOnce(emptyPageResponse);
 
-    const result = await workspaceService.listWorkspacePage(
-      {
-        organizationId: "org-disjoint",
-        first: 20,
-        after: 0,
-        search: "api",
-        tagFilters: [
-          { tagId: "tag-env", value: "prod" },
-          { tagId: "tag-team", value: "infra" },
-        ],
-        sort: "name_asc",
-      },
-      false
+    const result = successData(
+      await workspaceService.listWorkspacePage(
+        {
+          organizationId: "org-disjoint",
+          first: 20,
+          after: 0,
+          search: "api",
+          tagFilters: [
+            { tagId: "tag-env", value: "prod" },
+            { tagId: "tag-team", value: "infra" },
+          ],
+          sort: "name_asc",
+        },
+        false
+      )
     );
 
     const [, pageQuery] = mockApiPost.mock.calls[1];
     expect(pageQuery.variables.filter).toBe('(name=ini="*api*",description=ini="*api*");id=isnull=true');
-    expect(result.data?.workspaces).toEqual([]);
-    expect(result.data?.organizationName).toBe("Acme");
+    expect(result.workspaces).toEqual([]);
+    expect(result.organizationName).toBe("Acme");
   });
 
   it("reuses the resolved ids across page turns instead of resolving them again", async () => {
@@ -363,10 +369,9 @@ describe("workspaceService.listWorkspacePage", () => {
       error: { status: "GraphQL request failed", message: "boom" },
     });
 
-    const result = await workspaceService.listWorkspacePage(andRequest("org-error"), false);
+    const result = failure(await workspaceService.listWorkspacePage(andRequest("org-error"), false));
 
-    expect(result.isError).toBe(true);
-    expect(result.error.message).toBe("boom");
+    expect(result.error?.message).toBe("boom");
     // The page itself is not requested with a filter that would match nothing
     expect(mockApiPost).toHaveBeenCalledTimes(1);
   });
@@ -387,10 +392,9 @@ describe("workspaceService.listWorkspacePage", () => {
     const many = Array.from({ length: 1001 }, (_, index) => `ws-${index}`);
     mockApiPost.mockResolvedValueOnce(tagMatchResponse([many, many]));
 
-    const result = await workspaceService.listWorkspacePage(andRequest("org-many"), false);
+    const result = failure(await workspaceService.listWorkspacePage(andRequest("org-many"), false));
 
-    expect(result.isError).toBe(true);
-    expect(result.error.status).toBe("Too many matching workspaces");
+    expect(result.error?.status).toBe("Too many matching workspaces");
     expect(mockApiPost).toHaveBeenCalledTimes(1);
   });
 
