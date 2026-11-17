@@ -26,5 +26,6 @@
       "@/modules/*": ["./src/modules/*"]
     }
   },
-  "include": ["*.ts", "src"]
+  "include": ["*.ts", "src"],
+  "exclude": ["jest.setup.ts", "src/testUtils", "src/**/__tests__/**", "src/**/*.test.*", "src/**/*.spec.*"]
 }

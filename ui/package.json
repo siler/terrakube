@@ -55,7 +55,10 @@
     "lint:modules": "eslint --fix ./src/modules",
     "format:modules:check": "prettier ./src/modules --check",
     "format:modules": "prettier ./src/modules --write",
-    "prestart": "chmod +x ./env.sh && ./env.sh && cp env-config.js ./public/"
+    "prestart": "chmod +x ./env.sh && ./env.sh && cp env-config.js ./public/",
+    "api-types:generate": "node scripts/api-types/generate.mts",
+    "api-types:paths": "node scripts/api-types/paths.mts",
+    "api-types:test": "node --test \"scripts/api-types/__tests__/*.test.mts\""
   },
   "eslintConfig": {
     "extends": [
@@ -100,6 +103,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
+    "fast-xml-parser": "^5.12.1",
     "globals": "^17.14.0",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.5.2",
