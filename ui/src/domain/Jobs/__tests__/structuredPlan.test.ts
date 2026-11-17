@@ -240,4 +240,16 @@ describe("structuredPlan helpers", () => {
 
     expect(result["step-1"]).toEqual([{ severity: "warning", summary: "argument is deprecated" }]);
   });
+
+  it("drops null and non-object diagnostics from stored output before anything renders them", () => {
+    const jobLevel = normalizeJobDiagnostics({ "step-1": ["oops", { severity: "error", summary: "Boom" }, null] });
+    const planLevel = normalizeStructuredPlanOutput({
+      "step-1": [
+        { address: "aws_vpc.main", diagnostics: [null, { severity: "warning", summary: "Deprecated argument" }] },
+      ],
+    });
+
+    expect(jobLevel["step-1"]).toEqual([{ severity: "error", summary: "Boom" }]);
+    expect(planLevel["step-1"][0].diagnostics).toEqual([{ severity: "warning", summary: "Deprecated argument" }]);
+  });
 });

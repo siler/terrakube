@@ -3,13 +3,17 @@ import { Alert, Button, Collapse, Form, message, Popconfirm, Space, Table, Tag, 
 import { useState, type KeyboardEvent } from "react";
 import { ORGANIZATION_ARCHIVE, WORKSPACE_ARCHIVE } from "../../config/actionTypes";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { CreateVariableForm, FlatVariable, VariableCategory } from "../types";
+import { CreateVariableForm } from "../types";
+import type { Category } from "../generated/apiResources";
+import type { CreateBody, UpdateBody } from "../api/writeBodies";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import WorkspaceVariableFormModal from "./components/WorkspaceVariableFormModal";
 import "./Workspaces.css";
+import type { CollectionVariableRow, GlobalVariableRow } from "./workspaceDataUtils";
+import type { WorkspaceVariableRow } from "./workspaceQuery";
 
 const VARIABLES_COLUMS = (
-  onEdit: (variable: FlatVariable) => void,
+  onEdit: (variable: WorkspaceVariableRow) => void,
   onDelete: (variableId: string) => void,
   manageWorkspace: boolean
 ) => [
@@ -18,9 +22,9 @@ const VARIABLES_COLUMS = (
     dataIndex: "key",
     width: "35%",
     key: "key",
-    sorter: (a: FlatVariable, b: FlatVariable) => a.key.localeCompare(b.key),
+    sorter: (a: WorkspaceVariableRow, b: WorkspaceVariableRow) => a.key.localeCompare(b.key),
     defaultSortOrder: "ascend" as const,
-    render: (_: string, record: FlatVariable) => {
+    render: (_: string, record: WorkspaceVariableRow) => {
       return (
         <Space>
           {record.key}
@@ -36,7 +40,7 @@ const VARIABLES_COLUMS = (
     dataIndex: "value",
     key: "value",
     width: "35%",
-    render: (_: string, record: FlatVariable) => {
+    render: (_: string, record: WorkspaceVariableRow) => {
       return record.sensitive ? (
         <i>Sensitive - write only</i>
       ) : (
@@ -71,7 +75,7 @@ const VARIABLES_COLUMS = (
     title: "Actions",
     key: "action",
     width: "20%",
-    render: (_: string, record: FlatVariable) => {
+    render: (_: string, record: WorkspaceVariableRow) => {
       return (
         <div>
           <Button type="link" icon={<EditOutlined />} onClick={() => onEdit(record)} disabled={!manageWorkspace}>
@@ -109,9 +113,9 @@ const COLLECTION_VARIABLES_COLUMNS = () => [
     dataIndex: "key",
     width: "24%",
     key: "key",
-    sorter: (a: any, b: any) => a.key.localeCompare(b.key),
+    sorter: (a: CollectionVariableRow, b: CollectionVariableRow) => a.key.localeCompare(b.key),
     defaultSortOrder: "ascend" as const,
-    render: (_: string, record: any) => {
+    render: (_: string, record: CollectionVariableRow) => {
       return (
         <div>
           {record.key} &nbsp;&nbsp;&nbsp;&nbsp; {record.hcl && <Tag color="blue">HCL</Tag>}{" "}
@@ -125,7 +129,7 @@ const COLLECTION_VARIABLES_COLUMNS = () => [
     dataIndex: "value",
     key: "value",
     width: "31%",
-    render: (_: string, record: any) => {
+    render: (_: string, record: CollectionVariableRow) => {
       return record.sensitive ? (
         <i>Sensitive - write only</i>
       ) : (
@@ -146,8 +150,8 @@ const COLLECTION_VARIABLES_COLUMNS = () => [
     dataIndex: "category",
     width: "15%",
     key: "category",
-    sorter: (a: any, b: any) => (a.category ?? "").localeCompare(b.category ?? ""),
-    render: (_: string, record: any) => {
+    sorter: (a: CollectionVariableRow, b: CollectionVariableRow) => (a.category ?? "").localeCompare(b.category ?? ""),
+    render: (_: string, record: CollectionVariableRow) => {
       return record.category === "TERRAFORM" ? "terraform" : record.category === "ENV" ? "env" : "unset";
     },
   },
@@ -156,7 +160,7 @@ const COLLECTION_VARIABLES_COLUMNS = () => [
     dataIndex: "priority",
     width: "12%",
     key: "priority",
-    render: (_: string, record: any) => {
+    render: (_: string, record: CollectionVariableRow) => {
       return <div>{record.priority}</div>;
     },
   },
@@ -165,7 +169,7 @@ const COLLECTION_VARIABLES_COLUMNS = () => [
     dataIndex: "collectionName",
     width: "18%",
     key: "collectionName",
-    render: (_: string, record: any) => {
+    render: (_: string, record: CollectionVariableRow) => {
       return <div>{record.collectionName}</div>;
     },
   },
@@ -177,9 +181,9 @@ const GLOBAL_VARIABLES_COLUMNS = () => [
     dataIndex: "key",
     width: "40%",
     key: "key",
-    sorter: (a: FlatVariable, b: FlatVariable) => a.key.localeCompare(b.key),
+    sorter: (a: GlobalVariableRow, b: GlobalVariableRow) => a.key.localeCompare(b.key),
     defaultSortOrder: "ascend" as const,
-    render: (_: string, record: FlatVariable) => {
+    render: (_: string, record: GlobalVariableRow) => {
       return (
         <div>
           {record.key} &nbsp;&nbsp;&nbsp;&nbsp; {record.hcl && <Tag color="blue">HCL</Tag>}{" "}
@@ -193,7 +197,7 @@ const GLOBAL_VARIABLES_COLUMNS = () => [
     dataIndex: "value",
     key: "value",
     width: "40%",
-    render: (_: string, record: FlatVariable) => {
+    render: (_: string, record: GlobalVariableRow) => {
       return record.sensitive ? (
         <i>Sensitive - write only</i>
       ) : (
@@ -214,21 +218,21 @@ const GLOBAL_VARIABLES_COLUMNS = () => [
     dataIndex: "category",
     width: "20%",
     key: "category",
-    sorter: (a: FlatVariable, b: FlatVariable) => (a.category ?? "").localeCompare(b.category ?? ""),
-    render: (_: string, record: FlatVariable) => {
+    sorter: (a: GlobalVariableRow, b: GlobalVariableRow) => (a.category ?? "").localeCompare(b.category ?? ""),
+    render: (_: string, record: GlobalVariableRow) => {
       return record.category === "TERRAFORM" ? "terraform" : record.category === "ENV" ? "env" : "unset";
     },
   },
 ];
 
 type Props = {
-  vars: FlatVariable[];
-  env: FlatVariable[];
+  vars: WorkspaceVariableRow[];
+  env: WorkspaceVariableRow[];
   manageWorkspace: boolean;
-  collectionVars: any[];
-  collectionEnvVars: any[];
-  globalVariables: FlatVariable[];
-  globalEnvVariables: FlatVariable[];
+  collectionVars: CollectionVariableRow[];
+  collectionEnvVars: CollectionVariableRow[];
+  globalVariables: GlobalVariableRow[];
+  globalEnvVariables: GlobalVariableRow[];
   reload: () => void;
 };
 
@@ -247,22 +251,22 @@ export const Variables = ({
   const [form] = Form.useForm<CreateVariableForm>();
   const [visible, setVisible] = useState(false);
   const [variableName, setVariableName] = useState("");
-  const [category, setCategory] = useState<VariableCategory | null>("TERRAFORM");
+  const [category, setCategory] = useState<Category | null>("TERRAFORM");
   const [mode, setMode] = useState("create");
   const [variableId, setVariableId] = useState("");
   const onCancel = () => {
     setVisible(false);
   };
-  const onEdit = (variable: FlatVariable) => {
+  const onEdit = (variable: WorkspaceVariableRow) => {
     setMode("edit");
     setVariableId(variable.id);
     setVariableName(variable.key);
     form.setFieldsValue({
       key: variable.key,
-      value: variable.value,
+      value: variable.value ?? undefined,
       sensitive: variable.sensitive,
       hcl: variable.hcl,
-      description: variable.description,
+      description: variable.description ?? undefined,
       category: variable.category ?? undefined,
     });
     setVisible(true);
@@ -270,7 +274,7 @@ export const Variables = ({
   };
 
   const onCreate = (values: CreateVariableForm) => {
-    const body = {
+    const body: CreateBody<"variable"> = {
       data: {
         type: "variable",
         attributes: {
@@ -302,7 +306,7 @@ export const Variables = ({
   };
 
   const onUpdate = (values: CreateVariableForm) => {
-    const body = {
+    const body: UpdateBody<"variable"> = {
       data: {
         type: "variable",
         id: variableId,

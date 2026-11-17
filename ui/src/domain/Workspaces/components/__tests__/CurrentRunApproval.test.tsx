@@ -1,4 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { CanceledError } from "axios";
+import { requestAttributes } from "@/testUtils/readRequestBody";
 import { CurrentRunApproval } from "../CurrentRunApproval";
 
 window._env_ = {
@@ -11,13 +13,14 @@ window._env_ = {
   REACT_APP_REGISTRY_URI: "http://localhost:8080/registry",
 };
 
-const patchMock = jest.fn();
-const contextGetMock = jest.fn();
+const patchMock = jest.fn<Promise<unknown>, [url: string, body: unknown, config?: unknown]>();
+const contextGetMock = jest.fn<Promise<unknown>, [url: string, config?: unknown]>();
 
 jest.mock("../../../../config/axiosConfig", () => ({
   __esModule: true,
-  default: { patch: (...args: unknown[]) => patchMock(...args) },
-  axiosAuxiliary: { get: (...args: unknown[]) => contextGetMock(...args) },
+  default: { patch: (...args: Parameters<typeof patchMock>) => patchMock(...args) },
+  axiosAuxiliary: { get: (...args: Parameters<typeof contextGetMock>) => contextGetMock(...args) },
+  getErrorMessage: (err: unknown) => (err instanceof Error ? err.message : "Error"),
 }));
 
 const planOutput = (actions: string[][]) => ({
@@ -188,19 +191,34 @@ describe("CurrentRunApproval", () => {
     fireEvent.click(await screen.findByTestId("current-run-confirm"));
 
     await waitFor(() => expect(props.onChanged).toHaveBeenCalled());
-    expect(patchMock.mock.calls[0][1].data.attributes.status).toBe("rejected");
+    expect(requestAttributes(patchMock.mock.calls[0][1]).status).toBe("rejected");
   });
 
-  it("does not reload the page data when the request fails", async () => {
-    patchMock.mockRejectedValue({ response: { data: { errors: [{ detail: "nope" }] } } });
+  it("does not reload the page data when the request fails, and says why", async () => {
+    patchMock.mockRejectedValue(new Error("nope"));
     const { props } = renderApproval();
     await ready();
 
     fireEvent.click(screen.getByTestId("current-run-approve"));
     fireEvent.click(await screen.findByTestId("current-run-confirm"));
 
-    await waitFor(() => expect(patchMock).toHaveBeenCalled());
+    expect(await screen.findByText(/: nope$/)).toBeInTheDocument();
     expect(props.onChanged).not.toHaveBeenCalled();
+  });
+
+  it("treats a context response without an object body as having no plan or policy result", async () => {
+    contextGetMock.mockResolvedValue({ data: "" });
+    renderApproval();
+    await ready();
+    expect(screen.queryByText(/cannot be approved from here/)).toBeNull();
+  });
+
+  it("ignores a cancelled context read instead of reporting it as unreadable", async () => {
+    contextGetMock.mockRejectedValue(new CanceledError());
+    renderApproval();
+    await waitFor(() => expect(contextGetMock).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByText(/Could not read the plan and policy results yet/)).toBeNull();
   });
 
   it("cannot be dismissed while the request is in flight", async () => {

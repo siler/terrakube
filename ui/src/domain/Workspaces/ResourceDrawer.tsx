@@ -1,67 +1,63 @@
 import { apiUrl } from "@/config/apiUrls";
 import { Avatar, Col, Drawer, Row, Space, Tabs } from "antd";
-import { lazy, Suspense, useEffect, useState } from "react";
-import axiosInstance from "../../config/axiosConfig";
-import { ActionWithSettings, Resource, Workspace } from "../types.js";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { and } from "../api/rsqlFilter";
+import { api, fields } from "../generated/apiPaths";
+import type { Row as ApiRow } from "../api/fieldSelection";
+import { Resource } from "../types.js";
+import { toActionWorkspace, type WorkspacePageRow } from "./workspaceQuery";
 import { getServiceIcon } from "./Icons.jsx";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
 import "./Workspaces.css";
+import { matchDisplayCriteria } from "./actionCriteria";
 
 const ActionLoader = lazy(() => import("../../ActionLoader"));
+
+const DRAWER_ACTION_FIELDS = fields.action("action", "displayCriteria", "type", "label");
+
+/** A resource drawer action, with the settings its matching display criterion attaches. */
+type DrawerAction = ApiRow<typeof DRAWER_ACTION_FIELDS> & { settings?: Record<string, unknown> };
 
 type Props = {
   open: boolean;
   setOpen: (val: boolean) => void;
   resource?: Resource;
-  workspace: Workspace;
+  workspace: WorkspacePageRow;
 };
 
 export const ResourceDrawer = ({ open, resource, setOpen, workspace }: Props) => {
   const [drawerOpen, setDrawerOpen] = useState(open);
-  const [actions, setActions] = useState<ActionWithSettings[]>([]);
+  const [actions, setActions] = useState<DrawerAction[]>([]);
   const [loading, setLoading] = useState(true);
+  const actionWorkspace = useMemo(() => toActionWorkspace(workspace), [workspace]);
+
+  const context = {
+    state: resource,
+    apiUrl: apiUrl(""),
+    workspace: actionWorkspace,
+  };
 
   useEffect(() => {
     const fetchActions = async () => {
       try {
         setLoading(true);
-        const response = await axiosInstance.get("action", {
-          params: {
-            "filter[action]": "active==true;type=in=('Workspace/ResourceDrawer/Action','Workspace/ResourceDrawer/Tab')",
-          },
+        const fetchedActions: DrawerAction[] = await api
+          .action()
+          .select(DRAWER_ACTION_FIELDS)
+          .where((action) =>
+            and(
+              action.active.eq(true),
+              action.type.in(["Workspace/ResourceDrawer/Action", "Workspace/ResourceDrawer/Tab"])
+            )
+          );
+
+        const filteredActions = fetchedActions.flatMap((action): DrawerAction[] => {
+          if (!action.displayCriteria) {
+            return [action];
+          }
+          const settings = matchDisplayCriteria(action.displayCriteria, context);
+          return settings ? [{ ...action, settings }] : [];
         });
-        const fetchedActions = response.data.data || [];
-
-        // Filter actions and attach settings to each action
-        const filteredActions = fetchedActions.reduce((acc: any, action: ActionWithSettings) => {
-          if (!action.attributes.displayCriteria) {
-            acc.push(action);
-            return acc;
-          }
-
-          let displayCriteria;
-          try {
-            displayCriteria = JSON.parse(action.attributes.displayCriteria);
-          } catch (error) {
-            console.error("Error parsing displayCriteria JSON:", error);
-            return acc;
-          }
-
-          for (const criteria of displayCriteria) {
-            const settings = evaluateCriteria(criteria, {
-              state: resource,
-              apiUrl: apiUrl(""),
-            });
-            if (settings) {
-              action.settings = settings; // Attach settings to the action
-
-              acc.push(action);
-              break;
-            }
-          }
-
-          return acc;
-        }, []);
 
         setActions(filteredActions);
       } catch (error) {
@@ -71,42 +67,16 @@ export const ResourceDrawer = ({ open, resource, setOpen, workspace }: Props) =>
       }
     };
 
-    fetchActions();
-    if (!open) {
-      setDrawerOpen(false);
-    } else {
-      setDrawerOpen(true);
+    setDrawerOpen(open);
+    // Every workspace page mounts this drawer closed; the actions only matter once it opens.
+    if (open) {
+      void fetchActions();
     }
   }, [open, resource]);
 
   const onClose = () => {
     setOpen(false);
     setDrawerOpen(false);
-  };
-
-  const context = {
-    state: resource,
-    apiUrl: apiUrl(""),
-    workspace: workspace,
-  };
-
-  // Function to evaluate display criteria and return settings
-  const evaluateCriteria = (criteria: any, _: any) => {
-    try {
-      const result = eval(criteria.filter);
-      if (result) {
-        if (!criteria.settings) {
-          return {};
-        }
-        return criteria.settings.reduce((acc: any, setting: any) => {
-          acc[setting.key] = setting.value;
-          return acc;
-        }, {});
-      }
-    } catch (error) {
-      console.error("Error evaluating criteria:", error);
-    }
-    return null;
   };
 
   return (
@@ -138,11 +108,11 @@ export const ResourceDrawer = ({ open, resource, setOpen, workspace }: Props) =>
                 <Space size={5} orientation="horizontal">
                   {actions &&
                     actions
-                      .filter((action) => action?.attributes.type === "Workspace/ResourceDrawer/Action")
+                      .filter((action) => action.type === "Workspace/ResourceDrawer/Action")
                       .map((action, index) => (
                         <ActionLoader
                           key={index}
-                          action={action?.attributes.action}
+                          action={action.action}
                           context={{ ...context, settings: action.settings }}
                         />
                       ))}
@@ -154,14 +124,14 @@ export const ResourceDrawer = ({ open, resource, setOpen, workspace }: Props) =>
               defaultActiveKey="1"
               items={[
                 ...actions
-                  .filter((action) => action?.attributes.type === "Workspace/ResourceDrawer/Tab")
+                  .filter((action) => action.type === "Workspace/ResourceDrawer/Tab")
                   .map((action, index) => ({
                     key: `tab-${index + 1}`,
-                    label: action.attributes.label,
+                    label: action.label,
                     children: (
                       <ActionLoader
                         key={index}
-                        action={action?.attributes.action}
+                        action={action.action}
                         context={{ ...context, settings: action.settings }}
                       />
                     ),
