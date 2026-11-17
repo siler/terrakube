@@ -42,4 +42,13 @@ describe("TeamPermissionsV2", () => {
     expect(screen.getByRole("checkbox", { name: "Manage modules" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "Manage policies" })).toBeChecked();
   });
+
+  it("treats a role it does not recognise as custom instead of failing to render", async () => {
+    render(<Wrapper initialRole="owner" />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Choose what members of this team can do across the organization.")).toBeInTheDocument()
+    );
+    expect(screen.getByRole("checkbox", { name: "Apply runs" })).toBeEnabled();
+  });
 });
