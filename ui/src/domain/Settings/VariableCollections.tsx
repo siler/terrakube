@@ -2,9 +2,12 @@ import { DeleteOutlined, FolderOutlined, PlusOutlined, SearchOutlined } from "@a
 import { Alert, Button, Input, Typography, Pagination, message } from "antd";
 import { Loading } from "@/components/feedback/Loading";
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import { LinkButton } from "@/components/navigation/LinkButton";
-import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { getErrorMessage } from "../../config/axiosConfig";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import "./Settings.css";
 import "./VariableCollections.css";
@@ -12,24 +15,16 @@ import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { deleteCollection } from "./deleteCollection";
 
-// Type definitions for Variable Collections
-type Collection = {
-  id: string;
-  attributes: CollectionAttributes;
-  relationships?: {
-    workspaces?: {
-      data: any[];
-    };
-    variables?: {
-      data: any[];
-    };
-  };
-};
+const COLLECTION_FIELDS = fields.collection("name", "description", "priority");
+// The count reads the workspace linkage to skip references whose workspace was deleted.
+const REFERENCE_WORKSPACES = fields.reference({ workspace: ids });
+// The count only needs the rows; the required parent linkage keeps the item fieldset non-empty.
+const ITEM_LINKAGE = fields.item({ collection: ids });
+type CollectionRow = Row<typeof COLLECTION_FIELDS>;
 
-type CollectionAttributes = {
-  name: string;
-  description: string;
-  priority: number;
+type CollectionCounts = {
+  workspaces: number;
+  variables: number;
 };
 
 type Props = {
@@ -37,12 +32,13 @@ type Props = {
 };
 
 export const VariableCollectionsSettings = ({ managePermission = true }: Props) => {
-  const { orgid } = useParams();
-  const [collections, setCollections] = useState<Collection[]>([]);
+  const orgid = useRequiredParam("orgid");
+  const [collections, setCollections] = useState<CollectionRow[]>([]);
+  const [counts, setCounts] = useState<Record<string, CollectionCounts>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<Collection | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<CollectionRow | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
@@ -65,53 +61,41 @@ export const VariableCollectionsSettings = ({ managePermission = true }: Props) 
     }
   };
 
-  const loadCollections = () => {
-    axiosInstance
-      .get(`organization/${orgid}/collection`)
-      .then((response) => {
-        setCollections(response.data.data);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(getErrorMessage(err));
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+  const loadCollections = async () => {
+    try {
+      const rows = await api.organization(orgid).collection().select(COLLECTION_FIELDS);
+      setCollections(rows);
+      // Fresh rows carry no counts yet; the count pass below fills them in.
+      setCounts({});
+      setError(null);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const getWorkspacesAndVariablesCounts = async (collections: Collection[]) => {
-    const updatedCollections = [...collections];
+  const getWorkspacesAndVariablesCounts = async (collections: CollectionRow[]) => {
+    const loaded: Record<string, CollectionCounts> = {};
 
-    for (const collection of updatedCollections) {
+    for (const collection of collections) {
       try {
-        // Get workspaces count
-        const workspacesResponse = await axiosInstance.get(
-          `organization/${orgid}/collection/${collection.id}/reference`
-        );
-        collection.relationships = {
-          ...collection.relationships,
-          workspaces: {
-            data: (workspacesResponse.data.data || []).filter(
-              (item: any) => item.relationships?.workspace?.data?.id != null
-            ),
-          },
-        };
-
-        // Get variables count
-        const variablesResponse = await axiosInstance.get(`organization/${orgid}/collection/${collection.id}/item`);
-        collection.relationships = {
-          ...collection.relationships,
-          variables: {
-            data: variablesResponse.data.data || [],
-          },
+        const references = await api
+          .organization(orgid)
+          .collection(collection.id)
+          .reference()
+          .select(REFERENCE_WORKSPACES);
+        const items = await api.organization(orgid).collection(collection.id).item().select(ITEM_LINKAGE);
+        loaded[collection.id] = {
+          workspaces: references.filter((reference) => reference.workspace).length,
+          variables: items.length,
         };
       } catch (error) {
         console.error(`Error fetching details for collection ${collection.id}:`, error);
       }
     }
 
-    setCollections(updatedCollections);
+    setCounts(loaded);
   };
 
   useEffect(() => {
@@ -127,8 +111,8 @@ export const VariableCollectionsSettings = ({ managePermission = true }: Props) 
 
   const filteredCollections = collections.filter(
     (collection) =>
-      collection.attributes.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      collection.attributes.description.toLowerCase().includes(searchTerm.toLowerCase())
+      collection.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (collection.description ?? "").toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const paginatedCollections = filteredCollections.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -146,10 +130,9 @@ export const VariableCollectionsSettings = ({ managePermission = true }: Props) 
     </LinkButton>
   );
 
-  const renderCollection = (item: Collection) => {
-    const { name, description, priority } = item.attributes;
-    const workspaces = item.relationships?.workspaces?.data;
-    const variables = item.relationships?.variables?.data;
+  const renderCollection = (item: CollectionRow) => {
+    const { name, description, priority } = item;
+    const counted = counts[item.id];
     return (
       <li key={item.id} className="collection-card">
         <span className="collection-card-icon" aria-hidden="true">
@@ -162,10 +145,10 @@ export const VariableCollectionsSettings = ({ managePermission = true }: Props) 
           {description && <span className="collection-card-description">{description}</span>}
           <span className="collection-card-meta">
             Priority {priority}
-            {workspaces && variables && (
+            {counted && (
               <>
                 {" · "}
-                {plural(workspaces.length, "workspace")} · {plural(variables.length, "variable")}
+                {plural(counted.workspaces, "workspace")} · {plural(counted.variables, "variable")}
               </>
             )}
           </span>
@@ -246,8 +229,8 @@ export const VariableCollectionsSettings = ({ managePermission = true }: Props) 
         title="Delete variable collection"
         message={
           <>
-            The collection <strong>{pendingDelete?.attributes.name}</strong>, its variables and its workspace references
-            will be deleted, and its workspaces stop receiving these variables. This cannot be undone.
+            The collection <strong>{pendingDelete?.name}</strong>, its variables and its workspace references will be
+            deleted, and its workspaces stop receiving these variables. This cannot be undone.
           </>
         }
         okText="Delete variable collection"
