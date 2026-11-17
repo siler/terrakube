@@ -1,7 +1,13 @@
 import { Button, Form, Input, InputNumber, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { createdResourceId } from "@/domain/api/parseDocument";
+import type { TableColumnsType } from "antd";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import type { CreateBody, UpdateBody } from "../api/writeBodies";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import { SettingsForm } from "@/components/settings/SettingsForm";
 import { IdField } from "@/components/settings/IdField";
@@ -15,17 +21,44 @@ import { CollectionVariableModal, CollectionVariableFormValues } from "./compone
 import { DangerZone } from "@/components/settings/DangerZone";
 import { deleteCollection } from "./deleteCollection";
 
-type Workspace = {
-  id: string;
-  attributes: {
-    name: string;
-  };
-};
-
 type CreateEditCollectionProps = {
   mode: "create" | "edit";
   collectionId?: string;
   managePermission?: boolean;
+};
+
+const WORKSPACE_FIELDS = fields.workspace("name");
+const COLLECTION_FIELDS = fields.collection("name", "description", "priority");
+const ITEM_FIELDS = fields.item("key", "value", "category", "description", "hcl", "sensitive");
+// The references are read for their workspace linkage only; a null workspace means the workspace was deleted.
+const REFERENCE_WORKSPACES = fields.reference({ workspace: ids });
+type WorkspaceRow = Row<typeof WORKSPACE_FIELDS>;
+type CollectionItemRow = Row<typeof ITEM_FIELDS>;
+
+const referenceBody = (workspaceId: string): CreateBody<"reference"> => ({
+  data: {
+    type: "reference",
+    attributes: {
+      description: `Reference to workspace ${workspaceId}`,
+    },
+    relationships: {
+      workspace: {
+        data: {
+          type: "workspace",
+          id: workspaceId,
+        },
+      },
+    },
+  },
+});
+
+// Without the new id there is no collection to open.
+const createdId = (body: unknown): string => {
+  const id = createdResourceId(body);
+  if (id === undefined) {
+    throw new Error("The server did not return the new collection's id");
+  }
+  return id;
 };
 
 export const CreateEditCollection = ({
@@ -33,20 +66,21 @@ export const CreateEditCollection = ({
   collectionId: propCollectionId,
   managePermission = true,
 }: CreateEditCollectionProps) => {
-  const { orgid, collectionid: urlCollectionId } = useParams();
+  const orgid = useRequiredParam("orgid");
+  const { collectionid: urlCollectionId } = useParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [variableLoading, setVariableLoading] = useState(false);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
   const [selectedWorkspaces, setSelectedWorkspaces] = useState<string[]>([]);
-  const [variables, setVariables] = useState<any[]>([]);
+  const [variables, setVariables] = useState<CollectionItemRow[]>([]);
   const [variableForm] = Form.useForm<CollectionVariableFormValues>();
   const [collectionForm] = Form.useForm();
   const [addingVariable, setAddingVariable] = useState(false);
   const [variableMode, setVariableMode] = useState<"create" | "edit">("create");
   const [editingVariableId, setEditingVariableId] = useState<string>("");
-  const [pendingDelete, setPendingDelete] = useState<any>(null);
+  const [pendingDelete, setPendingDelete] = useState<CollectionItemRow | null>(null);
   const [collectionName, setCollectionName] = useState("");
 
   // Use either the prop or URL parameter for collection ID
@@ -54,55 +88,52 @@ export const CreateEditCollection = ({
 
   // Load collection data if in edit mode
   useEffect(() => {
-    setLoading(true);
+    const load = async () => {
+      setLoading(true);
 
-    if (mode === "edit" && collectionid) {
-      // Parallel load: workspaces, collection data, collection items, and collection references
-      Promise.all([
-        axiosInstance.get(`organization/${orgid}/workspace?fields[workspace]=name`),
-        axiosInstance.get(`organization/${orgid}/collection/${collectionid}`),
-        axiosInstance.get(`organization/${orgid}/collection/${collectionid}/item`),
-        axiosInstance.get(`organization/${orgid}/collection/${collectionid}/reference`),
-      ])
-        .then(([workspacesRes, collectionRes, itemsRes, refsRes]) => {
-          setWorkspaces(workspacesRes.data.data);
+      if (mode === "edit" && collectionid) {
+        // Parallel load: workspaces, collection data, collection items, and collection references
+        try {
+          const [workspaceRows, collection, items, references] = await Promise.all([
+            api.organization(orgid).workspace().select(WORKSPACE_FIELDS),
+            api.organization(orgid).collection(collectionid).select(COLLECTION_FIELDS),
+            api.organization(orgid).collection(collectionid).item().select(ITEM_FIELDS),
+            api.organization(orgid).collection(collectionid).reference().select(REFERENCE_WORKSPACES),
+          ]);
 
-          const collectionData = collectionRes.data.data;
-          setCollectionName(collectionData.attributes.name);
+          setWorkspaces(workspaceRows);
+
+          setCollectionName(collection.name);
           collectionForm.setFieldsValue({
-            name: collectionData.attributes.name,
-            description: collectionData.attributes.description,
-            priority: collectionData.attributes.priority || 10,
+            name: collection.name,
+            description: collection.description,
+            priority: collection.priority || 10,
           });
 
-          setVariables(itemsRes.data.data);
+          setVariables(items);
 
-          const workspaceIds = refsRes.data.data
-            .filter((ref: any) => ref.relationships?.workspace?.data?.id != null)
-            .map((ref: any) => ref.relationships.workspace.data.id);
-          setSelectedWorkspaces(workspaceIds);
-
-          setLoading(false);
-        })
-        .catch((error) => {
+          setSelectedWorkspaces(
+            references.flatMap((reference) => (reference.workspace ? [reference.workspace.id] : []))
+          );
+        } catch (error) {
           message.error(`Could not load the variable collection: ${getErrorMessage(error)}`);
+        } finally {
           setLoading(false);
-        });
-    } else {
-      // For create mode, just load workspaces
-      axiosInstance
-        .get(`organization/${orgid}/workspace?fields[workspace]=name`)
-        .then((response) => {
-          setWorkspaces(response.data.data);
+        }
+      } else {
+        // For create mode, just load workspaces
+        try {
+          setWorkspaces(await api.organization(orgid).workspace().select(WORKSPACE_FIELDS));
           setVariables([]);
           setSelectedWorkspaces([]);
-          setLoading(false);
-        })
-        .catch((error) => {
+        } catch (error) {
           message.error(`Could not load workspaces: ${getErrorMessage(error)}`);
+        } finally {
           setLoading(false);
-        });
-    }
+        }
+      }
+    };
+    load();
   }, [orgid, collectionid, mode, collectionForm]);
 
   const handleSave = async (values: { name: string; description?: string; priority?: number }) => {
@@ -110,7 +141,7 @@ export const CreateEditCollection = ({
       setSaveLoading(true);
 
       // Match exact payload format shown in example - without global field
-      const collectionData = {
+      const collectionData: CreateBody<"collection"> = {
         data: {
           type: "collection",
           attributes: {
@@ -123,32 +154,17 @@ export const CreateEditCollection = ({
 
       if (mode === "create") {
         // Create collection - use the format from the example
-        const response = await axiosInstance.post(`organization/${orgid}/collection`, collectionData, {
+        const response = await axiosInstance.post<unknown>(`organization/${orgid}/collection`, collectionData, {
           headers: { "Content-Type": "application/vnd.api+json" },
         });
 
-        const newCollectionId = response.data.data.id;
+        const newCollectionId = createdId(response.data);
 
         // Add workspace references
         for (const workspaceId of selectedWorkspaces) {
           await axiosInstance.post(
             `organization/${orgid}/collection/${newCollectionId}/reference`,
-            {
-              data: {
-                type: "reference",
-                attributes: {
-                  description: `Reference to workspace ${workspaceId}`,
-                },
-                relationships: {
-                  workspace: {
-                    data: {
-                      type: "workspace",
-                      id: workspaceId,
-                    },
-                  },
-                },
-              },
-            },
+            referenceBody(workspaceId),
             { headers: { "Content-Type": "application/vnd.api+json" } }
           );
         }
@@ -159,37 +175,34 @@ export const CreateEditCollection = ({
         return;
       } else if (mode === "edit" && collectionid) {
         // Update collection - match exact format without global field
-        await axiosInstance.patch(
-          `organization/${orgid}/collection/${collectionid}`,
-          {
-            data: {
-              type: "collection",
-              id: collectionid,
-              attributes: {
-                name: values.name,
-                description: values.description || "",
-                priority: values.priority || 10,
-              },
+        const collectionUpdate: UpdateBody<"collection"> = {
+          data: {
+            type: "collection",
+            id: collectionid,
+            attributes: {
+              name: values.name,
+              description: values.description || "",
+              priority: values.priority || 10,
             },
           },
-          { headers: { "Content-Type": "application/vnd.api+json" } }
-        );
+        };
+        await axiosInstance.patch(`organization/${orgid}/collection/${collectionid}`, collectionUpdate, {
+          headers: { "Content-Type": "application/vnd.api+json" },
+        });
 
         // Handle workspace references
         // First get current references
-        const refsResponse = await axiosInstance.get(`organization/${orgid}/collection/${collectionid}/reference`);
+        const existingRefs = await api
+          .organization(orgid)
+          .collection(collectionid)
+          .reference()
+          .select(REFERENCE_WORKSPACES);
 
-        const existingRefs = refsResponse.data.data;
-        const existingWorkspaceIds = existingRefs
-          .filter((ref: any) => ref.relationships?.workspace?.data?.id != null)
-          .map((ref: any) => ref.relationships.workspace.data.id);
+        const existingWorkspaceIds = existingRefs.flatMap((ref) => (ref.workspace ? [ref.workspace.id] : []));
 
         // Delete references that are not in the new selection or where the workspace is null because it was deleted
         for (const ref of existingRefs) {
-          const workspaceId = ref.relationships?.workspace?.data?.id;
-          if (workspaceId == null) {
-            await axiosInstance.delete(`organization/${orgid}/collection/${collectionid}/reference/${ref.id}`);
-          } else if (!selectedWorkspaces.includes(workspaceId)) {
+          if (ref.workspace == null || !selectedWorkspaces.includes(ref.workspace.id)) {
             await axiosInstance.delete(`organization/${orgid}/collection/${collectionid}/reference/${ref.id}`);
           }
         }
@@ -199,22 +212,7 @@ export const CreateEditCollection = ({
           if (!existingWorkspaceIds.includes(workspaceId)) {
             await axiosInstance.post(
               `organization/${orgid}/collection/${collectionid}/reference`,
-              {
-                data: {
-                  type: "reference",
-                  attributes: {
-                    description: `Reference to workspace ${workspaceId}`,
-                  },
-                  relationships: {
-                    workspace: {
-                      data: {
-                        type: "workspace",
-                        id: workspaceId,
-                      },
-                    },
-                  },
-                },
-              },
+              referenceBody(workspaceId),
               { headers: { "Content-Type": "application/vnd.api+json" } }
             );
           }
@@ -234,8 +232,11 @@ export const CreateEditCollection = ({
 
   const handleDeleteCollection = async () => {
     try {
+      if (!collectionid) {
+        return;
+      }
       setLoading(true);
-      await deleteCollection(orgid, collectionid!);
+      await deleteCollection(orgid, collectionid);
       message.success("Variable collection deleted");
       navigate(`/organizations/${orgid}/settings/collection`);
     } catch (error) {
@@ -262,14 +263,12 @@ export const CreateEditCollection = ({
             v.id === editingVariableId
               ? {
                   ...v,
-                  attributes: {
-                    key: values.key?.trim(),
-                    value: typeof values.value === "string" ? values.value.trim() : values.value,
-                    sensitive: values.sensitive,
-                    description: values.description?.trim(),
-                    hcl: values.hcl,
-                    category: values.category,
-                  },
+                  key: values.key?.trim(),
+                  value: typeof values.value === "string" ? values.value.trim() : values.value,
+                  category: values.category,
+                  description: values.description?.trim() ?? null,
+                  hcl: values.hcl,
+                  sensitive: values.sensitive,
                 }
               : v
           )
@@ -278,28 +277,28 @@ export const CreateEditCollection = ({
       } else if (mode === "edit" && collectionid) {
         // Update variable in collection via API
         try {
-          await axiosInstance.patch(
-            `organization/${orgid}/collection/${collectionid}/item/${editingVariableId}`,
-            {
-              data: {
-                type: "item",
-                id: editingVariableId,
-                attributes: {
-                  key: values.key?.trim(),
-                  value: typeof values.value === "string" ? values.value.trim() : values.value,
-                  sensitive: values.sensitive,
-                  description: values.description?.trim(),
-                  hcl: values.hcl,
-                  category: values.category,
-                },
+          const itemUpdate: UpdateBody<"item"> = {
+            data: {
+              type: "item",
+              id: editingVariableId,
+              attributes: {
+                key: values.key?.trim(),
+                value: typeof values.value === "string" ? values.value.trim() : values.value,
+                sensitive: values.sensitive,
+                description: values.description?.trim(),
+                hcl: values.hcl,
+                category: values.category,
               },
             },
+          };
+          await axiosInstance.patch(
+            `organization/${orgid}/collection/${collectionid}/item/${editingVariableId}`,
+            itemUpdate,
             { headers: { "Content-Type": "application/vnd.api+json" } }
           );
 
           // Refresh variables
-          const response = await axiosInstance.get(`organization/${orgid}/collection/${collectionid}/item`);
-          setVariables(response.data.data);
+          setVariables(await api.organization(orgid).collection(collectionid).item().select(ITEM_FIELDS));
           message.success("Variable updated");
         } catch (error) {
           message.error(`Could not update the variable: ${getErrorMessage(error)}`);
@@ -319,16 +318,14 @@ export const CreateEditCollection = ({
       setVariableLoading(true);
 
       // Add variable to local state
-      const newVariable = {
+      const newVariable: CollectionItemRow = {
         id: `temp-${Date.now()}`,
-        attributes: {
-          key: values.key?.trim(),
-          value: typeof values.value === "string" ? values.value.trim() : values.value,
-          category: values.category,
-          description: values.description?.trim(),
-          hcl: values.hcl,
-          sensitive: values.sensitive,
-        },
+        key: values.key?.trim(),
+        value: typeof values.value === "string" ? values.value.trim() : values.value,
+        category: values.category,
+        description: values.description?.trim() ?? null,
+        hcl: values.hcl,
+        sensitive: values.sensitive,
       };
 
       setVariables([...variables, newVariable]);
@@ -336,27 +333,25 @@ export const CreateEditCollection = ({
       // Add to collection if in edit mode and id exists
       if (mode === "edit" && collectionid) {
         try {
-          await axiosInstance.post(
-            `organization/${orgid}/collection/${collectionid}/item`,
-            {
-              data: {
-                type: "item",
-                attributes: {
-                  key: values.key?.trim(),
-                  value: typeof values.value === "string" ? values.value.trim() : values.value,
-                  sensitive: values.sensitive,
-                  description: values.description?.trim(),
-                  hcl: values.hcl,
-                  category: values.category,
-                },
+          const itemCreate: CreateBody<"item"> = {
+            data: {
+              type: "item",
+              attributes: {
+                key: values.key?.trim(),
+                value: typeof values.value === "string" ? values.value.trim() : values.value,
+                sensitive: values.sensitive,
+                description: values.description?.trim(),
+                hcl: values.hcl,
+                category: values.category,
               },
             },
-            { headers: { "Content-Type": "application/vnd.api+json" } }
-          );
+          };
+          await axiosInstance.post(`organization/${orgid}/collection/${collectionid}/item`, itemCreate, {
+            headers: { "Content-Type": "application/vnd.api+json" },
+          });
 
           // Refresh variables
-          const response = await axiosInstance.get(`organization/${orgid}/collection/${collectionid}/item`);
-          setVariables(response.data.data);
+          setVariables(await api.organization(orgid).collection(collectionid).item().select(ITEM_FIELDS));
           message.success("Variable added");
         } catch (error) {
           message.error(`Could not add the variable: ${getErrorMessage(error)}`);
@@ -373,17 +368,17 @@ export const CreateEditCollection = ({
     }
   };
 
-  const handleEditVariable = (record: any) => {
+  const handleEditVariable = (record: CollectionItemRow) => {
     setVariableMode("edit");
     setEditingVariableId(record.id);
     setAddingVariable(true);
     variableForm.setFieldsValue({
-      key: record.attributes.key?.trim(),
-      value: typeof record.attributes.value === "string" ? record.attributes.value.trim() : record.attributes.value,
-      category: record.attributes.category,
-      description: record.attributes.description?.trim(),
-      hcl: record.attributes.hcl,
-      sensitive: record.attributes.sensitive,
+      key: record.key?.trim(),
+      value: typeof record.value === "string" ? record.value.trim() : undefined,
+      category: record.category,
+      description: record.description?.trim(),
+      hcl: record.hcl,
+      sensitive: record.sensitive,
     });
   };
 
@@ -403,8 +398,7 @@ export const CreateEditCollection = ({
           await axiosInstance.delete(`organization/${orgid}/collection/${collectionid}/item/${variableId}`);
 
           // Refresh variables
-          const response = await axiosInstance.get(`organization/${orgid}/collection/${collectionid}/item`);
-          setVariables(response.data.data);
+          setVariables(await api.organization(orgid).collection(collectionid).item().select(ITEM_FIELDS));
           message.success("Variable deleted");
         } catch (error) {
           message.error(`Could not delete the variable: ${getErrorMessage(error)}`);
@@ -418,17 +412,17 @@ export const CreateEditCollection = ({
     }
   };
 
-  const variableColumns = [
+  const variableColumns: TableColumnsType<CollectionItemRow> = [
     {
       title: "Key",
       key: "key",
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: CollectionItemRow) => (
         <>
-          <span className="collection-mono">{record.attributes.key}</span>
+          <span className="collection-mono">{record.key}</span>
           <span className="collection-variable-meta">
-            {record.attributes.category === "ENV" ? "Environment" : "Terraform"}
-            {record.attributes.hcl && <Tag>HCL</Tag>}
-            {record.attributes.sensitive && <Tag>Sensitive</Tag>}
+            {record.category === "ENV" ? "Environment" : "Terraform"}
+            {record.hcl && <Tag>HCL</Tag>}
+            {record.sensitive && <Tag>Sensitive</Tag>}
           </span>
         </>
       ),
@@ -436,25 +430,25 @@ export const CreateEditCollection = ({
     {
       title: "Value",
       key: "value",
-      render: (_: any, record: any) =>
-        record.attributes.sensitive ? (
+      render: (_: unknown, record: CollectionItemRow) =>
+        record.sensitive ? (
           <Typography.Text type="secondary" italic>
             Sensitive, write only
           </Typography.Text>
         ) : (
-          <span className="collection-mono">{record.attributes.value}</span>
+          <span className="collection-mono">{record.value}</span>
         ),
     },
     {
       title: "Actions",
       key: "actions",
       width: 96,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: CollectionItemRow) => (
         <Space size="small">
           <Button
             type="text"
             icon={<EditOutlined />}
-            aria-label={`Edit variable ${record.attributes.key}`}
+            aria-label={`Edit variable ${record.key}`}
             onClick={() => handleEditVariable(record)}
             disabled={!managePermission}
           />
@@ -462,7 +456,7 @@ export const CreateEditCollection = ({
             type="text"
             danger
             icon={<DeleteOutlined />}
-            aria-label={`Delete variable ${record.attributes.key}`}
+            aria-label={`Delete variable ${record.key}`}
             onClick={() => setPendingDelete(record)}
             disabled={!managePermission}
           />
@@ -532,7 +526,7 @@ export const CreateEditCollection = ({
               value={selectedWorkspaces}
               onChange={setSelectedWorkspaces}
               optionFilterProp="label"
-              options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.attributes.name }))}
+              options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
             />
           </Form.Item>
         </SettingsForm>
@@ -601,7 +595,7 @@ export const CreateEditCollection = ({
         message={
           <>
             Workspaces using this collection will no longer receive{" "}
-            <span className="collection-mono">{pendingDelete?.attributes.key}</span>. This cannot be undone.
+            <span className="collection-mono">{pendingDelete?.key}</span>. This cannot be undone.
           </>
         }
         okText="Delete variable"
