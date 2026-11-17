@@ -1,7 +1,5 @@
-import { message } from "antd";
 import { IconContext } from "react-icons";
 import { SiTerraform } from "react-icons/si";
-import axiosInstance from "../../config/axiosConfig";
 import { withBasePath } from "../../config/basePath";
 
 export const genericHeader = {
@@ -47,41 +45,6 @@ export const atomicHeader = {
     "content-type": 'application/vnd.api+json;ext="https://jsonapi.org/ext/atomic"',
     accept: 'application/vnd.api+json;ext="https://jsonapi.org/ext/atomic"',
   },
-};
-
-// This should be re-written to handle only one webhook
-export const deleteWebhook = (organizationId: string, workspaceId: string, webhook: any) => {
-  const webhooks = Object.entries(webhook);
-  if (webhooks.length == 0) return;
-  const body = {
-    "atomic:operations": [],
-  };
-  webhooks.map(([_, hook]: any) => {
-    const d: unknown = {
-      op: "remove",
-      href: `/organization/${organizationId}/workspace/${workspaceId}/webhook/${hook.id}`,
-    };
-    (body["atomic:operations"] as any).push(d);
-  });
-  try {
-    axiosInstance.post("/operations", body, atomicHeader).then((response) => {
-      if (response.status == 200) {
-        message.success("Webhook deleted successfully");
-      } else {
-        message.error("Webhook deletion failed");
-      }
-    });
-  } catch (error: any) {
-    console.error("Error deleting webhook:", error);
-    message.error("Webhook deletion failed");
-    if (error.response) {
-      if (error.response.status === 424) {
-        message.error(
-          "Failed to delete webhook, please check if the set VCS connection has the correct permissions on the linked repository."
-        );
-      }
-    }
-  }
 };
 
 export const getIaCIconById = (id: string) => {

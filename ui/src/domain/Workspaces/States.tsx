@@ -8,7 +8,6 @@ import ReactFlow, {
   Controls,
   Edge,
   EdgeChange,
-  MarkerType,
   Node,
   NodeChange,
   applyEdgeChanges,
@@ -19,19 +18,23 @@ import JsonViewer from "@/components/display/JsonViewer";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { ORGANIZATION_ARCHIVE } from "../../config/actionTypes";
 import axiosInstance, { axiosClient, getErrorMessage } from "../../config/axiosConfig";
-import { ErrorResource, FlatJobHistory, Resource, StateOutput, StateOutputResource, Workspace } from "../types";
+import { isTerrakubeApiUrl } from "../Jobs/outputUrl";
+import type { Resource, ResourceNodeData } from "../types";
+import type { WorkspaceHistoryRow } from "./workspaceDataUtils";
+import type { WorkspacePageRow } from "./workspaceQuery";
 import { ResourceDrawer } from "../Workspaces/ResourceDrawer";
 import { DownloadState } from "./DownloadState";
 import NodeResource from "./NodeResource";
 import { StateChanges } from "./StateChanges";
 import { diffState } from "./stateDiff";
+import { buildStateDiagram } from "./stateModel";
 
 type Props = {
-  history: FlatJobHistory[];
+  history: WorkspaceHistoryRow[];
   setStateDetailsVisible: (val: boolean) => void;
   stateDetailsVisible: boolean;
-  workspace: Workspace;
-  onRollback: any;
+  workspace: WorkspacePageRow;
+  onRollback: () => void;
   manageState: boolean;
 };
 
@@ -57,9 +60,9 @@ const isApiUrl = (url: string) => stateRequestUrl(url).startsWith(apiUrl("/tfsta
 
 // State files on the Terrakube API need the session token; other storage URLs are fetched without it.
 function fetchJson(url: string): Promise<NonNullable<Loaded>> {
-  return (isApiUrl(url) ? axiosInstance : axiosClient).get(stateRequestUrl(url)).then(
+  return (isApiUrl(url) ? axiosInstance : axiosClient).get<unknown>(stateRequestUrl(url)).then(
     (response) => ({ data: response.data }),
-    (error) => ({ error: getErrorMessage(error) })
+    (error: unknown) => ({ error: getErrorMessage(error) })
   );
 }
 
@@ -74,7 +77,7 @@ function VersionMeta({
   organizationId,
   workspaceId,
 }: {
-  item: FlatJobHistory;
+  item: WorkspaceHistoryRow;
   organizationId: string;
   workspaceId: string;
 }) {
@@ -116,7 +119,7 @@ export const States = ({
   const [activeTab, setActiveTab] = useState("diagram");
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
-  const [nodes, setNodes] = useState<Node<Resource | ErrorResource>[]>([]);
+  const [nodes, setNodes] = useState<Node<ResourceNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [open, setOpen] = useState(false);
   const [resource, setResource] = useState<Resource>();
@@ -138,104 +141,13 @@ export const States = ({
     setResource(record);
   };
 
-  function pushNode(
-    nodes: Node<Resource | ErrorResource>[],
-    dependencies: number,
-    element: StateOutputResource,
-    xmap: any,
-    y: number
-  ) {
-    nodes.push({
-      id: element.address,
-      type: "resourceNode",
-      data: {
-        name: element.name,
-        provider: element.provider_name,
-        type: element.type,
-        values: element.values,
-        depends_on: element.depends_on,
-        showDrawer: showDrawer,
-      },
-      position: { x: xmap.get(dependencies), y: y + dependencies * 130 },
-    });
+  const loadData = (state: unknown) => {
+    const diagram = buildStateDiagram(state, showDrawer);
+    setNodes(diagram.nodes);
+    setEdges(diagram.edges);
+  };
 
-    return nodes;
-  }
-
-  function pushEdge(edges: Edge[], dependencies: number, element: StateOutputResource, elementDependsOn: any[]) {
-    if (dependencies > 0)
-      elementDependsOn.forEach((dep) => {
-        edges.push({
-          id: element.address + "-" + dep,
-          source: element.address,
-          target: dep,
-          className: "normal-edge",
-          animated: true,
-          markerEnd: {
-            type: MarkerType.Arrow,
-          },
-          markerStart: {
-            type: MarkerType.Arrow,
-          },
-          style: { stroke: "var(--tk-accent)" },
-        });
-      });
-
-    return edges;
-  }
-
-  function loadData(resp: StateOutput) {
-    let nodes: Node<Resource | ErrorResource>[] = [];
-    let edges: Edge[] = [];
-    const x = new Map();
-    const y = 100;
-
-    if (resp != null && resp.values != null && resp.values.root_module != null) {
-      try {
-        if (resp.values.root_module.resources != null) {
-          resp.values.root_module.resources.forEach((element) => {
-            let dependencies = 0;
-            if (element.depends_on != null) dependencies = element.depends_on.length;
-            x.set(dependencies, (x.get(dependencies) ? x.get(dependencies) : 0) + 350);
-
-            nodes = pushNode(nodes, dependencies, element, x, y);
-            edges = pushEdge(edges, dependencies, element, element.depends_on);
-          });
-        }
-
-        if (resp.values.root_module.child_modules != null) {
-          resp.values.root_module.child_modules.forEach((child) => {
-            if (child.resources != null)
-              child.resources.forEach((element: StateOutputResource) => {
-                let dependencies = 0;
-                if (element.depends_on != null) dependencies = element.depends_on.length;
-                x.set(dependencies, (x.get(dependencies) ? x.get(dependencies) : 0) + 350);
-
-                nodes = pushNode(nodes, dependencies, element, x, y);
-                edges = pushEdge(edges, dependencies, element, element.depends_on);
-              });
-          });
-        }
-      } catch (error) {
-        console.error(`Failed to build diagram: ${error}`);
-        nodes = [];
-        nodes.push({
-          id: "1",
-          data: {
-            name: "Error Building Diagram",
-            provider: "azurerm",
-            type: "unknown",
-          },
-          position: { x: 0, y: 130 },
-        });
-      }
-    }
-
-    setNodes(nodes);
-    setEdges(edges);
-  }
-
-  const select = (item: FlatJobHistory) => {
+  const select = (item: WorkspaceHistoryRow) => {
     const older = versions[versions.findIndex((v) => v.id === item.id) + 1];
     requested.current = item.id;
     setSelectedId(item.id);
@@ -255,12 +167,12 @@ export const States = ({
     fetchJson(item.output).then(
       latest((loaded) => {
         setStateJson(loaded);
-        if (loaded.data) loadData(loaded.data as StateOutput);
+        if (loaded.data) loadData(loaded.data);
       })
     );
-    if (isApiUrl(item.output)) fetchJson(rawUrl(item.output)).then(latest(setRawState));
+    if (isTerrakubeApiUrl(item.output)) fetchJson(rawUrl(item.output)).then(latest(setRawState));
     else setRawState(UNAVAILABLE);
-    if (older && isApiUrl(older.output)) fetchJson(rawUrl(older.output)).then(latest(setPreviousRawState));
+    if (older && isTerrakubeApiUrl(older.output)) fetchJson(rawUrl(older.output)).then(latest(setPreviousRawState));
     else if (older) setPreviousRawState(UNAVAILABLE);
   };
 
@@ -280,15 +192,18 @@ export const States = ({
   );
 
   const handleRollback = () => {
+    if (!current) {
+      return;
+    }
     setRollingBack(true);
     axiosInstance
-      .put(current!.output.replace("/state/", "/rollback/"))
+      .put(current.output.replace("/state/", "/rollback/"))
       .then(() => {
         message.success(
-          `Rolled back to state version #${current!.id}. Check that the workspace's version is compatible with this state.`
+          `Rolled back to state version #${current.id}. Check that the workspace's version is compatible with this state.`
         );
         setRollbackOpen(false);
-        onRollback(false, false);
+        onRollback();
         setStateDetailsVisible(false);
       })
       .catch((error) => message.error(`Failed to roll back the state: ${getErrorMessage(error)}`))

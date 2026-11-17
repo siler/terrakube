@@ -1,9 +1,12 @@
 import { CheckOutlined, CloseOutlined } from "@ant-design/icons";
 import { Button, Flex, message, Modal, Typography } from "antd";
-import type { AxiosRequestConfig } from "axios";
+import axios, { type AxiosRequestConfig } from "axios";
 import { useEffect, useRef, useState } from "react";
-import axiosInstance, { axiosAuxiliary } from "../../../config/axiosConfig";
+import axiosInstance, { axiosAuxiliary, getErrorMessage } from "../../../config/axiosConfig";
 import { apiUrl } from "@/config/apiUrls";
+import { isRecord } from "@/modules/utils/typeGuards";
+import type { UpdateBody } from "../../api/writeBodies";
+import { normalizePolicyEvaluation } from "../../Jobs/policyEvaluation";
 import { hasBlockingPolicyViolations } from "../../Jobs/policyViolations";
 import {
   computePlanTotals,
@@ -70,13 +73,15 @@ export const CurrentRunApproval = ({
     let retry: ReturnType<typeof setTimeout> | undefined;
     const config: AxiosRequestConfig = { signal: controller.signal, auxClass: "context" };
     axiosAuxiliary
-      .get(`${apiUrl("")}/context/v1/${jobId}`, config)
+      .get<unknown>(`${apiUrl("")}/context/v1/${jobId}`, config)
       .then((response) => {
-        setPlanTotals(computePlanTotals(normalizeStructuredPlanOutput(response?.data?.planStructuredOutput)));
-        setPolicyCheck(hasBlockingPolicyViolations(response?.data?.policyEvaluation) ? "needs-review" : "clear");
+        const context = isRecord(response.data) ? response.data : {};
+        setPlanTotals(computePlanTotals(normalizeStructuredPlanOutput(context.planStructuredOutput)));
+        const evaluation = normalizePolicyEvaluation(context.policyEvaluation);
+        setPolicyCheck(hasBlockingPolicyViolations(evaluation) ? "needs-review" : "clear");
       })
-      .catch((error) => {
-        if (controller.signal.aborted || error?.name === "CanceledError") return;
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || axios.isCancel(error)) return;
         setPolicyCheck("unavailable");
         if (attempt + 1 < MAX_CONTEXT_ATTEMPTS) {
           retry = setTimeout(() => setAttempt(attempt + 1), Math.min(8000, 1000 * 2 ** attempt));
@@ -117,19 +122,18 @@ export const CurrentRunApproval = ({
   const send = (nextStatus: "approved" | "rejected", successText: string, failText: string) => {
     pendingRef.current = true;
     setPending(true);
+    const body: UpdateBody<"job"> = { data: { type: "job", id: jobId, attributes: { status: nextStatus } } };
     return axiosInstance
-      .patch(
-        `organization/${organizationId}/job/${jobId}`,
-        { data: { type: "job", id: jobId, attributes: { status: nextStatus } } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      )
+      .patch(`organization/${organizationId}/job/${jobId}`, body, {
+        headers: { "Content-Type": "application/vnd.api+json" },
+      })
       .then(() => {
         message.success(successText);
         setConfirm(null);
         onChanged();
       })
-      .catch((error) => {
-        message.error(`${failText}: ${error?.response?.data?.errors?.[0]?.detail ?? error.message}`);
+      .catch((error: unknown) => {
+        message.error(`${failText}: ${getErrorMessage(error)}`);
       })
       .finally(() => {
         pendingRef.current = false;

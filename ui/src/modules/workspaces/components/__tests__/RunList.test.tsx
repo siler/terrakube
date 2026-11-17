@@ -1,42 +1,78 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import RunList from "../RunList";
-import { FlatJob, JobStatus } from "@/domain/types";
-import { ORGANIZATION_ARCHIVE } from "@/config/actionTypes";
+import { JobStatus } from "@/domain/generated/apiResources";
+import { JobVia } from "@/domain/types";
+import type { WorkspaceJobRow } from "@/domain/Workspaces/workspaceDataUtils";
+import type { OrgTemplateRow } from "@/domain/Workspaces/workspaceQuery";
 
-jest.mock("@/config/axiosConfig", () => ({
-  __esModule: true,
-  default: {
-    get: jest.fn().mockResolvedValue({ data: { data: [{ id: "tpl-1", attributes: { name: "Plan and Apply" } }] } }),
-  },
-}));
+const planAndApply: OrgTemplateRow = { id: "tpl-1", name: "Plan and Apply", tcl: null, description: null };
 
-const job = (id: string, status: JobStatus, extra: Partial<FlatJob> = {}): FlatJob => ({
+const job = (id: string, status: JobStatus, extra: Partial<WorkspaceJobRow> = {}): WorkspaceJobRow => ({
   id,
   title: `Run ${id} title`,
   status,
+  via: JobVia.Ui,
+  approvalTeam: "",
   latestChange: "2 hours ago",
   createdBy: "admin@example.com",
   commitId: "937b249da41c50a9e944f7205e95f694842c5394",
   createdDate: "2026-10-04T10:00:00Z",
   updatedDate: "2026-10-04T10:01:05Z",
   templateReference: "tpl-1",
+  approvedBy: null,
+  approvedAt: null,
+  comments: null,
+  prCommentError: null,
   ...extra,
 });
 
-const renderList = (jobs: FlatJob[]) =>
+const renderList = (jobs: WorkspaceJobRow[], templates: OrgTemplateRow[] | null = [planAndApply]) =>
   render(
     <MemoryRouter>
-      <RunList jobs={jobs} onRunClick={jest.fn()} runLink={(id) => `/runs/${id}`} />
+      <RunList jobs={jobs} templates={templates} onRunClick={jest.fn()} runLink={(id) => `/runs/${id}`} />
     </MemoryRouter>
   );
 
 describe("RunList", () => {
-  beforeEach(() => sessionStorage.clear());
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it("restores a stored template filter", () => {
+    sessionStorage.setItem("runsTemplateFilter", JSON.stringify(["tpl-2"]));
+    renderList([job("1", JobStatus.completed), job("2", JobStatus.completed, { templateReference: "tpl-2" })]);
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Run 2 title" })).toBeInTheDocument();
+  });
+
+  it.each([["{not json"], ['{"tpl-1":true}'], ['"tpl-1"'], ["[1,2]"]])(
+    "ignores a stored template filter that is not a list of ids: %s",
+    (stored) => {
+      sessionStorage.setItem("runsTemplateFilter", stored);
+      renderList([job("1", JobStatus.completed), job("2", JobStatus.completed, { templateReference: "tpl-2" })]);
+
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    }
+  );
+
+  it("names templates from the list it is given", () => {
+    const templates: OrgTemplateRow[] = [{ id: "tpl-1", name: "Given template", tcl: null, description: null }];
+    renderList([job("1", JobStatus.completed)], templates);
+
+    expect(screen.getByText("Given template")).toBeInTheDocument();
+  });
+
+  it("lists runs without template names while the parent is still loading templates", () => {
+    renderList([job("1", JobStatus.completed)], null);
+
+    expect(screen.getByRole("link", { name: "Run 1 title" })).toBeInTheDocument();
+    expect(screen.queryByText("Plan and Apply")).not.toBeInTheDocument();
+  });
 
   it("shows the count, only statuses that have runs, and a byline with commit and duration", async () => {
-    sessionStorage.setItem(ORGANIZATION_ARCHIVE, "org-1");
-    renderList([job("1", JobStatus.Completed), job("2", JobStatus.Failed), job("3", JobStatus.Completed)]);
+    renderList([job("1", JobStatus.completed), job("2", JobStatus.failed), job("3", JobStatus.completed)]);
 
     expect(screen.getByRole("heading", { name: "Runs (3)" })).toBeInTheDocument();
     const chips = within(screen.getByRole("group", { name: "Filter by status" }));
@@ -54,7 +90,7 @@ describe("RunList", () => {
   });
 
   it("filters by status and search, and clears back to every run", () => {
-    renderList([job("1", JobStatus.Completed), job("2", JobStatus.Failed)]);
+    renderList([job("1", JobStatus.completed), job("2", JobStatus.failed)]);
 
     fireEvent.click(screen.getByRole("button", { name: "Failed 1" }));
     expect(screen.getAllByRole("listitem")).toHaveLength(1);

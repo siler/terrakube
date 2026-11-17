@@ -1,11 +1,16 @@
 import { DeleteOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { createdResourceId } from "@/domain/api/parseDocument";
 import { Alert, Button, Collapse, Form, Input, Select, Tooltip, message } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ORGANIZATION_ARCHIVE, WORKSPACE_ARCHIVE } from "../../config/actionTypes";
-import axiosInstance from "../../config/axiosConfig";
-import { Resource, Template } from "../types";
+import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { api, fields } from "@/domain/generated/apiPaths";
+import type { CreateBody } from "@/domain/api/writeBodies";
+import type { Row } from "@/domain/api/fieldSelection";
+import { Resource } from "../types";
 import { buildResourceOptions } from "../Workspaces/workspaceDataUtils";
+import type { OrgTemplateRow } from "../Workspaces/workspaceQuery";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
 import { CrudFormModal } from "@/components/modals/CrudFormModal";
 import { RadioChoices } from "@/components/settings/RadioChoices";
@@ -15,15 +20,20 @@ import "./Create.css";
 
 const validateMessages = { required: "${label} is required" };
 
-const isDestroyTemplate = (template: Template) => template.attributes.name.includes("Destroy");
+const isDestroyTemplate = (template: OrgTemplateRow) => Boolean(template.name?.includes("Destroy"));
 
-const templateLabel = (template: Template) =>
+const WORKSPACE_FIELDS = fields.workspace("branch", "defaultTemplate", "restrictApplyToConfiguredBranch");
+type RunWorkspaceRow = Row<typeof WORKSPACE_FIELDS>;
+
+const CLI_TEMPLATE_NAMES = ["Terraform-Plan/Apply-Cli", "Terraform-Plan/Destroy-Cli"];
+
+const templateLabel = (template: OrgTemplateRow) =>
   isDestroyTemplate(template) ? (
     <span className="run-template--destroy">
-      <DeleteOutlined aria-hidden /> {template.attributes.name}
+      <DeleteOutlined aria-hidden /> {template.name}
     </span>
   ) : (
-    template.attributes.name
+    template.name
   );
 
 type Props = {
@@ -35,6 +45,10 @@ type Props = {
   // The workspace's current state resources, offered as selectable options for
   // Target/Replace resources below (in addition to freely typing an address).
   resources?: Resource[];
+  /** Organization templates from the parent, null while it loads them. */
+  templates: OrgTemplateRow[] | null;
+  /** Called as the dialog opens, so the parent can refresh templates someone else may have changed. */
+  onOpen?: () => void;
 };
 
 type CreateJobForm = {
@@ -44,18 +58,28 @@ type CreateJobForm = {
   replaceAddrs?: string[];
 };
 
-export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources }: Props) => {
+export const CreateJob = ({
+  changeJob,
+  planJob = true,
+  disabledReason,
+  resources,
+  templates: organizationTemplates,
+  onOpen,
+}: Props) => {
   const navigate = useNavigate();
   const workspaceId = sessionStorage.getItem(WORKSPACE_ARCHIVE);
   const organizationId = sessionStorage.getItem(ORGANIZATION_ARCHIVE);
   const [visible, setVisible] = useState(false);
   const [form] = Form.useForm<CreateJobForm>();
-  const [defaultTemplate, setDefaultTemplate] = useState();
-  const [templates, setTemplates] = useState<Template[]>([]);
+  const [defaultTemplate, setDefaultTemplate] = useState<string>();
   const [branchName, setBranchName] = useState("");
   const [restrictApply, setRestrictApply] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const loading = organizationTemplates === null;
+  const templates = useMemo(
+    () => (organizationTemplates ?? []).filter((item) => !CLI_TEMPLATE_NAMES.includes(item.name ?? "")),
+    [organizationTemplates]
+  );
   const resourceOptions = useMemo(() => buildResourceOptions(resources ?? []), [resources]);
   const selectedBranch = Form.useWatch("branchName", form);
   // A workspace that restricts apply to its configured branch only runs plan-only templates on another branch.
@@ -63,58 +87,59 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
   const effectiveBranch = selectedBranch?.trim() ? selectedBranch : branchName;
   const onOtherBranch = restrictApply && configuredBranch(effectiveBranch) !== configuredBranch(branchName);
   const availableTemplates = useMemo(
-    () => (onOtherBranch ? templates.filter((item) => isPlanOnlyTemplate(item.attributes.tcl)) : templates),
+    () => (onOtherBranch ? templates.filter((item) => isPlanOnlyTemplate(item.tcl ?? undefined)) : templates),
     [onOtherBranch, templates]
   );
   const selectedTemplate = Form.useWatch("templateId", form);
 
+  // Also covers a selected template that a refresh shows was deleted.
   useEffect(() => {
-    if (onOtherBranch && !availableTemplates.some((item) => item.id === selectedTemplate)) {
+    if (loading || (!onOtherBranch && !selectedTemplate)) {
+      return;
+    }
+    if (!availableTemplates.some((item) => item.id === selectedTemplate)) {
       form.setFieldsValue({ templateId: availableTemplates[0]?.id });
     }
-  }, [onOtherBranch, availableTemplates, selectedTemplate, form]);
+  }, [loading, onOtherBranch, availableTemplates, selectedTemplate, form]);
 
   const onCancel = () => {
     setVisible(false);
   };
 
   useEffect(() => {
-    setLoading(true);
-    loadTemplates();
-    loadBranch();
+    void loadBranch();
   }, [organizationId]);
 
-  const loadBranch = () => {
-    axiosInstance.get(`organization/${organizationId}/workspace/${workspaceId}`).then((response) => {
-      const { branch, defaultTemplate, restrictApplyToConfiguredBranch } = response.data.data.attributes;
+  const loadBranch = async () => {
+    if (!organizationId || !workspaceId) {
+      return;
+    }
+    try {
+      const workspace: RunWorkspaceRow = await api
+        .organization(organizationId)
+        .workspace(workspaceId)
+        .select(WORKSPACE_FIELDS);
       // Runs use the first entry of the workspace branch, so that is the one to offer.
-      const firstBranch = configuredBranch(branch);
-      setDefaultTemplate(defaultTemplate);
+      const firstBranch = configuredBranch(workspace.branch);
+      setDefaultTemplate(workspace.defaultTemplate ?? undefined);
       setBranchName(firstBranch);
-      setRestrictApply(Boolean(restrictApplyToConfiguredBranch));
-      form.setFieldsValue({ templateId: defaultTemplate, branchName: firstBranch });
-    });
-  };
-
-  const loadTemplates = () => {
-    axiosInstance.get(`organization/${organizationId}/template`).then((response) => {
-      const templatesList = response.data.data.filter(function (obj: Template) {
-        //exclude CLI based templates
-        return (
-          obj.attributes.name !== "Terraform-Plan/Apply-Cli" && obj.attributes.name !== "Terraform-Plan/Destroy-Cli"
-        );
-      });
-      setTemplates(templatesList);
-      setLoading(false);
-    });
+      setRestrictApply(Boolean(workspace.restrictApplyToConfiguredBranch));
+      form.setFieldsValue({ templateId: workspace.defaultTemplate ?? undefined, branchName: firstBranch });
+    } catch (error) {
+      message.error(`Could not load the workspace branch: ${getErrorMessage(error)}`);
+    }
   };
 
   const onCreate = (values: CreateJobForm) => {
+    if (!organizationId || !workspaceId) {
+      message.error("Could not start the run: no workspace is selected");
+      return;
+    }
     // Close modal immediately — don't make user wait
     setVisible(false);
     setSubmitting(true);
 
-    const body = {
+    const body: CreateBody<"job"> = {
       data: {
         type: "job",
         attributes: {
@@ -136,23 +161,25 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
     };
 
     axiosInstance
-      .post(`organization/${organizationId}/job`, body, {
+      .post<unknown>(`organization/${organizationId}/job`, body, {
         headers: {
           "Content-Type": "application/vnd.api+json",
         },
       })
       .then((response) => {
-        const newJobId = response.data.data.id;
         setSubmitting(false);
+        const newJobId = createdResourceId(response.data);
+        if (newJobId == null) {
+          message.error("Could not start the run: the server did not return the new run id");
+          return;
+        }
         changeJob(newJobId);
 
-        if (organizationId && workspaceId) {
-          navigate(`/organizations/${organizationId}/workspaces/${workspaceId}/runs/${newJobId}`);
-        }
+        navigate(`/organizations/${organizationId}/workspaces/${workspaceId}/runs/${newJobId}`);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         setSubmitting(false);
-        message.error("Could not start the run: " + (error?.response?.data?.errors?.[0]?.detail ?? error.message));
+        message.error(`Could not start the run: ${getErrorMessage(error)}`);
       });
   };
 
@@ -163,7 +190,8 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
           type="primary"
           htmlType="button"
           onClick={() => {
-            loadBranch();
+            void loadBranch();
+            onOpen?.();
             setVisible(true);
           }}
           icon={<PlayCircleOutlined />}
@@ -197,16 +225,14 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
           />
         )}
         <Form.Item name="templateId" label="Template" rules={[{ required: true }]} initialValue={defaultTemplate}>
-          {loading || !templates ? (
+          {loading ? (
             <LoadingFallback />
           ) : availableTemplates.length <= 3 ? (
             <RadioChoices
               options={availableTemplates.map((item) => ({
                 value: item.id,
                 label: templateLabel(item),
-                help: isDestroyTemplate(item)
-                  ? "Destroys every resource this workspace manages."
-                  : item.attributes.description,
+                help: isDestroyTemplate(item) ? "Destroys every resource this workspace manages." : item.description,
               }))}
             />
           ) : (

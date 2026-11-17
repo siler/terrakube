@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { Tag } from "antd";
 import { statusColors } from "@/modules/workspaces/utils/workspaceStatusColors";
 import { getWorkspaceStatusIcon } from "@/modules/workspaces/utils/workspaceStatusIcon";
@@ -13,7 +12,7 @@ export default function WorkspaceStatusTag({ status }: Props) {
     <Tag
       icon={getWorkspaceStatusIcon(status)}
       className="tk-status-tag"
-      style={{ "--status-color": status && statusColors[status] } as CSSProperties}
+      style={{ "--status-color": status && statusColors[status] }}
     >
       {getWorkspaceStatusText(status)}
     </Tag>
