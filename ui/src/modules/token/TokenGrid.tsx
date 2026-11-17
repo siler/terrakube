@@ -1,23 +1,25 @@
 import { Alert, Flex, Typography } from "antd";
 import { useState } from "react";
-import { UserToken } from "@/modules/user/types";
+import { ApiResponse } from "@/modules/api/types";
+import { GridToken } from "./types";
 import TokenGridItem from "./TokenGridItem";
 import "./TokenList.css";
 import useApiRequest from "@/modules/api/useApiRequest";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 
 type Props = {
-  tokens: UserToken[];
+  tokens: GridToken[];
   onDeleted: () => void;
-  action: (id: string) => Promise<ApiResponse<undefined>>;
+  action: (id: string) => Promise<ApiResponse<unknown>>;
   // Hide the count heading when the page already titles the section.
   hideTitle?: boolean;
 };
 
 export default function TokenGrid({ tokens, action, onDeleted, hideTitle }: Props) {
-  const [pendingDelete, setPendingDelete] = useState<UserToken | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<GridToken | null>(null);
   const { loading, execute, error } = useApiRequest({
     action: action,
+    returnsData: false,
     onReturn: () => {
       onDeleted();
     },

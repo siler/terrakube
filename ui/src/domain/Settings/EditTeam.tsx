@@ -1,11 +1,14 @@
 import { Alert, Button, Flex, Form, Input, Spin, message } from "antd";
 import CreatePatModal from "@/components/modals/CreatePatModal";
-import { CreateTokenForm } from "@/modules/token/types";
+import { CreatedToken, CreateTokenForm } from "@/modules/token/types";
 import TokenGrid from "@/modules/token/TokenGrid";
 import { apiDelete, apiGet, apiPost } from "@/modules/api/apiWrapper";
+import { ApiResponse } from "@/modules/api/types";
+import { parseCreatedToken, parseCurrentTeams, parseTeamTokens } from "@/modules/token/parse";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { api, fields, type CreateBody, type FormValues, type UpdateBody } from "../api";
 import { TeamToken } from "../types";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Settings.css";
@@ -16,6 +19,24 @@ import { SettingsForm } from "@/components/settings/SettingsForm";
 import { IdField } from "@/components/settings/IdField";
 import { DangerZone } from "@/components/settings/DangerZone";
 
+// The form seeds every permission, so the team's whole attribute set is requested.
+const TEAM_EDIT_FIELDS = fields.team(
+  "name",
+  "manageState",
+  "manageProvider",
+  "manageModule",
+  "manageWorkspace",
+  "manageVcs",
+  "manageTemplate",
+  "manageCollection",
+  "managePolicies",
+  "manageJob",
+  "role",
+  "planJob",
+  "approveJob",
+  "destroyJob"
+);
+
 type Props = {
   mode: "edit" | "create";
   setMode: React.Dispatch<React.SetStateAction<"list" | "edit" | "create">>;
@@ -25,28 +46,29 @@ type Props = {
   managePermission?: boolean;
 };
 
-type CreateTeamForm = {
-  name: string;
-} & UpdateTeamForm;
-
-type UpdateTeamForm = {
-  manageCollection: boolean;
-  managePolicies: boolean;
-  manageJob: boolean;
-  manageModule: boolean;
-  manageProvider: boolean;
-  manageState: boolean;
-  manageTemplate: boolean;
-  manageVcs: boolean;
-  manageWorkspace: boolean;
-  role?: string;
-  planJob?: boolean;
-  approveJob?: boolean;
-  destroyJob?: boolean;
+// The permission checkboxes always reach the form; role and the job permissions stay optional because a V1
+// backend may not report them.
+type UpdateTeamForm = Pick<
+  FormValues<"team">,
+  | "manageCollection"
+  | "manageJob"
+  | "manageModule"
+  | "managePolicies"
+  | "manageProvider"
+  | "manageState"
+  | "manageTemplate"
+  | "manageVcs"
+  | "manageWorkspace"
+> & {
+  [K in "role" | "planJob" | "approveJob" | "destroyJob"]?: FormValues<"team">[K];
 };
 
+type CreateTeamForm = { name: FormValues<"team">["name"] } & UpdateTeamForm;
+
+type CreateTeamTokenBody = CreateTokenForm & { group: string };
+
 export const EditTeam = ({ mode, setMode, teamId, loadTeams, onDeleteTeam, managePermission = true }: Props) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loadingTokens, setLoadingTokens] = useState(true);
@@ -68,48 +90,44 @@ export const EditTeam = ({ mode, setMode, teamId, loadTeams, onDeleteTeam, manag
     }
   }, [teamId]);
 
-  const loadTeam = (id: string) => {
-    axiosInstance
-      .get(`organization/${orgid}/team/${id}`)
-      .then((response) => {
-        const name = response.data.data.attributes.name;
-        setTeamName(name);
-        const attrs = response.data.data.attributes;
-        form.setFieldsValue({
-          manageState: attrs.manageState,
-          manageProvider: attrs.manageProvider,
-          manageModule: attrs.manageModule,
-          manageWorkspace: attrs.manageWorkspace,
-          manageVcs: attrs.manageVcs,
-          manageTemplate: attrs.manageTemplate,
-          manageCollection: attrs.manageCollection,
-          managePolicies: attrs.managePolicies,
-          manageJob: attrs.manageJob,
-          role: attrs.role || "custom",
-          planJob: attrs.planJob ?? attrs.manageJob,
-          approveJob: attrs.approveJob ?? attrs.manageJob,
-          // Undefined for a Terrakube that does not have the permission, so it is not sent back.
-          destroyJob: attrs.destroyJob,
-        });
-        setError(null);
-        if (name) {
-          loadTokens(name);
-          loadUserTeams(name);
-        }
-      })
-      .catch((err) => {
-        setError(getErrorMessage(err));
-      })
-      .finally(() => {
-        setLoading(false);
+  const loadTeam = async (id: string) => {
+    try {
+      const team = await api.organization(orgid).team(id).select(TEAM_EDIT_FIELDS);
+      const name = team.name;
+      setTeamName(name);
+      form.setFieldsValue({
+        manageState: team.manageState,
+        manageProvider: team.manageProvider,
+        manageModule: team.manageModule,
+        manageWorkspace: team.manageWorkspace,
+        manageVcs: team.manageVcs,
+        manageTemplate: team.manageTemplate,
+        manageCollection: team.manageCollection,
+        managePolicies: team.managePolicies,
+        manageJob: team.manageJob,
+        role: team.role || "custom",
+        planJob: team.planJob ?? team.manageJob,
+        approveJob: team.approveJob ?? team.manageJob,
+        // Undefined for a Terrakube that does not have the permission, so it is not sent back.
+        destroyJob: team.destroyJob,
       });
+      setError(null);
+      if (name) {
+        loadTokens(name);
+        loadUserTeams(name);
+      }
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const onCreate = (values: CreateTeamForm) => {
     // Keep manageJob in sync with planJob/approveJob for backward compatibility
     // with V1 backends that only read the manageJob field.
     const manageJob = values.planJob || values.approveJob || false;
-    const body = {
+    const body: CreateBody<"team"> = {
       data: {
         type: "team",
         attributes: {
@@ -151,10 +169,14 @@ export const EditTeam = ({ mode, setMode, teamId, loadTeams, onDeleteTeam, manag
   };
 
   const onUpdate = (values: UpdateTeamForm) => {
+    if (!teamId) {
+      message.error("Could not save the team: no team is selected");
+      return;
+    }
     // Keep manageJob in sync with planJob/approveJob for backward compatibility
     // with V1 backends that only read the manageJob field.
     const manageJob = values.planJob || values.approveJob || false;
-    const body = {
+    const body: UpdateBody<"team"> = {
       data: {
         type: "team",
         id: teamId,
@@ -196,8 +218,8 @@ export const EditTeam = ({ mode, setMode, teamId, loadTeams, onDeleteTeam, manag
   const onFinish = (values: CreateTeamForm | UpdateTeamForm) => {
     if (mode === "edit") {
       onUpdate(values);
-    } else {
-      onCreate(values as CreateTeamForm);
+    } else if ("name" in values) {
+      onCreate(values);
     }
   };
 
@@ -221,24 +243,31 @@ export const EditTeam = ({ mode, setMode, teamId, loadTeams, onDeleteTeam, manag
     return response;
   };
 
-  const onCreateToken = async (values: CreateTokenForm) => {
-    return await apiPost("/access-token/v1/teams", { ...values, group: teamName });
+  const onCreateToken = async (values: CreateTokenForm): Promise<ApiResponse<CreatedToken>> => {
+    if (!teamName) {
+      return { isError: true, error: { message: "The team has not loaded yet" }, responseCode: 400 };
+    }
+    return await apiPost<CreateTeamTokenBody, CreatedToken>(
+      "/access-token/v1/teams",
+      { ...values, group: teamName },
+      parseCreatedToken
+    );
   };
 
   const loadTokens = async (teamName?: string) => {
     if (!teamName) return;
-    const response = await apiGet("/access-token/v1/teams");
+    const response = await apiGet("/access-token/v1/teams", parseTeamTokens);
     if (response.isError) {
       console.error("Failed to load team tokens:", response.error);
     } else {
-      setTokens(response.data.filter((token: any) => token.group === teamName));
+      setTokens(response.data.filter((token) => token.group === teamName));
     }
     setLoadingTokens(false);
   };
 
   const loadUserTeams = async (teamName: string) => {
-    const response = await apiGet("/access-token/v1/teams/current-teams");
-    if (!response.isError && response.data?.groups?.includes(teamName)) {
+    const response = await apiGet("/access-token/v1/teams/current-teams", parseCurrentTeams);
+    if (!response.isError && response.data.groups.includes(teamName)) {
       setCreateTokenDisabled(false);
     }
   };

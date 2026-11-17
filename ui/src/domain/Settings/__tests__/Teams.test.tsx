@@ -6,11 +6,23 @@ import { TeamSettings } from "../Teams";
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
   default: { get: jest.fn(), delete: jest.fn() },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message ? err.message : "Error"),
   isPermissionError: () => false,
 }));
 
 jest.mock("../EditTeam", () => ({ EditTeam: () => <div /> }));
+
+const get = jest.mocked(axiosInstance.get);
+
+// Every boolean the permission summary reads is selected; the name and role label the table.
+const TEAM_LIST =
+  "organization/org-1/team?fields[team]=name,role,manageWorkspace,manageState,manageModule,manageProvider,manageTemplate,manageVcs,manageCollection,managePolicies,planJob,approveJob,destroyJob";
+
+// Answers only the exact URLs given, so a request that drops a field or filter fails the test.
+const respondTo = (routes: Record<string, unknown>) =>
+  get.mockImplementation((url: string) =>
+    url in routes ? Promise.resolve({ data: routes[url] }) : Promise.reject(new Error(`Unexpected GET ${url}`))
+  );
 
 const team = (id: string, name: string, attributes: Record<string, unknown> = {}) => ({
   id,
@@ -30,8 +42,8 @@ describe("TeamSettings list", () => {
   beforeEach(() => jest.clearAllMocks());
 
   it("lists teams with a count, role and permission summary", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({
-      data: {
+    respondTo({
+      [TEAM_LIST]: {
         data: [
           team("t-1", "PLATFORM", { role: "admin" }),
           team("t-2", "DEVS", { role: "custom", manageWorkspace: true, planJob: true }),
@@ -49,8 +61,15 @@ describe("TeamSettings list", () => {
     expect(screen.getByText("Can manage workspaces, plan runs.")).toBeInTheDocument();
   });
 
+  it("labels a role it does not recognise with the raw role name", async () => {
+    respondTo({ [TEAM_LIST]: { data: [team("t-1", "PLATFORM", { role: "owner" })] } });
+    renderTeams();
+
+    expect(await screen.findByText("owner")).toBeInTheDocument();
+  });
+
   it("shows an empty state instead of an empty table", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: { data: [] } });
+    respondTo({ [TEAM_LIST]: { data: [] } });
     renderTeams();
 
     expect(await screen.findByText(/No teams yet/)).toBeInTheDocument();
@@ -58,8 +77,8 @@ describe("TeamSettings list", () => {
   });
 
   it("deletes a team only after its name is typed", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: { data: [team("t-1", "PLATFORM", { role: "read" })] } });
-    (axiosInstance.delete as jest.Mock).mockResolvedValue({});
+    respondTo({ [TEAM_LIST]: { data: [team("t-1", "PLATFORM", { role: "read" })] } });
+    jest.mocked(axiosInstance.delete).mockResolvedValue({});
     renderTeams();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete team PLATFORM" }));
