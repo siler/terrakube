@@ -1,10 +1,10 @@
 import { Row, Col } from "antd";
 import OrganizationGridItem from "./OrganizationGridItem";
 import "./OrganizationGrid.css";
-import { OrganizationModel } from "@/modules/organizations/types";
+import { FlatOrganization } from "@/domain/types";
 
 type Props = {
-  organizations: OrganizationModel[];
+  organizations: FlatOrganization[];
 };
 
 export default function OrganizationGrid({ organizations }: Props) {

@@ -2,7 +2,7 @@ import { Input, Typography, Pagination } from "antd";
 import { CaretUpOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
-import { OrganizationModel } from "../../types";
+import { FlatOrganization } from "@/domain/types";
 import { parseIconField, getOrgIcon } from "../../utils/orgIcon";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "@/config/actionTypes";
 import { WORKSPACE_STATUS_PALETTE } from "@/modules/workspaces/utils/workspaceStatusPalette";
@@ -18,7 +18,7 @@ const BREAKDOWN_STATUSES = WORKSPACE_STATUS_PALETTE.filter(
 );
 
 type Props = {
-  organizations: OrganizationModel[];
+  organizations: FlatOrganization[];
 };
 
 type OrgSortOption =
@@ -38,23 +38,23 @@ function activateOnKey(e: KeyboardEvent, callback: () => void) {
   }
 }
 
-function compareByName(a: OrganizationModel, b: OrganizationModel): number {
+function compareByName(a: FlatOrganization, b: FlatOrganization): number {
   return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
 }
 
-function compareByWorkspaceCount(a: OrganizationModel, b: OrganizationModel): number {
+function compareByWorkspaceCount(a: FlatOrganization, b: FlatOrganization): number {
   return (a.workspaceCount ?? 0) - (b.workspaceCount ?? 0);
 }
 
-function compareByDescription(a: OrganizationModel, b: OrganizationModel): number {
+function compareByDescription(a: FlatOrganization, b: FlatOrganization): number {
   return (a.description ?? "").toLowerCase().localeCompare((b.description ?? "").toLowerCase());
 }
 
-function compareByExecutionMode(a: OrganizationModel, b: OrganizationModel): number {
+function compareByExecutionMode(a: FlatOrganization, b: FlatOrganization): number {
   return (a.executionMode ?? "").toLowerCase().localeCompare((b.executionMode ?? "").toLowerCase());
 }
 
-function sortOrganizations(organizations: OrganizationModel[], option: OrgSortOption): OrganizationModel[] {
+function sortOrganizations(organizations: FlatOrganization[], option: OrgSortOption): FlatOrganization[] {
   const list = [...organizations];
   switch (option) {
     case "name_asc":
@@ -111,7 +111,7 @@ function SortableHeader({
   );
 }
 
-function OrganizationRow({ organization }: { organization: OrganizationModel }) {
+function OrganizationRow({ organization }: { organization: FlatOrganization }) {
   const { iconName, color } = parseIconField(organization.icon, organization.id);
   const statusCounts = organization.workspaceStatusCounts ?? {};
   const statusBreakdown = BREAKDOWN_STATUSES.filter((entry) => (statusCounts[entry.value] ?? 0) > 0);
@@ -147,7 +147,7 @@ function OrganizationRow({ organization }: { organization: OrganizationModel }) 
               <span
                 key={entry.value}
                 className="organization-status-badge"
-                style={{ "--organization-status-color": entry.color } as React.CSSProperties}
+                style={{ "--organization-status-color": entry.color }}
                 title={`${entry.label}: ${statusCounts[entry.value]}`}
               >
                 {entry.icon}

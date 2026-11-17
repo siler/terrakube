@@ -3,6 +3,12 @@ import OrganizationsDetailPage from "../OrganizationDetailsPage";
 import workspaceService from "@/modules/workspaces/workspaceService";
 import projectService from "@/modules/projects/projectService";
 import { message } from "antd";
+import { useOrganizationJobStatusSubscription } from "@/hooks";
+import type { ComponentProps } from "react";
+import type WorkspaceTable from "@/modules/workspaces/components/WorkspaceTable/WorkspaceTable";
+import type { WorkspacePageResult } from "@/modules/workspaces/workspaceService";
+import type { ApiSuccess } from "@/modules/api/types";
+import { workspaceListItem } from "@/testUtils/workspaceListItem";
 
 jest.mock("react-router-dom", () => ({
   useParams: () => ({ id: "org-2" }),
@@ -24,44 +30,62 @@ jest.mock("@/components/layout/PageWrapper/PageWrapper", () => ({
 jest.mock("@/config/authConfig", () => ({ useAuth: () => ({ user: { profile: { sub: "user-1" } } }) }));
 jest.mock("@/hooks", () => ({ usePolling: jest.fn(), useOrganizationJobStatusSubscription: jest.fn() }));
 jest.mock("@/modules/workspaces/components/WorkspaceFilter", () => () => null);
-let tableProps: any;
-jest.mock("@/modules/workspaces/components/WorkspaceTable/WorkspaceTable", () => (props: any) => {
-  tableProps = props;
-  return null;
-});
-jest.mock("antd", () => ({ ...jest.requireActual("antd"), message: { error: jest.fn() } }));
+let tableProps: ComponentProps<typeof WorkspaceTable> | undefined;
+jest.mock(
+  "@/modules/workspaces/components/WorkspaceTable/WorkspaceTable",
+  () => (props: ComponentProps<typeof WorkspaceTable>) => {
+    tableProps = props;
+    return null;
+  }
+);
+jest.mock("antd", () => ({ ...jest.requireActual<typeof import("antd")>("antd"), message: { error: jest.fn() } }));
 jest.mock("@/modules/workspaces/workspaceService", () => ({ listWorkspacePage: jest.fn() }));
 jest.mock("@/modules/projects/projectService", () => ({ listProjects: jest.fn() }));
 
-const emptyPage = {
+const listWorkspacePage = jest.mocked(workspaceService.listWorkspacePage);
+const listProjects = jest.mocked(projectService.listProjects);
+
+const emptyPage: ApiSuccess<WorkspacePageResult> = {
   isError: false,
+  responseCode: 200,
   data: {
     organizationName: "org",
     workspaces: [],
-    pageInfo: { hasNextPage: false, totalRecords: 0 },
+    pageInfo: { endCursor: undefined, hasNextPage: false, totalRecords: 0 },
     statusCounts: {},
     policyCounts: {},
   },
 };
 
+/** Fails the test when the value the page should have passed down is missing. */
+const defined = <T,>(value: T | undefined, name: string): T => {
+  if (value === undefined) {
+    throw new Error(`Expected ${name} to be defined`);
+  }
+  return value;
+};
+
+const table = () => defined(tableProps, "WorkspaceTable props");
+
 describe("OrganizationDetailsPage project filter", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     sessionStorage.clear();
-    (workspaceService.listWorkspacePage as jest.Mock).mockResolvedValue(emptyPage);
+    listWorkspacePage.mockResolvedValue(emptyPage);
   });
 
   it("drops a project filter left over from another organization", async () => {
     sessionStorage.setItem("projectFilter", "project-from-org-1");
-    (projectService.listProjects as jest.Mock).mockResolvedValue({
+    listProjects.mockResolvedValue({
       isError: false,
-      data: [{ id: "project-2", name: "P2" }],
+      responseCode: 200,
+      data: [{ id: "project-2", name: "P2", description: undefined }],
     });
 
     render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
 
     await waitFor(() =>
-      expect(workspaceService.listWorkspacePage).toHaveBeenLastCalledWith(
+      expect(listWorkspacePage).toHaveBeenLastCalledWith(
         expect.objectContaining({ organizationId: "org-2", projectId: null }),
         expect.anything()
       )
@@ -71,52 +95,47 @@ describe("OrganizationDetailsPage project filter", () => {
 
   it("keeps a project filter that belongs to the organization", async () => {
     sessionStorage.setItem("projectFilter", "project-2");
-    (projectService.listProjects as jest.Mock).mockResolvedValue({
+    listProjects.mockResolvedValue({
       isError: false,
-      data: [{ id: "project-2", name: "P2" }],
+      responseCode: 200,
+      data: [{ id: "project-2", name: "P2", description: undefined }],
     });
 
     render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
 
-    await waitFor(() => expect(projectService.listProjects).toHaveBeenCalled());
-    await waitFor(() => expect(workspaceService.listWorkspacePage).toHaveBeenCalled());
-    expect(
-      (workspaceService.listWorkspacePage as jest.Mock).mock.calls.every(
-        ([request]) => request.projectId === "project-2"
-      )
-    ).toBe(true);
+    await waitFor(() => expect(listProjects).toHaveBeenCalled());
+    await waitFor(() => expect(listWorkspacePage).toHaveBeenCalled());
+    expect(listWorkspacePage.mock.calls.every(([request]) => request.projectId === "project-2")).toBe(true);
   });
 
   it("reuses facet counts on page turns and surfaces later failures", async () => {
-    (projectService.listProjects as jest.Mock).mockResolvedValue({ isError: false, data: [] });
-    (workspaceService.listWorkspacePage as jest.Mock).mockResolvedValue({
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: [] });
+    listWorkspacePage.mockResolvedValue({
       ...emptyPage,
-      data: { ...emptyPage.data, pageInfo: { hasNextPage: true, totalRecords: 40 } },
+      data: { ...emptyPage.data, pageInfo: { endCursor: undefined, hasNextPage: true, totalRecords: 40 } },
     });
     render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
-    await waitFor(() => expect(workspaceService.listWorkspacePage).toHaveBeenCalledWith(expect.anything(), true));
+    await waitFor(() => expect(listWorkspacePage).toHaveBeenCalledWith(expect.anything(), true));
     expect(tableProps).toBeDefined();
 
-    (workspaceService.listWorkspacePage as jest.Mock).mockClear();
-    await act(async () => tableProps.onPageChange(2, tableProps.pageSize));
+    listWorkspacePage.mockClear();
+    await act(async () => defined(table().onPageChange, "onPageChange")(2, defined(table().pageSize, "pageSize")));
     await waitFor(() =>
-      expect(workspaceService.listWorkspacePage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ after: tableProps.pageSize }),
-        false
-      )
+      expect(listWorkspacePage).toHaveBeenLastCalledWith(expect.objectContaining({ after: table().pageSize }), false)
     );
     expect(message.error).not.toHaveBeenCalled();
 
-    (workspaceService.listWorkspacePage as jest.Mock).mockResolvedValue({
+    listWorkspacePage.mockResolvedValue({
       isError: true,
+      responseCode: 500,
       error: { status: "500", message: "boom" },
     });
-    await act(async () => tableProps.onPageChange(3, tableProps.pageSize));
+    await act(async () => defined(table().onPageChange, "onPageChange")(3, defined(table().pageSize, "pageSize")));
     await waitFor(() => expect(message.error).toHaveBeenCalledWith("boom"));
   });
 
   it("lets the header actions wrap so New workspace stays reachable on narrow screens", async () => {
-    (projectService.listProjects as jest.Mock).mockResolvedValue({ isError: false, data: [] });
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: [] });
 
     render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
 
@@ -125,24 +144,53 @@ describe("OrganizationDetailsPage project filter", () => {
   });
 
   it("keeps project group choices per user and organization and passes them to the table", async () => {
-    (projectService.listProjects as jest.Mock).mockResolvedValue({ isError: false, data: [] });
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: [] });
     render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
     await waitFor(() => expect(tableProps).toBeDefined());
-    expect(tableProps.collapsedGroups.size).toBe(0);
-    expect(tableProps.groupsForcedOpen).toBe(false);
+    expect(defined(table().collapsedGroups, "collapsedGroups").size).toBe(0);
+    expect(table().groupsForcedOpen).toBe(false);
 
-    await act(async () => tableProps.onToggleGroup("proj-1"));
-    expect(tableProps.collapsedGroups.has("proj-1")).toBe(true);
+    await act(async () => defined(table().onToggleGroup, "onToggleGroup")("proj-1"));
+    expect(defined(table().collapsedGroups, "collapsedGroups").has("proj-1")).toBe(true);
     expect(sessionStorage.getItem("terrakube.workspaceCollapsedGroups:user-1:org-2")).toBe('["proj-1"]');
 
-    await act(async () => tableProps.onSetGroupsCollapsed(["proj-1", "__unassigned__"], false));
-    expect(tableProps.collapsedGroups.size).toBe(0);
+    await act(async () =>
+      defined(table().onSetGroupsCollapsed, "onSetGroupsCollapsed")(["proj-1", "__unassigned__"], false)
+    );
+    expect(defined(table().collapsedGroups, "collapsedGroups").size).toBe(0);
   });
 
   it("forces the groups open while a search is active", async () => {
     sessionStorage.setItem("searchValue", "billing");
-    (projectService.listProjects as jest.Mock).mockResolvedValue({ isError: false, data: [] });
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: [] });
     render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
     await waitFor(() => expect(tableProps?.groupsForcedOpen).toBe(true));
+  });
+
+  it("applies job status events to the matching workspace and ignores statuses it does not know", async () => {
+    listProjects.mockResolvedValue({ isError: false, responseCode: 200, data: [] });
+    listWorkspacePage.mockResolvedValue({
+      ...emptyPage,
+      data: {
+        ...emptyPage.data,
+        workspaces: [
+          workspaceListItem({ id: "ws-1", name: "one", lastStatus: "completed", tags: [] }),
+          workspaceListItem({ id: "ws-2", name: "two", lastStatus: "completed", tags: [] }),
+        ],
+      },
+    });
+    render(<OrganizationsDetailPage organizationName="org" setOrganizationName={jest.fn()} />);
+    await waitFor(() => expect(tableProps?.workspaces).toHaveLength(2));
+    const subscription = jest.mocked(useOrganizationJobStatusSubscription).mock.lastCall?.[0];
+    const statusOf = (workspaceId: string) =>
+      table().workspaces.find((workspace) => workspace.id === workspaceId)?.lastStatus;
+
+    await act(async () => subscription?.onEvent({ workspaceId: "ws-1", jobId: 1, status: "running" }));
+    expect(statusOf("ws-1")).toBe("running");
+    expect(statusOf("ws-2")).toBe("completed");
+
+    const latest = jest.mocked(useOrganizationJobStatusSubscription).mock.lastCall?.[0];
+    await act(async () => latest?.onEvent({ workspaceId: "ws-1", jobId: 1, status: "somethingNew" }));
+    expect(statusOf("ws-1")).toBe("running");
   });
 });

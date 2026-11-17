@@ -1,11 +1,11 @@
 import { Flex, Typography, Card } from "antd";
 import { Link } from "react-router-dom";
-import { OrganizationModel } from "../../types";
+import { FlatOrganization } from "@/domain/types";
 import { parseIconField, getOrgIcon } from "../../utils/orgIcon";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../../../config/actionTypes";
 
 type Props = {
-  organization: OrganizationModel;
+  organization: FlatOrganization;
 };
 
 export default function OrganizationGridItem({ organization }: Props) {

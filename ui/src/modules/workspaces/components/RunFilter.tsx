@@ -2,7 +2,7 @@ import { BarsOutlined, SearchOutlined } from "@ant-design/icons";
 import { Input, Select } from "antd";
 import clsx from "classnames";
 import { cloneElement } from "react";
-import { JobStatus } from "../../../domain/types";
+import { JobStatus } from "../../../domain/generated/apiResources";
 import { getWorkspaceStatusIcon } from "../utils/workspaceStatusIcon";
 import { getWorkspaceStatusText } from "../utils/workspaceStatusText";
 import "./WorkspaceFilter.css";
@@ -11,17 +11,17 @@ export const ALL_RUNS = "All";
 
 // Chip order; a status nobody is in is hidden unless it is the selected one.
 const RUN_STATUSES: string[] = [
-  JobStatus.WaitingApproval,
-  JobStatus.Failed,
-  JobStatus.Running,
-  JobStatus.Pending,
-  JobStatus.Queue,
-  JobStatus.Completed,
-  JobStatus.NoChanges,
-  JobStatus.NotExecuted,
-  JobStatus.Approved,
-  JobStatus.Rejected,
-  JobStatus.Cancelled,
+  JobStatus.waitingApproval,
+  JobStatus.failed,
+  JobStatus.running,
+  JobStatus.pending,
+  JobStatus.queue,
+  JobStatus.completed,
+  JobStatus.noChanges,
+  JobStatus.notExecuted,
+  JobStatus.approved,
+  JobStatus.rejected,
+  JobStatus.cancelled,
 ];
 
 type Props = {
