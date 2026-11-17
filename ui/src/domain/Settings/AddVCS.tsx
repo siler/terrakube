@@ -4,11 +4,15 @@ import { useState } from "react";
 import { HiOutlineExternalLink } from "react-icons/hi";
 import { SiBitbucket } from "react-icons/si";
 import { VscAzureDevops } from "react-icons/vsc";
+import axios from "axios";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useOrganizationName } from "@/hooks/useOrganizationName";
+import { isRecord } from "@/modules/utils/typeGuards";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
 import { getUiRedirectUri } from "../../config/basePath";
-import { VcsConnectionType, VcsType, VcsTypeExtended } from "../types";
+import type { CreateBody, FormValues } from "../api/writeBodies";
+import { VcsConnectionType, VcsType } from "../generated/apiResources";
+import { VcsTypeExtended } from "../types";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Settings.css";
 import "./VCS.css";
@@ -47,18 +51,26 @@ type Params = {
   vcsName: VcsTypeExtended;
 };
 
-type CreateVcsForm = {
-  name: string;
-  clientId: string;
-  clientSecret: string;
-  privateKey: string;
-  endpoint: string;
-  apiUrl: string;
-};
+type CreateVcsForm = Pick<
+  FormValues<"vcs">,
+  "name" | "clientId" | "clientSecret" | "privateKey" | "endpoint" | "apiUrl"
+>;
 
 type Choice = { vcs: VcsTypeExtended; connectionType: VcsConnectionType; label: string; help?: string };
 
 const { OAUTH, STANDALONE } = VcsConnectionType;
+
+/** Reads the OAuth fields of a created vcs document; the connect URL can't be built without the client id. */
+const createdOAuthFields = (document: unknown): { clientId: string; endpoint?: string } | undefined => {
+  if (!isRecord(document) || !isRecord(document.data) || !isRecord(document.data.attributes)) {
+    return undefined;
+  }
+  const { clientId, endpoint } = document.data.attributes;
+  if (typeof clientId !== "string") {
+    return undefined;
+  }
+  return { clientId, endpoint: typeof endpoint === "string" ? endpoint : undefined };
+};
 
 // Four providers as tiles, then their editions as stacked radios (DESIGN.md, Picker).
 const PROVIDERS: { key: string; label: string; icon: React.ReactNode; choices: Choice[] }[] = [
@@ -361,13 +373,13 @@ export const AddVCS = ({ setMode, loadVCS }: Props) => {
   };
 
   const onFinish = (values: CreateVcsForm) => {
-    const body = {
+    const body: CreateBody<"vcs"> = {
       data: {
         type: "vcs",
         attributes: {
           name: values.name,
           description: values.name,
-          connectionType: connectionType,
+          connectionType,
           vcsType: getVcsType(vcsType),
           clientId: values.clientId,
           clientSecret: getVcsType(vcsType) != "AZURE_SP_MI" ? values.clientSecret : "12345",
@@ -382,7 +394,7 @@ export const AddVCS = ({ setMode, loadVCS }: Props) => {
     };
     setSaving(true);
     axiosInstance
-      .post(`organization/${orgid}/vcs`, body, {
+      .post<unknown>(`organization/${orgid}/vcs`, body, {
         headers: {
           "Content-Type": "application/vnd.api+json",
         },
@@ -390,13 +402,12 @@ export const AddVCS = ({ setMode, loadVCS }: Props) => {
       .then((response) => {
         if (response.status == 201) {
           if (usesOAuthFlow(getVcsType(vcsType), connectionType)) {
+            const created = createdOAuthFields(response.data);
+            if (!created) {
+              throw new Error("the response did not include the provider's client ID");
+            }
             window.location.replace(
-              getConnectUrl(
-                getVcsType(vcsType),
-                response.data.data.attributes.clientId,
-                callbackUrl,
-                response.data.data.attributes.endpoint
-              )
+              getConnectUrl(getVcsType(vcsType), created.clientId, callbackUrl, created.endpoint)
             );
           } else {
             message.success("VCS provider added");
@@ -406,7 +417,7 @@ export const AddVCS = ({ setMode, loadVCS }: Props) => {
         }
       })
       .catch((error) => {
-        if (error.response?.status === 403) {
+        if (axios.isAxiosError(error) && error.response?.status === 403) {
           message.error(<PermissionErrorMessage action="create VCS Settings" permission="Manage VCS Settings" />);
         } else {
           message.error(`Could not add the VCS provider: ${getErrorMessage(error)}`);
@@ -429,7 +440,12 @@ export const AddVCS = ({ setMode, loadVCS }: Props) => {
             <Radio.Group
               className="vcs-provider-tiles"
               value={provider.key}
-              onChange={(event) => choose(PROVIDERS.find((p) => p.key === event.target.value)!.choices[0])}
+              onChange={(event) => {
+                const chosen = PROVIDERS.find((p) => p.key === event.target.value);
+                if (chosen) {
+                  choose(chosen.choices[0]);
+                }
+              }}
             >
               {PROVIDERS.map((p) => (
                 <Radio key={p.key} value={p.key} className="vcs-provider-tile">
@@ -445,7 +461,12 @@ export const AddVCS = ({ setMode, loadVCS }: Props) => {
             <Form.Item label="Type">
               <RadioChoices
                 value={choiceKey({ vcs: vcsType, connectionType })}
-                onChange={(event) => choose(provider.choices.find((c) => choiceKey(c) === event.target.value)!)}
+                onChange={(event) => {
+                  const chosen = provider.choices.find((c) => choiceKey(c) === event.target.value);
+                  if (chosen) {
+                    choose(chosen);
+                  }
+                }}
                 options={provider.choices.map((c) => ({ value: choiceKey(c), label: c.label, help: c.help }))}
               />
             </Form.Item>

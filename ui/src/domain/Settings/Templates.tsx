@@ -1,10 +1,12 @@
 import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Flex, List, message, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import { LinkButton } from "@/components/navigation/LinkButton";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { Template } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { Row } from "../api/fieldSelection";
 import { AddTemplate } from "./AddTemplate";
 import { EditTemplate } from "./EditTemplate";
 import "./Settings.css";
@@ -20,12 +22,15 @@ type Props = {
   managePermission?: boolean;
 };
 
+const TEMPLATE_FIELDS = fields.template("name", "description");
+type TemplateRow = Row<typeof TEMPLATE_FIELDS>;
+
 export const TemplatesSettings = ({ editorMode, editorId, managePermission = true }: Props) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [pendingDelete, setPendingDelete] = useState<Template | null>(null);
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [pendingDelete, setPendingDelete] = useState<TemplateRow | null>(null);
   const navigate = useNavigate();
   const mode = editorMode ?? "list";
   const templateID = editorId;
@@ -48,21 +53,18 @@ export const TemplatesSettings = ({ editorMode, editorId, managePermission = tru
     loadTemplates();
   }, [orgid, templateID]);
 
-  const loadTemplates = () => {
-    axiosInstance
-      .get(`organization/${orgid}/template`)
-      .then((response) => {
-        setTemplates(response.data.data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (isPermissionError(err)) {
-          setError(getErrorMessage(err));
-        } else {
-          message.error("Failed to load templates");
-        }
-        setLoading(false);
-      });
+  const loadTemplates = async () => {
+    try {
+      setTemplates(await api.organization(orgid).template().select(TEMPLATE_FIELDS));
+    } catch (err) {
+      if (isPermissionError(err)) {
+        setError(getErrorMessage(err));
+      } else {
+        message.error("Failed to load templates");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -71,10 +73,10 @@ export const TemplatesSettings = ({ editorMode, editorId, managePermission = tru
         <AccessDeniedAlert description={error} />
       ) : (
         (mode === "new" && <AddTemplate setMode={closeEditor} loadTemplates={loadTemplates} />) ||
-        (mode === "edit" && (
+        (mode === "edit" && templateID && (
           <EditTemplate
             setMode={closeEditor}
-            templateId={templateID!}
+            templateId={templateID}
             loadTemplates={loadTemplates}
             managePermission={managePermission}
           />
@@ -120,12 +122,12 @@ export const TemplatesSettings = ({ editorMode, editorId, managePermission = tru
                             to={`/organizations/${orgid}/settings/templates/edit/${item.id}`}
                             icon={<EditOutlined />}
                             disabled={!managePermission}
-                            aria-label={`Edit ${item.attributes.name}`}
+                            aria-label={`Edit ${item.name}`}
                           />
                           <Button
                             icon={<DeleteOutlined />}
                             disabled={!managePermission}
-                            aria-label={`Delete ${item.attributes.name}`}
+                            aria-label={`Delete ${item.name}`}
                             onClick={() => setPendingDelete(item)}
                           />
                         </Flex>,
@@ -134,14 +136,12 @@ export const TemplatesSettings = ({ editorMode, editorId, managePermission = tru
                       <List.Item.Meta
                         title={
                           managePermission ? (
-                            <Link to={`/organizations/${orgid}/settings/templates/edit/${item.id}`}>
-                              {item.attributes.name}
-                            </Link>
+                            <Link to={`/organizations/${orgid}/settings/templates/edit/${item.id}`}>{item.name}</Link>
                           ) : (
-                            item.attributes.name
+                            item.name
                           )
                         }
-                        description={item.attributes.description}
+                        description={item.description}
                       />
                     </List.Item>
                   )}
@@ -153,8 +153,8 @@ export const TemplatesSettings = ({ editorMode, editorId, managePermission = tru
               title="Delete template"
               message={
                 <>
-                  Workspaces can no longer run jobs with <strong>{pendingDelete?.attributes.name}</strong>.
-                  Notifications filtered only to this template then fire for every template. This cannot be undone.
+                  Workspaces can no longer run jobs with <strong>{pendingDelete?.name}</strong>. Notifications filtered
+                  only to this template then fire for every template. This cannot be undone.
                 </>
               }
               okText="Delete template"

@@ -1,9 +1,11 @@
 import { Form, Input, message, Space, Typography, ColorPicker } from "antd";
 import { Loading } from "@/components/feedback/Loading";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { Organization, sparseFields, SparseOf } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { Row } from "../api/fieldSelection";
+import type { UpdateBody } from "../api/writeBodies";
 import { IconSelector } from "../Organizations/IconSelector";
 import { organizationNameRules } from "../../config/validation";
 import "./Settings.css";
@@ -19,8 +21,8 @@ import { cacheOrganizationName } from "@/hooks/useOrganizationName";
 const DEFAULT_ICON = "FaBuilding";
 const DEFAULT_COLOR = "#000000";
 
-const ORGANIZATION_FIELDS = sparseFields<Organization>("organization")("name", "description", "executionMode", "icon");
-type SparseOrganization = SparseOf<typeof ORGANIZATION_FIELDS>;
+const ORGANIZATION_FIELDS = fields.organization("name", "description", "executionMode", "icon");
+type OrganizationRow = Row<typeof ORGANIZATION_FIELDS>;
 
 type GeneralSettingsForm = {
   name: string;
@@ -34,9 +36,9 @@ type Props = {
 };
 
 export const GeneralSettings = ({ managePermission = true }: Props) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const { removeOrganization, updateOrganization } = useOrganizationSummaries();
-  const [organization, setOrganization] = useState<SparseOrganization>();
+  const [organization, setOrganization] = useState<OrganizationRow>();
   const [loading, setLoading] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string>();
@@ -47,7 +49,7 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
   const onFinish = (values: GeneralSettingsForm) => {
     setWaiting(true);
     const iconField = icon ? `${icon}:${color}` : undefined;
-    const body = {
+    const body: UpdateBody<"organization"> = {
       data: {
         type: "organization",
         id: orgid,
@@ -69,10 +71,8 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
       .then((response) => {
         if (response.status == 204) {
           message.success("Organization updated successfully");
-          if (orgid) {
-            updateOrganization(orgid, { ...values, icon: iconField });
-            cacheOrganizationName(orgid, values.name);
-          }
+          updateOrganization(orgid, { ...values, icon: iconField });
+          cacheOrganizationName(orgid, values.name);
         } else {
           message.error("Organization update failed");
         }
@@ -85,12 +85,12 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
   };
 
   const onDelete = () => {
-    const body = {
+    const body: UpdateBody<"organization"> = {
       data: {
         type: "organization",
         id: orgid,
         attributes: {
-          disabled: "true",
+          disabled: true,
         },
       },
     };
@@ -104,9 +104,7 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
       .then((response) => {
         if (response.status == 204) {
           message.success("Organization deleted successfully, please logout and login to Terrakube");
-          if (orgid) {
-            removeOrganization(orgid);
-          }
+          removeOrganization(orgid);
         } else {
           message.error("Organization deletion failed");
         }
@@ -118,11 +116,11 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
 
   useEffect(() => {
     setLoading(true);
-    axiosInstance
-      .get(`organization/${orgid}?${ORGANIZATION_FIELDS}`)
-      .then((response) => {
-        setOrganization(response.data.data);
-        const iconField = response.data.data.attributes.icon;
+    (async () => {
+      try {
+        const organization = await api.organization(orgid).select(ORGANIZATION_FIELDS);
+        setOrganization(organization);
+        const iconField = organization.icon;
         if (iconField) {
           const [iconName, iconColor] = iconField.split(":");
           setIcon(iconName || DEFAULT_ICON);
@@ -132,20 +130,20 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
           setColor(DEFAULT_COLOR);
         }
         form.setFieldsValue({
-          name: response.data.data.attributes.name,
-          description: response.data.data.attributes.description,
-          executionMode: response.data.data.attributes.executionMode,
+          name: organization.name,
+          description: organization.description,
+          executionMode: organization.executionMode,
         });
-        setLoading(false);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (isPermissionError(err)) {
           setError(getErrorMessage(err));
         } else {
           message.error("Failed to load organization settings");
         }
+      } finally {
         setLoading(false);
-      });
+      }
+    })();
   }, [orgid, form]);
 
   return (
@@ -165,14 +163,14 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
               name="form-settings"
               onFinish={onFinish}
               initialValues={{
-                name: organization?.attributes.name,
-                description: organization?.attributes.description,
-                executionMode: organization?.attributes.executionMode,
+                name: organization?.name,
+                description: organization?.description,
+                executionMode: organization?.executionMode,
               }}
               saveLabel="Update organization"
               saveDisabled={!managePermission}
             >
-              <IdField id="organization-id" value={orgid ?? ""} />
+              <IdField id="organization-id" value={orgid} />
               <Form.Item name="name" label="Name" rules={organizationNameRules}>
                 <Input />
               </Form.Item>
@@ -221,9 +219,9 @@ export const GeneralSettings = ({ managePermission = true }: Props) => {
 
             <DangerZone
               actionName="Delete this organization"
-              description={`Deleting the ${organization?.attributes?.name} organization will permanently delete all workspaces associated with it. Please be certain that you understand this. This action cannot be undone.`}
+              description={`Deleting the ${organization?.name} organization will permanently delete all workspaces associated with it. Please be certain that you understand this. This action cannot be undone.`}
               disabled={!managePermission}
-              confirmValue={organization?.attributes?.name ?? ""}
+              confirmValue={organization?.name ?? ""}
               confirmMessage="The organization will be permanently deleted and all its workspaces will be marked as deleted. This action cannot be undone."
               onConfirm={onDelete}
             />

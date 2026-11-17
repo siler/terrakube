@@ -1,10 +1,13 @@
 import { Button, Flex, Form, Input, message, Space, ColorPicker } from "antd";
 import { useNavigate } from "react-router-dom";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../config/actionTypes";
-import axiosInstance from "../../config/axiosConfig";
+import axiosInstance, { isPermissionError, jsonApiErrorDetail } from "../../config/axiosConfig";
 import { IconSelector } from "./IconSelector";
 import { organizationNameRules } from "../../config/validation";
+import type { CreateBody } from "../api/writeBodies";
 import { useState } from "react";
+import axios from "axios";
+import { parseCreatedOrganization } from "./parseCreatedOrganization";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { useOrganizationSummaries } from "@/modules/organizations/useOrganizationSummaries";
 import "./Organizations.css";
@@ -19,7 +22,6 @@ const DEFAULT_COLOR = "#000000";
 type CreateOrganizationForm = {
   name: string;
   description?: string;
-  icon?: string;
 };
 
 type Props = {
@@ -44,15 +46,15 @@ export const CreateOrganization = ({ setOrganizationName }: Props) => {
 
     // Store as iconName:color (color always hex)
     const iconField = icon ? `${icon}:${color}` : undefined;
-    const body = {
+    const body: CreateBody<"organization"> = {
       data: {
         type: "organization",
-        attributes: { ...values, icon: iconField },
+        attributes: { name: values.name, description: values.description, icon: iconField },
       },
     };
 
     axiosInstance
-      .post("organization", body, {
+      .post<unknown>("organization", body, {
         headers: {
           "Content-Type": "application/vnd.api+json",
         },
@@ -62,20 +64,22 @@ export const CreateOrganization = ({ setOrganizationName }: Props) => {
         // checking for one specific status code (e.g. 201) risks silently doing nothing if the
         // API ever returns a different 2xx.
         message.success("Organization created successfully");
-        sessionStorage.setItem(ORGANIZATION_ARCHIVE, response.data.data.id);
-        sessionStorage.setItem(ORGANIZATION_NAME, response.data.data.attributes.name);
-        upsertOrganization({
-          id: response.data.data.id,
-          ...response.data.data.attributes,
-          workspaceCount: 0,
-          workspaceStatusCounts: {},
-        });
-        setOrganizationName(response.data.data.attributes.name);
-        navigate(`/organizations/${response.data.data.id}/settings/teams`);
+        const organization = parseCreatedOrganization(response.data);
+        if (!organization) {
+          console.error("Unexpected create organization response:", response.data);
+          navigate("/");
+          return;
+        }
+        sessionStorage.setItem(ORGANIZATION_ARCHIVE, organization.id);
+        sessionStorage.setItem(ORGANIZATION_NAME, organization.name);
+        upsertOrganization({ ...organization, workspaceCount: 0, workspaceStatusCounts: {} });
+        setOrganizationName(organization.name);
+        navigate(`/organizations/${organization.id}/settings/teams`);
       })
-      .catch((error) => {
-        console.error("Failed to create organization:", error.response?.status, error.response?.data, error);
-        if (error.response?.status === 403) {
+      .catch((error: unknown) => {
+        const response = axios.isAxiosError(error) ? error.response : undefined;
+        console.error("Failed to create organization:", response?.status, response?.data, error);
+        if (isPermissionError(error)) {
           message.error(
             <span>
               You are not authorized to create Organizations. <br /> Please contact your administrator and request to
@@ -91,7 +95,7 @@ export const CreateOrganization = ({ setOrganizationName }: Props) => {
             </span>
           );
         } else {
-          message.error(error.response?.data?.errors?.[0]?.detail || "Failed to create organization");
+          message.error(jsonApiErrorDetail(response?.data) ?? "Failed to create organization");
         }
       })
       .finally(() => {

@@ -7,7 +7,9 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { LinkButton } from "@/components/navigation/LinkButton";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { Action } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { ClientIdCreateBody, FormValues, UpdateBody, WriteAttributes } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Settings.css";
 import "./EditorForm.css";
@@ -19,23 +21,30 @@ import { Loading } from "@/components/feedback/Loading";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { validateActionSyntax } from "./validateActionSyntax";
+import { type DisplayCriterion, parseDisplayCriteria } from "../Workspaces/actionCriteria";
 
 type IStandaloneCodeEditor = Parameters<OnMount>[0];
 
-type CreateActionForm = {
-  id: string;
-} & EditActionForm;
-type EditActionForm = {
-  action: string;
-  active: boolean;
-  category: string;
-  description: string;
-  displayCriteria: string;
-  label: string;
-  name: string;
-  type: string;
-  version: string;
-};
+// The table names, types and counts actions; the editor seeds every attribute the form sets.
+const ACTION_LIST_FIELDS = fields.action("name", "type", "category", "version", "active");
+const ACTION_EDIT_FIELDS = fields.action(
+  "name",
+  "description",
+  "version",
+  "active",
+  "type",
+  "label",
+  "category",
+  "displayCriteria",
+  "action"
+);
+type ActionRow = Row<typeof ACTION_LIST_FIELDS>;
+
+// id is on every form because the ID field stays mounted in edit mode; it is the resource id, not an attribute
+type ActionForm = Pick<
+  FormValues<"action">,
+  "action" | "active" | "category" | "description" | "label" | "name" | "type" | "version"
+> & { id: string; displayCriteria?: DisplayCriterion[] };
 
 type Props = {
   editorMode?: "new" | "edit";
@@ -44,10 +53,10 @@ type Props = {
 };
 
 export const ActionSettings = ({ editorMode, editorId, managePermission = true }: Props) => {
-  const [actions, setActions] = useState([]);
+  const [actions, setActions] = useState<ActionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<Action | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ActionRow | null>(null);
   const { orgid } = useParams();
   const navigate = useNavigate();
   const isEditing = editorMode != null;
@@ -56,7 +65,7 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
   const closeEditor = () => navigate(`/organizations/${orgid}/settings/actions`);
   const [actionContent, setActionContent] = useState<string>("");
   const [syntaxError, setSyntaxError] = useState<string | null>(null);
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<ActionForm>();
   const editorRef = useRef<IStandaloneCodeEditor>(null);
   const screens = Grid.useBreakpoint();
 
@@ -65,52 +74,52 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
       title: "Name",
       dataIndex: "name",
       key: "name",
-      render: (_: string, record: Action) => (
-        <Link to={`/organizations/${orgid}/settings/actions/edit/${record.id}`}>{record.attributes.name}</Link>
+      render: (_: string, record: ActionRow) => (
+        <Link to={`/organizations/${orgid}/settings/actions/edit/${record.id}`}>{record.name}</Link>
       ),
     },
     {
       title: "Type",
       dataIndex: "type",
       key: "type",
-      render: (_: string, record: Action) => <span className="editor-form-mono">{record.attributes.type}</span>,
+      render: (_: string, record: ActionRow) => <span className="editor-form-mono">{record.type}</span>,
     },
     {
       title: "Category",
       dataIndex: "category",
       key: "category",
-      render: (_: string, record: Action) => record.attributes.category,
+      render: (_: string, record: ActionRow) => record.category,
     },
     {
       title: "Version",
       dataIndex: "version",
       key: "version",
-      render: (_: string, record: Action) => <span className="editor-form-mono">{record.attributes.version}</span>,
+      render: (_: string, record: ActionRow) => <span className="editor-form-mono">{record.version}</span>,
     },
     {
       title: "Status",
       dataIndex: "active",
       key: "active",
-      render: (_: string, record: Action) =>
-        record.attributes.active ? <Tag color="success">Active</Tag> : <Tag>Inactive</Tag>,
+      render: (_: string, record: ActionRow) =>
+        record.active ? <Tag color="success">Active</Tag> : <Tag>Inactive</Tag>,
     },
     {
       title: "Actions",
       key: "action",
       align: "right" as const,
       width: 96,
-      render: (_: string, record: Action) => (
+      render: (_: string, record: ActionRow) => (
         <Flex gap={8} justify="flex-end">
           <LinkButton
             to={`/organizations/${orgid}/settings/actions/edit/${record.id}`}
             icon={<EditOutlined />}
             disabled={!managePermission}
-            aria-label={`Edit ${record.attributes.name}`}
+            aria-label={`Edit ${record.name}`}
           />
           <Button
             icon={<DeleteOutlined />}
             disabled={!managePermission}
-            aria-label={`Delete ${record.attributes.name}`}
+            aria-label={`Delete ${record.name}`}
             onClick={() => setPendingDelete(record)}
           />
         </Flex>
@@ -129,27 +138,28 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
       return;
     }
     if (editorMode === "edit" && editorId) {
-      axiosInstance
-        .get(`action/${editorId}`)
-        .then((response) => {
-          const action = response.data.data;
-          form.setFieldsValue({
-            id: action.id,
-            ...action.attributes,
-            displayCriteria: JSON.parse(action.attributes.displayCriteria),
-          });
-          const actionDecoded = decodeBase64(action.attributes.action);
-          setActionContent(actionDecoded);
-          if (editorRef.current) {
-            editorRef.current.setValue(actionDecoded);
-          }
-        })
-        .catch((err) => {
-          message.error(getErrorMessage(err));
-          closeEditor();
-        });
+      loadAction(editorId);
     }
   }, [editorMode, editorId]);
+
+  const loadAction = async (actionId: string) => {
+    try {
+      const action = await api.action(actionId).select(ACTION_EDIT_FIELDS);
+      form.setFieldsValue({
+        ...action,
+        description: action.description ?? undefined,
+        displayCriteria: parseDisplayCriteria(action.displayCriteria),
+      });
+      const actionDecoded = decodeBase64(action.action);
+      setActionContent(actionDecoded);
+      if (editorRef.current) {
+        editorRef.current.setValue(actionDecoded);
+      }
+    } catch (err) {
+      message.error(getErrorMessage(err));
+      closeEditor();
+    }
+  };
 
   const onDelete = (id: string) => {
     axiosInstance
@@ -163,15 +173,22 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
       });
   };
 
-  const onCreate = (values: CreateActionForm, editorValue: string) => {
-    const actionEncoded = encodeBase64(editorValue);
-    const displayCriteria = JSON.stringify(values.displayCriteria);
-    const body = {
-      data: {
-        type: "action",
-        id: values.id,
-        attributes: { ...values, action: actionEncoded, displayCriteria },
-      },
+  // Named fields rather than a spread, so the form's id (the resource id) can't ride along as an attribute.
+  const toAttributes = (values: ActionForm, editorValue: string): WriteAttributes<"action"> => ({
+    name: values.name,
+    description: values.description,
+    version: values.version,
+    active: values.active,
+    type: values.type,
+    label: values.label,
+    category: values.category,
+    displayCriteria: JSON.stringify(values.displayCriteria),
+    action: encodeBase64(editorValue),
+  });
+
+  const onCreate = (values: ActionForm, editorValue: string) => {
+    const body: ClientIdCreateBody<"action"> = {
+      data: { type: "action", id: values.id, attributes: toAttributes(values, editorValue) },
     };
     axiosInstance
       .post(`action`, body, {
@@ -190,15 +207,13 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
       });
   };
 
-  const onUpdate = (values: EditActionForm, editorValue: string) => {
-    const actionEncoded = encodeBase64(editorValue);
-    const displayCriteria = JSON.stringify(values.displayCriteria);
-    const body = {
-      data: {
-        type: "action",
-        id: actionId,
-        attributes: { ...values, action: actionEncoded, displayCriteria },
-      },
+  const onUpdate = (values: ActionForm, editorValue: string) => {
+    if (!actionId) {
+      message.error("No action is selected to update");
+      return;
+    }
+    const body: UpdateBody<"action"> = {
+      data: { type: "action", id: actionId, attributes: toAttributes(values, editorValue) },
     };
     axiosInstance
       .patch(`action/${actionId}`, body, {
@@ -217,19 +232,15 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
       });
   };
 
-  const loadActions = () => {
-    axiosInstance
-      .get(`action`)
-      .then((response) => {
-        setActions(response.data.data);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(getErrorMessage(err));
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+  const loadActions = async () => {
+    try {
+      setActions(await api.action().select(ACTION_LIST_FIELDS));
+      setError(null);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -300,7 +311,7 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
             title="Delete action"
             message={
               <>
-                Workspaces stop showing <strong>{pendingDelete?.attributes.name}</strong>. This cannot be undone.
+                Workspaces stop showing <strong>{pendingDelete?.name}</strong>. This cannot be undone.
               </>
             }
             okText="Delete action"
@@ -318,7 +329,7 @@ export const ActionSettings = ({ editorMode, editorId, managePermission = true }
             className="editor-form"
             saveLabel={mode === "create" ? "Create action" : "Update action"}
             saveDisabled={!managePermission}
-            onFinish={async (values) => {
+            onFinish={async (values: ActionForm) => {
               const editorValue = editorRef.current ? editorRef.current.getValue() : actionContent;
               const error = await validateActionSyntax(editorValue);
               setSyntaxError(error);

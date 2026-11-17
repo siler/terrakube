@@ -1,9 +1,13 @@
 import { DeleteOutlined, KeyOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Form, Tag, Tooltip, Typography, message } from "antd";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { SshKey } from "../types";
+import { isOneOf } from "@/modules/utils/typeGuards";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import type { CreateBody } from "../api/writeBodies";
+import { SshType } from "../generated/apiResources";
 import "./Settings.css";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
@@ -13,24 +17,30 @@ import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal
 import SshKeyFormModal, { AddSshKeyFormValues } from "./components/SshKeyFormModal";
 import ResourceCard from "./components/ResourceCard";
 
-const plural = (count: number, noun: string) => (count > 0 ? `${count} ${noun}${count === 1 ? "" : "s"}` : "");
+// The list never shows the private key, so it is not requested.
+const SSH_KEY_FIELDS = fields.ssh("name", "description", "sshType");
 
-type Params = {
-  orgid: string;
-};
+/** An organization SSH key as the list card shows it. */
+type ListedSshKey = Row<typeof SSH_KEY_FIELDS>;
+
+// The linkage alone answers "which resources use this key"; the names would add nothing to the count.
+const WORKSPACE_SSH_IDS = fields.workspace({ ssh: ids });
+const MODULE_SSH_IDS = fields.module({ ssh: ids });
+
+const plural = (count: number, noun: string) => (count > 0 ? `${count} ${noun}${count === 1 ? "" : "s"}` : "");
 
 type Props = {
   managePermission?: boolean;
 };
 
 export const SSHKeysSettings = ({ managePermission = true }: Props) => {
-  const { orgid } = useParams<Params>();
-  const [sshKeys, setSSHKeys] = useState<SshKey[]>([]);
+  const orgid = useRequiredParam("orgid");
+  const [sshKeys, setSSHKeys] = useState<ListedSshKey[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [visible, setVisible] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<SshKey | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ListedSshKey | null>(null);
   const [form] = Form.useForm<AddSshKeyFormValues>();
 
   const onNew = () => {
@@ -38,22 +48,29 @@ export const SSHKeysSettings = ({ managePermission = true }: Props) => {
     setVisible(true);
   };
 
-  const onDelete = (key: SshKey) => {
-    const count = (path: string) => axiosInstance.get(path).then((response) => response.data.data?.length ?? 0);
+  const onDelete = (key: ListedSshKey) => {
     Promise.all([
-      count(`organization/${orgid}/workspace?filter[workspace]=ssh.id==${key.id}&fields[workspace]=name`),
-      count(`organization/${orgid}/module?filter[module]=ssh.id==${key.id}&fields[module]=name`),
+      api
+        .organization(orgid)
+        .workspace()
+        .select(WORKSPACE_SSH_IDS)
+        .where((workspace) => workspace.ssh.id.eq(key.id)),
+      api
+        .organization(orgid)
+        .module()
+        .select(MODULE_SSH_IDS)
+        .where((module) => module.ssh.id.eq(key.id)),
     ])
       .then(([workspaces, modules]) => {
-        const usage = [plural(workspaces, "workspace"), plural(modules, "module")].filter(Boolean);
+        const usage = [plural(workspaces.length, "workspace"), plural(modules.length, "module")].filter(Boolean);
         if (usage.length > 0) {
           message.error(
-            `${key.attributes.name} is used by ${new Intl.ListFormat("en").format(usage)}. Move them to another SSH key first.`
+            `${key.name} is used by ${new Intl.ListFormat("en").format(usage)}. Move them to another SSH key first.`
           );
           return;
         }
         return axiosInstance.delete(`organization/${orgid}/ssh/${key.id}`).then(() => {
-          message.success(`SSH key ${key.attributes.name} deleted`);
+          message.success(`SSH key ${key.name} deleted`);
           loadSSHKeys();
         });
       })
@@ -63,13 +80,19 @@ export const SSHKeysSettings = ({ managePermission = true }: Props) => {
   };
 
   const onCreate = (values: AddSshKeyFormValues) => {
-    const body = {
+    const sshType = values.sshType;
+    // The picker only offers the API's key types, but the shared form types the field as string.
+    if (!isOneOf(Object.values(SshType), sshType)) {
+      message.error(`Unsupported SSH key type: ${sshType}`);
+      return;
+    }
+    const body: CreateBody<"ssh"> = {
       data: {
         type: "ssh",
         attributes: {
           name: values.name,
           description: values.description,
-          sshType: values.sshType,
+          sshType,
           privateKey: values.privateKey,
         },
       },
@@ -94,21 +117,18 @@ export const SSHKeysSettings = ({ managePermission = true }: Props) => {
       .finally(() => setSaving(false));
   };
 
-  const loadSSHKeys = () => {
-    axiosInstance
-      .get(`organization/${orgid}/ssh`)
-      .then((response) => {
-        setSSHKeys(response.data.data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (isPermissionError(err)) {
-          setError(getErrorMessage(err));
-        } else {
-          message.error(`Could not load SSH keys: ${getErrorMessage(err)}`);
-        }
-        setLoading(false);
-      });
+  const loadSSHKeys = async () => {
+    try {
+      setSSHKeys(await api.organization(orgid).ssh().select(SSH_KEY_FIELDS));
+    } catch (err) {
+      if (isPermissionError(err)) {
+        setError(getErrorMessage(err));
+      } else {
+        message.error(`Could not load SSH keys: ${getErrorMessage(err)}`);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => {
     setLoading(true);
@@ -138,24 +158,20 @@ export const SSHKeysSettings = ({ managePermission = true }: Props) => {
             <ResourceCard
               key={item.id}
               icon={<KeyOutlined />}
-              name={item.attributes.name}
-              tags={
-                item.attributes.sshType && <Tag className="resource-mono">{item.attributes.sshType.toUpperCase()}</Tag>
-              }
+              name={item.name}
+              tags={item.sshType && <Tag className="resource-mono">{item.sshType.toUpperCase()}</Tag>}
               actions={
                 <Tooltip title="Delete">
                   <Button
                     icon={<DeleteOutlined />}
                     disabled={!managePermission}
-                    aria-label={`Delete SSH key ${item.attributes.name}`}
+                    aria-label={`Delete SSH key ${item.name}`}
                     onClick={() => setPendingDelete(item)}
                   />
                 </Tooltip>
               }
             >
-              {item.attributes.description && (
-                <Typography.Text className="resource-card-meta">{item.attributes.description}</Typography.Text>
-              )}
+              {item.description && <Typography.Text className="resource-card-meta">{item.description}</Typography.Text>}
             </ResourceCard>
           ))}
         </div>
@@ -195,11 +211,11 @@ export const SSHKeysSettings = ({ managePermission = true }: Props) => {
             title="Delete SSH key"
             message={
               <>
-                <strong>{pendingDelete?.attributes.name}</strong> can only be deleted when no workspace or module uses
-                it. This cannot be undone.
+                <strong>{pendingDelete?.name}</strong> can only be deleted when no workspace or module uses it. This
+                cannot be undone.
               </>
             }
-            confirmValue={pendingDelete?.attributes.name ?? ""}
+            confirmValue={pendingDelete?.name ?? ""}
             okText="Delete SSH key"
             onConfirm={() => {
               if (pendingDelete) onDelete(pendingDelete);
