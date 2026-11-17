@@ -27,5 +27,5 @@
     }
   },
   "include": ["*.ts", "src"],
-  "exclude": ["src/**/__tests__/**", "src/**/*.test.*", "src/**/*.spec.*", "jest.setup.ts"]
+  "exclude": ["jest.setup.ts", "src/testUtils", "src/**/__tests__/**", "src/**/*.test.*", "src/**/*.spec.*"]
 }
