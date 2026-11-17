@@ -3,8 +3,12 @@ import { useEffect, useState } from "react";
 import { SiGit } from "react-icons/si";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useOrganizationName } from "@/hooks/useOrganizationName";
+import axios from "axios";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { SshKey, VcsModel } from "../types";
+import { createdResourceId } from "@/domain/api/parseDocument";
+import { api, fields } from "../generated/apiPaths";
+import type { CreateBody, Linkage } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
 import { MODULE_SYSTEM_PATTERN } from "./moduleValidation";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { PermissionErrorMessage } from "@/components/feedback/PermissionErrorMessage";
@@ -38,26 +42,33 @@ type Params = {
 // Plain Git: no VCS connection; private repositories authenticate with an SSH key instead.
 const GIT = "git";
 
+// The form shows the connections' names and logos, and the SSH keys' names.
+const SSH_FIELDS = fields.ssh("name");
+const VCS_FIELDS = fields.vcs("name", "vcsType");
+type SshRow = Row<typeof SSH_FIELDS>;
+type VcsRow = Row<typeof VCS_FIELDS>;
+
 export const CreateModule = () => {
   const { orgid } = useParams<Params>();
   const organizationName = useOrganizationName(orgid) ?? "";
   const [form] = Form.useForm<CreateModuleForm>();
   const connection = Form.useWatch("connection", form) ?? GIT;
-  const [vcs, setVCS] = useState<VcsModel[]>([]);
-  const [sshKeys, setSSHKeys] = useState<SshKey[]>([]);
+  const [sshKeys, setSSHKeys] = useState<SshRow[]>([]);
+  const [vcs, setVCS] = useState<VcsRow[]>([]);
   const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!orgid) return;
-    axiosInstance.get(`organization/${orgid}/ssh`).then((response) => setSSHKeys(response.data.data));
-    axiosInstance.get(`organization/${orgid}/vcs`).then((response) => setVCS(response.data.data));
+    api.organization(orgid).ssh().select(SSH_FIELDS).then(setSSHKeys);
+    api.organization(orgid).vcs().select(VCS_FIELDS).then(setVCS);
   }, [orgid]);
 
   // "terraform-aws-vpc.git" names the module "vpc" for the "aws" provider; fill in what is still empty.
   const fillFromSource = () => {
-    const source: string | undefined = form.getFieldValue("source");
-    const match = source?.match(/terraform-([^-/]+)-([^/]+?)(?:\.git)?\/?$/);
+    const source: unknown = form.getFieldValue("source");
+    if (typeof source !== "string") return;
+    const match = source.match(/terraform-([^-/]+)-([^/]+?)(?:\.git)?\/?$/);
     if (!match) return;
     if (!form.getFieldValue("provider")) form.setFieldsValue({ provider: match[1] });
     if (!form.getFieldValue("name")) form.setFieldsValue({ name: match[2] });
@@ -66,12 +77,12 @@ export const CreateModule = () => {
   const onFinish = (values: CreateModuleForm) => {
     const vcsId = values.connection !== GIT ? values.connection : "";
     const sshKey = values.connection === GIT ? values.sshKey : undefined;
-    const relationships = vcsId
+    const relationships: Linkage<"module"> | undefined = vcsId
       ? { vcs: { data: { type: "vcs", id: vcsId } } }
       : sshKey
         ? { ssh: { data: { type: "ssh", id: sshKey } } }
         : undefined;
-    const body = {
+    const body: CreateBody<"module"> = {
       data: {
         type: "module",
         attributes: {
@@ -88,18 +99,20 @@ export const CreateModule = () => {
 
     setSaving(true);
     axiosInstance
-      .post(`organization/${orgid}/module`, body, {
+      .post<unknown>(`organization/${orgid}/module`, body, {
         headers: {
           "Content-Type": "application/vnd.api+json",
         },
       })
       .then((response) => {
-        if (response.status === 201) {
-          navigate(`/organizations/${orgid}/registry/${response.data.data.id}`);
+        if (response.status !== 201) {
+          return;
         }
+        const id = createdResourceId(response.data);
+        navigate(id ? `/organizations/${orgid}/registry/${id}` : `/organizations/${orgid}/registry`);
       })
-      .catch((error) => {
-        if (error.response?.status === 403) {
+      .catch((error: unknown) => {
+        if (axios.isAxiosError(error) && error.response?.status === 403) {
           message.error(<PermissionErrorMessage action="create Modules" permission="Manage Modules" />);
         } else {
           message.error(getErrorMessage(error));
@@ -139,7 +152,7 @@ export const CreateModule = () => {
           extra={
             <>
               {selectedVcs
-                ? `Terrakube reads the repository through the ${selectedVcs.attributes.name} connection.`
+                ? `Terrakube reads the repository through the ${selectedVcs.name} connection.`
                 : "Terrakube clones the repository directly. Private repositories need an SSH key."}{" "}
               <Link to={`/organizations/${orgid}/settings/vcs/new`}>Connect a new VCS provider</Link>
             </>
@@ -155,9 +168,9 @@ export const CreateModule = () => {
             {vcs.map((item) => (
               <Radio key={item.id} value={item.id} className="vcs-provider-tile">
                 <span className="vcs-provider-tile-icon" aria-hidden="true">
-                  <VcsLogo type={item.attributes.vcsType} size={28} />
+                  <VcsLogo type={item.vcsType} size={28} />
                 </span>
-                {item.attributes.name}
+                {item.name}
               </Radio>
             ))}
           </Radio.Group>
@@ -171,7 +184,7 @@ export const CreateModule = () => {
             <Select
               allowClear
               placeholder="None, the repository is public"
-              options={sshKeys.map((key) => ({ value: key.id, label: key.attributes?.name }))}
+              options={sshKeys.map((key) => ({ value: key.id, label: key.name ?? undefined }))}
             />
           </Form.Item>
         )}

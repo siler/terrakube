@@ -1,7 +1,7 @@
 import { Table } from "antd";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { formatCount } from "@/modules/utils/formatCount";
-import { FlatModule } from "../../types";
+import { FlatModule } from "../moduleFields";
 
 type Params = {
   orgid: string;
@@ -66,7 +66,7 @@ export default function ModuleTable({ modules }: Props) {
       rowClassName="registry-table-row"
       onRow={(record) => ({
         onClick: (event) => {
-          if ((event.target as HTMLElement).closest("a")) return;
+          if (event.target instanceof Element && event.target.closest("a")) return;
           navigate(`/organizations/${orgid}/registry/${record.id}`);
         },
       })}
