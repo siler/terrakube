@@ -2,7 +2,7 @@ import { DownloadOutlined } from "@ant-design/icons";
 import { Link, useParams } from "react-router-dom";
 import { relativeTime } from "@/modules/utils/dates";
 import { formatCount } from "@/modules/utils/formatCount";
-import { FlatModule } from "../types";
+import { FlatModule } from "./moduleFields";
 import { providerIcon } from "./registryHelpers";
 import "./Module.css";
 

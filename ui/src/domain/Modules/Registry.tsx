@@ -9,10 +9,11 @@ import { ModuleList } from "./ModuleList";
 import ModuleTable from "./components/ModuleTable";
 import { ProviderList } from "../Providers/ProviderList";
 import ProviderTable from "../Providers/components/ProviderTable";
-import axiosInstance from "../../config/axiosConfig";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../config/actionTypes";
-import { FlatModule } from "../types";
-import { FlatProvider } from "../Providers/types";
+import { api } from "../generated/apiPaths";
+import { FlatModule, MODULE_FIELDS } from "./moduleFields";
+import { FlatProvider, PROVIDER_FIELDS } from "../Providers/providerFields";
+import { useOrganizationName } from "@/hooks/useOrganizationName";
 import { ErrorInformation } from "@/modules/api/types";
 import ListViewToggle from "@/components/display/ListViewToggle/ListViewToggle";
 import { getStoredListViewMode, ListViewMode } from "@/components/display/ListViewToggle/listViewPreference";
@@ -22,61 +23,35 @@ import "./Module.css";
 
 const PAGE_SIZE = 10;
 
-const matches = (item: { name: string; description?: string }, filter: string) =>
+const matches = (item: { name: string; description?: string | null }, filter: string) =>
   item.name.toLowerCase().includes(filter) || !!item.description?.toLowerCase().includes(filter);
 
 type Params = {
   orgid: string;
 };
 
+type RegistryTab = "modules" | "providers";
+
+// Pairs each tab with its own row type so the list components get correctly typed rows without casts.
+type RegistryView =
+  | { kind: "modules"; total: number; filtered: FlatModule[] }
+  | { kind: "providers"; total: number; filtered: FlatProvider[] };
+
 type Props = {
   organizationName: string;
   setOrganizationName: React.Dispatch<React.SetStateAction<string>>;
 };
 
-// Lightweight fetch: only the fields the list views actually need
-// Modules: ~1.5KB instead of ~73KB (98% smaller)
-// Providers: ~200B instead of ~2KB
-// Org name: ~100B instead of ~75KB
-
 async function fetchModules(orgId: string): Promise<FlatModule[]> {
-  const response = await axiosInstance.get(
-    `organization/${orgId}/module?fields[module]=name,description,provider,latestVersion,downloadQuantity,createdDate,updatedDate`
-  );
-  return (response.data.data || []).map((m: any) => ({ id: m.id, ...m.attributes }));
+  return api.organization(orgId).module().select(MODULE_FIELDS);
 }
 
 async function fetchProviders(orgId: string): Promise<FlatProvider[]> {
-  const response = await axiosInstance.get(`organization/${orgId}/provider?include=version`);
-  const data = response.data.data || [];
-  const included = response.data.included || [];
-
-  // Build a map of providerId -> latest version number
-  const providerVersions: Record<string, string[]> = {};
-  for (const item of included) {
-    if (item.type === "version") {
-      const providerId = item.relationships?.provider?.data?.id;
-      if (providerId) {
-        if (!providerVersions[providerId]) providerVersions[providerId] = [];
-        providerVersions[providerId].push(item.attributes.versionNumber);
-      }
-    }
-  }
-
-  return data.map((p: any) => {
-    const versions = providerVersions[p.id] || [];
-    versions.sort(compareVersionsDesc);
-    return {
-      id: p.id,
-      ...p.attributes,
-      latestVersion: versions[0] || undefined,
-    };
-  });
-}
-
-async function fetchOrgName(orgId: string): Promise<string> {
-  const response = await axiosInstance.get(`organization/${orgId}?fields[organization]=name`);
-  return response.data.data.attributes.name;
+  const providers = await api.organization(orgId).provider().select(PROVIDER_FIELDS);
+  return providers.map(({ version, ...provider }) => ({
+    ...provider,
+    latestVersion: (version ?? []).map((v) => v.versionNumber).sort(compareVersionsDesc)[0],
+  }));
 }
 
 export const Registry = ({ setOrganizationName, organizationName }: Props) => {
@@ -96,7 +71,15 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
   const modulesLoaded = useRef(false);
   const providersLoaded = useRef(false);
 
-  const activeTab = searchParams.get("tab") === "providers" ? "providers" : "modules";
+  const activeTab: RegistryTab = searchParams.get("tab") === "providers" ? "providers" : "modules";
+  const fetchedOrganizationName = useOrganizationName(orgid);
+
+  useEffect(() => {
+    if (fetchedOrganizationName) {
+      sessionStorage.setItem(ORGANIZATION_NAME, fetchedOrganizationName);
+      setOrganizationName(fetchedOrganizationName);
+    }
+  }, [fetchedOrganizationName]);
 
   const loadModules = useCallback(async () => {
     if (!orgid || modulesLoaded.current) return;
@@ -122,7 +105,7 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
     }
   }, [orgid]);
 
-  // On mount: fetch org name + data for the active tab in parallel
+  // On mount: fetch data for the active tab
   useEffect(() => {
     if (!orgid) return;
     sessionStorage.setItem(ORGANIZATION_ARCHIVE, orgid);
@@ -133,31 +116,13 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
       setLoading(true);
       setError(undefined);
       try {
-        // Fetch org name in parallel with the active tab's data
-        const promises: Promise<any>[] = [
-          fetchOrgName(orgid).then((name) => {
-            sessionStorage.setItem(ORGANIZATION_NAME, name);
-            setOrganizationName(name);
-          }),
-        ];
-
         if (activeTab === "providers") {
-          promises.push(
-            fetchProviders(orgid).then((data) => {
-              setProviders(data);
-              providersLoaded.current = true;
-            })
-          );
+          setProviders(await fetchProviders(orgid));
+          providersLoaded.current = true;
         } else {
-          promises.push(
-            fetchModules(orgid).then((data) => {
-              setModules(data);
-              modulesLoaded.current = true;
-            })
-          );
+          setModules(await fetchModules(orgid));
+          modulesLoaded.current = true;
         }
-
-        await Promise.all(promises);
       } catch {
         setError({ title: "Failed to load registry data" });
       } finally {
@@ -178,16 +143,27 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
     }
   }, [activeTab, loading, loadModules, loadProviders]);
 
-  const handleTabChange = (key: string) => {
+  const handleTabChange = (key: RegistryTab) => {
     setSearchParams({ tab: key });
     setPage(1);
   };
 
   const filter = searchFilter.trim().toLowerCase();
   const isModules = activeTab === "modules";
-  const items = isModules ? modules : providers;
-  const filtered = items?.filter((item) => matches(item, filter));
-  const pageItems = filtered?.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) ?? [];
+  const buildView = (): RegistryView | undefined => {
+    if (isModules) {
+      return modules && { kind: "modules", total: modules.length, filtered: modules.filter((m) => matches(m, filter)) };
+    }
+    return (
+      providers && {
+        kind: "providers",
+        total: providers.length,
+        filtered: providers.filter((p) => matches(p, filter)),
+      }
+    );
+  };
+  const view = buildView();
+  const pageOf = <T,>(rows: T[]) => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const noun = isModules ? "modules" : "providers";
 
   const publishButton = permissions.manageModule && (
@@ -206,8 +182,8 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
   );
 
   const renderItems = () => {
-    if (!filtered) return <Spin className="registry-loading" />;
-    if (items!.length === 0) {
+    if (!view) return <Spin className="registry-loading" />;
+    if (view.total === 0) {
       return (
         <EmptyState
           description={
@@ -220,26 +196,28 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
         </EmptyState>
       );
     }
-    if (filtered.length === 0) return <EmptyState description={`No ${noun} match "${searchFilter.trim()}".`} />;
+    if (view.filtered.length === 0) {
+      return <EmptyState description={`No ${noun} match "${searchFilter.trim()}".`} />;
+    }
     if (listViewMode === "compact") {
-      return isModules ? (
-        <ModuleTable modules={filtered as FlatModule[]} />
+      return view.kind === "modules" ? (
+        <ModuleTable modules={view.filtered} />
       ) : (
-        <ProviderTable providers={filtered as FlatProvider[]} />
+        <ProviderTable providers={view.filtered} />
       );
     }
     return (
       <>
-        {isModules ? (
-          <ModuleList modules={pageItems as FlatModule[]} />
+        {view.kind === "modules" ? (
+          <ModuleList modules={pageOf(view.filtered)} />
         ) : (
-          <ProviderList providers={pageItems as FlatProvider[]} />
+          <ProviderList providers={pageOf(view.filtered)} />
         )}
         <Pagination
           className="registry-pagination"
           current={page}
           pageSize={PAGE_SIZE}
-          total={filtered.length}
+          total={view.filtered.length}
           onChange={setPage}
           hideOnSinglePage
         />
@@ -275,10 +253,10 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
         </Typography.Link>
       </Typography.Paragraph>
       <div className="registry-filter">
-        <Segmented
+        <Segmented<RegistryTab>
           aria-label="Show"
           value={activeTab}
-          onChange={(key) => handleTabChange(key as string)}
+          onChange={handleTabChange}
           options={[
             { label: "Modules", value: "modules" },
             { label: "Providers", value: "providers" },
@@ -298,9 +276,9 @@ export const Registry = ({ setOrganizationName, organizationName }: Props) => {
         />
         <ListViewToggle value={listViewMode} onChange={setListViewMode} />
       </div>
-      {filtered && items!.length > 0 && (
+      {view && view.total > 0 && (
         <Typography.Title level={2} className="registry-count">
-          {isModules ? "Modules" : "Providers"} ({filtered.length})
+          {isModules ? "Modules" : "Providers"} ({view.filtered.length})
         </Typography.Title>
       )}
       {renderItems()}

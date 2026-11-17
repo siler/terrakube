@@ -11,14 +11,17 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { listProviders } from "../Providers/providerService";
+import { parseModuleSearch, parseProviderSearch } from "../Providers/registryParse";
+import type { TerraformRegistryModule, TerraformRegistryProvider } from "../Providers/types";
 import { formatCount } from "@/modules/utils/formatCount";
 import { providerIcon } from "./registryHelpers";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import "./PublicRegistrySearch.css";
-import { ProviderModel } from "../Providers/types";
-import { ModuleModel } from "../types";
 
-import axiosInstance, { axiosRegistry } from "../../config/axiosConfig";
+import axios from "axios";
+import axiosInstance, { axiosRegistry, jsonApiErrorDetail } from "../../config/axiosConfig";
+import { api, fields } from "../generated/apiPaths";
+import type { CreateBody } from "../api/writeBodies";
 
 const { Search } = Input;
 
@@ -30,66 +33,8 @@ type Props = {
   organizationName: string;
 };
 
-// Types for Terraform Registry API responses
-type TerraformRegistryProvider = {
-  id: string;
-  namespace: string;
-  name: string;
-  alias: string;
-  version: string;
-  description: string;
-  source: string;
-  published_at: string;
-  downloads: number;
-  tier: string;
-  logo_url: string;
-};
-
-type TerraformRegistryModule = {
-  id: string;
-  namespace: string;
-  name: string;
-  provider: string;
-  version: string;
-  description: string;
-  source: string;
-  published_at: string;
-  downloads: number;
-  verified: boolean;
-};
-
-type ProviderSearchResponse = {
-  providers: {
-    id: string;
-    namespace: string;
-    name: string;
-    alias: string | null;
-    version: string;
-    tag: string;
-    description: string;
-    source: string;
-    published_at: string;
-    downloads: number;
-    tier: string;
-    logo_url: string;
-  }[];
-  meta: {
-    limit: number;
-    current_offset: number;
-    next_offset: number | null;
-    next_url: string | null;
-  };
-};
-
-type ModuleSearchResponse = {
-  modules: TerraformRegistryModule[];
-  meta: {
-    limit: number;
-    current_offset: number;
-    next_offset: number | null;
-    prev_offset: number | null;
-  };
-};
+// Only the name/provider pairs, to mark search results the organization has already imported.
+const EXISTING_MODULE_FIELDS = fields.module("name", "provider");
 
 // Modal state type
 type ModalState = {
@@ -130,24 +75,11 @@ export const PublicRegistrySearch = ({ organizationName }: Props) => {
       setLoadingExisting(true);
       try {
         // Fetch existing providers
-        const providersResponse = await listProviders(orgid);
-        const providerNames = new Set(
-          providersResponse.data.map((p: ProviderModel) => p.attributes.name.toLowerCase())
-        );
-        setExistingProviders(providerNames);
+        const providerRows = await listProviders(orgid);
+        setExistingProviders(new Set(providerRows.map((p) => p.name.toLowerCase())));
 
-        const modulesResponse = await axiosInstance.get(`organization/${orgid}?include=module`);
-        const moduleNames = new Set<string>();
-        if (modulesResponse.data.included) {
-          modulesResponse.data.included
-            .filter((item: any) => item.type === "module")
-            .forEach((m: ModuleModel) => {
-              // Create a key from name and provider
-              const key = `${m.attributes.name}/${m.attributes.provider}`.toLowerCase();
-              moduleNames.add(key);
-            });
-        }
-        setExistingModules(moduleNames);
+        const moduleRows = await api.organization(orgid).module().select(EXISTING_MODULE_FIELDS);
+        setExistingModules(new Set(moduleRows.map((m) => `${m.name}/${m.provider}`.toLowerCase())));
       } catch (error) {
         console.error("Error fetching existing items:", error);
       } finally {
@@ -178,26 +110,13 @@ export const PublicRegistrySearch = ({ organizationName }: Props) => {
     setLoading(true);
     try {
       // Use backend proxy to avoid CORS issues
-      const response = await axiosRegistry.get<ProviderSearchResponse>("/registry/v1/providers", {
+      const response = await axiosRegistry.get<unknown>("/registry/v1/providers", {
         params: {
           q: query,
           limit: 20,
         },
       });
-
-      const mappedProviders: TerraformRegistryProvider[] = (response.data.providers || []).map((item) => ({
-        id: item.id,
-        namespace: item.namespace,
-        name: item.name,
-        alias: item.alias || "",
-        version: item.version,
-        description: item.description,
-        source: item.source,
-        published_at: item.published_at,
-        downloads: item.downloads,
-        tier: item.tier,
-        logo_url: item.logo_url,
-      }));
+      const mappedProviders = parseProviderSearch(response.data);
 
       // Official and partner providers first, then by downloads, as on the Terraform Registry.
       const tierRank = (tier: string) => ["official", "partner"].indexOf(tier) + 1 || 3;
@@ -220,14 +139,14 @@ export const PublicRegistrySearch = ({ organizationName }: Props) => {
     setLoading(true);
     try {
       // Use backend proxy to avoid CORS issues
-      const response = await axiosRegistry.get<ModuleSearchResponse>("/registry/v1/modules", {
+      const response = await axiosRegistry.get<unknown>("/registry/v1/modules", {
         params: {
           q: query,
           limit: 20,
         },
       });
 
-      setModules(response.data.modules || []);
+      setModules(parseModuleSearch(response.data));
     } catch (error) {
       console.error("Error searching modules:", error);
       message.error("Failed to search modules");
@@ -269,15 +188,15 @@ export const PublicRegistrySearch = ({ organizationName }: Props) => {
   };
 
   const handleAddModule = async () => {
-    if (!modalState.item || modalState.type !== "module") return;
+    const module = modalState.item;
+    if (!module || modalState.type !== "module") return;
 
-    const module = modalState.item as TerraformRegistryModule;
     setImporting(true);
 
     try {
       // Create module in Terrakube
       // Note: registryPath is a computed attribute on the backend, don't send it
-      const body = {
+      const body: CreateBody<"module"> = {
         data: {
           type: "module",
           attributes: {
@@ -299,9 +218,9 @@ export const PublicRegistrySearch = ({ organizationName }: Props) => {
       message.success(`Module ${module.namespace}/${module.name} added successfully`);
       closeModal();
       navigate(`/organizations/${orgid}/registry?tab=modules`);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error importing module:", error);
-      message.error(error.response?.data?.errors?.[0]?.detail || "Failed to add module");
+      message.error((axios.isAxiosError(error) && jsonApiErrorDetail(error.response?.data)) || "Failed to add module");
     } finally {
       setImporting(false);
     }
