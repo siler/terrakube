@@ -2,7 +2,10 @@ import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Form, Input, Spin, Table, Tooltip, message, Typography } from "antd";
 import { useEffect, useState } from "react";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { FederatedClaim } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { CreateBody, UpdateBody, WriteAttributes } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
+import { createdResourceId } from "@/domain/api/parseDocument";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Settings.css";
 import "./components/ResourceCard.css";
@@ -21,6 +24,10 @@ type FederatedForm = {
   issuerUrl: string;
   audience: string;
 };
+
+const FEDERATED_FIELDS = fields.federated("name", "issuerUrl", "audience");
+const CLAIM_FIELDS = fields.federated_claim("claimKey", "claimValue");
+type FederatedClaimRow = Row<typeof CLAIM_FIELDS>;
 
 type ClaimRow = {
   key: string;
@@ -49,29 +56,30 @@ export const EditFederatedCredential = ({ mode, setMode, federatedId, loadFedera
     }
   }, [federatedId]);
 
-  const loadFederatedCredential = (id: string) => {
-    Promise.all([axiosInstance.get(`federated/${id}`), axiosInstance.get(`federated/${id}/claims`)])
-      .then(([credentialRes, claimsRes]) => {
-        const attrs = credentialRes.data.data.attributes;
-        form.setFieldsValue({
-          name: attrs.name,
-          issuerUrl: attrs.issuerUrl,
-          audience: attrs.audience,
-        });
-        const loadedClaims: ClaimRow[] = (claimsRes.data.data || []).map((c: FederatedClaim) => ({
-          key: c.id,
-          id: c.id,
-          claimKey: c.attributes.claimKey,
-          claimValue: c.attributes.claimValue,
-        }));
-        setClaims(loadedClaims);
-      })
-      .catch((err) => {
-        message.error(`Could not load the federated credential: ${getErrorMessage(err)}`);
-      })
-      .finally(() => {
-        setLoading(false);
+  const loadFederatedCredential = async (id: string) => {
+    try {
+      const [credential, claims] = await Promise.all([
+        api.federated(id).select(FEDERATED_FIELDS),
+        api.federated(id).claims().select(CLAIM_FIELDS),
+      ]);
+      form.setFieldsValue({
+        name: credential.name,
+        issuerUrl: credential.issuerUrl,
+        audience: credential.audience,
       });
+      setClaims(
+        claims.map((claim) => ({
+          key: claim.id,
+          id: claim.id,
+          claimKey: claim.claimKey,
+          claimValue: claim.claimValue,
+        }))
+      );
+    } catch (err) {
+      message.error(`Could not load the federated credential: ${getErrorMessage(err)}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const onFinish = async (values: FederatedForm) => {
@@ -80,37 +88,36 @@ export const EditFederatedCredential = ({ mode, setMode, federatedId, loadFedera
       return;
     }
 
-    const body = {
-      data: {
-        type: "federated",
-        attributes: {
-          name: values.name,
-          issuerUrl: values.issuerUrl,
-          audience: values.audience,
-        },
-      },
+    const attributes: WriteAttributes<"federated"> = {
+      name: values.name,
+      issuerUrl: values.issuerUrl,
+      audience: values.audience,
     };
 
     setSaving(true);
     try {
-      let savedId = federatedId;
+      let savedId: string;
 
       if (mode === "create") {
-        const res = await axiosInstance.post(`federated`, body, {
+        const body: CreateBody<"federated"> = { data: { type: "federated", attributes } };
+        const res = await axiosInstance.post<unknown>(`federated`, body, {
           headers: JSONAPI_HEADERS,
         });
-        savedId = res.data.data.id;
+        const createdId = createdResourceId(res.data);
+        if (!createdId) {
+          throw new Error("the server did not return the new credential's id");
+        }
+        savedId = createdId;
         message.success("Federated credential added");
       } else {
-        await axiosInstance.patch(
-          `federated/${federatedId}`,
-          { data: { id: federatedId, ...body.data } },
-          { headers: JSONAPI_HEADERS }
-        );
+        if (!federatedId) throw new Error("no federated credential is selected to update");
+        const body: UpdateBody<"federated"> = { data: { type: "federated", id: federatedId, attributes } };
+        await axiosInstance.patch(`federated/${federatedId}`, body, { headers: JSONAPI_HEADERS });
+        savedId = federatedId;
         message.success("Federated credential updated");
       }
 
-      await saveClaims(savedId!);
+      await saveClaims(savedId);
       setMode("list");
       loadFederated();
     } catch (err: unknown) {
@@ -122,10 +129,9 @@ export const EditFederatedCredential = ({ mode, setMode, federatedId, loadFedera
 
   const saveClaims = async (fedId: string) => {
     // Load existing claims from backend to diff against
-    let existingClaims: FederatedClaim[] = [];
+    let existingClaims: FederatedClaimRow[] = [];
     try {
-      const res = await axiosInstance.get(`federated/${fedId}/claims`);
-      existingClaims = res.data.data || [];
+      existingClaims = await api.federated(fedId).claims().select(CLAIM_FIELDS);
     } catch {
       // If federated was just created, there are no claims yet
     }
@@ -140,46 +146,37 @@ export const EditFederatedCredential = ({ mode, setMode, federatedId, loadFedera
     // Create new claims (no id)
     const toCreate = claims.filter((c) => !c.id);
     await Promise.all(
-      toCreate.map((c) =>
-        axiosInstance.post(
-          `federated/${fedId}/claims`,
-          {
+      toCreate.map((c) => {
+        const body: CreateBody<"federated_claim"> = {
+          data: {
+            type: "federated_claim",
+            attributes: {
+              claimKey: c.claimKey,
+              claimValue: c.claimValue,
+            },
+          },
+        };
+        return axiosInstance.post(`federated/${fedId}/claims`, body, { headers: JSONAPI_HEADERS });
+      })
+    );
+
+    // Update existing claims that changed
+    const toUpdate = claims.filter((c): c is ClaimRow & { id: string } => !!c.id && existingIds.has(c.id));
+    await Promise.all(
+      toUpdate.map((c) => {
+        const existing = existingClaims.find((e) => e.id === c.id);
+        if (existing && (existing.claimKey !== c.claimKey || existing.claimValue !== c.claimValue)) {
+          const body: UpdateBody<"federated_claim"> = {
             data: {
               type: "federated_claim",
+              id: c.id,
               attributes: {
                 claimKey: c.claimKey,
                 claimValue: c.claimValue,
               },
             },
-          },
-          { headers: JSONAPI_HEADERS }
-        )
-      )
-    );
-
-    // Update existing claims that changed
-    const toUpdate = claims.filter((c) => c.id && existingIds.has(c.id));
-    await Promise.all(
-      toUpdate.map((c) => {
-        const existing = existingClaims.find((e) => e.id === c.id);
-        if (
-          existing &&
-          (existing.attributes.claimKey !== c.claimKey || existing.attributes.claimValue !== c.claimValue)
-        ) {
-          return axiosInstance.patch(
-            `federated/${fedId}/claims/${c.id}`,
-            {
-              data: {
-                type: "federated_claim",
-                id: c.id,
-                attributes: {
-                  claimKey: c.claimKey,
-                  claimValue: c.claimValue,
-                },
-              },
-            },
-            { headers: JSONAPI_HEADERS }
-          );
+          };
+          return axiosInstance.patch(`federated/${fedId}/claims/${c.id}`, body, { headers: JSONAPI_HEADERS });
         }
         return Promise.resolve();
       })
