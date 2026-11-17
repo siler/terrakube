@@ -3,14 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { RunTriggers } from "../RunTriggers";
 
-const getMock = jest.fn();
-const deleteMock = jest.fn();
+const getMock = jest.fn<Promise<unknown>, [url: string, config?: unknown]>();
+const deleteMock = jest.fn<Promise<unknown>, [url: string, config?: unknown]>();
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
   default: {
-    get: (...args: unknown[]) => getMock(...args),
-    delete: (...args: unknown[]) => deleteMock(...args),
+    get: (...args: Parameters<typeof getMock>) => getMock(...args),
+    delete: (...args: Parameters<typeof deleteMock>) => deleteMock(...args),
     post: jest.fn(),
     patch: jest.fn(),
   },
@@ -23,13 +23,15 @@ const DESTINATION = "ws-downstream";
 
 /**
  * One edge in each direction, as the API returns them: a single collection where this
- * workspace appears sometimes as source and sometimes as destination.
+ * workspace appears sometimes as source and sometimes as destination. Only the template
+ * comes along as an include; the workspace ends arrive as linkage alone.
  */
 const bothDirections = {
   data: {
     data: [
       {
         id: "edge-incoming",
+        type: "runTrigger",
         attributes: { enabled: true },
         relationships: {
           sourceWorkspace: { data: { type: "workspace", id: SOURCE } },
@@ -39,6 +41,7 @@ const bothDirections = {
       },
       {
         id: "edge-outgoing",
+        type: "runTrigger",
         attributes: { enabled: false },
         relationships: {
           sourceWorkspace: { data: { type: "workspace", id: WORKSPACE } },
@@ -46,10 +49,16 @@ const bothDirections = {
         },
       },
     ],
-    included: [
-      { type: "workspace", id: SOURCE, attributes: { name: "network" } },
-      { type: "workspace", id: DESTINATION, attributes: { name: "vpn" } },
-      { type: "template", id: "tpl-1", attributes: { name: "Plan and Apply" } },
+    included: [{ type: "template", id: "tpl-1", attributes: { name: "Plan and Apply" } }],
+  },
+};
+
+/** The names read, as Elide answers it: one filtered collection, no `included`. */
+const otherEndNames = {
+  data: {
+    data: [
+      { id: SOURCE, type: "workspace", attributes: { name: "network" } },
+      { id: DESTINATION, type: "workspace", attributes: { name: "vpn" } },
     ],
   },
 };
@@ -70,20 +79,38 @@ describe("RunTriggers", () => {
   beforeEach(() => {
     getMock.mockReset();
     deleteMock.mockReset();
-    getMock.mockResolvedValue(bothDirections);
+    getMock.mockImplementation((url: string) => {
+      if (url.startsWith("runTrigger?")) return Promise.resolve(bothDirections);
+      if (url.includes("id%3Din")) return Promise.resolve(otherEndNames);
+      return Promise.resolve({ data: { data: [] } });
+    });
   });
 
-  it("asks the API for both directions in a single request", async () => {
+  it("asks for both directions in one request, then names the other ends in one more", async () => {
     renderPage();
 
-    await waitFor(() => expect(getMock).toHaveBeenCalled());
-    const [url, config] = getMock.mock.calls[0];
-    expect(url).toBe("runTrigger");
-    expect(config.params["filter[runTrigger]"]).toBe(
-      `sourceWorkspace.id==${WORKSPACE},destinationWorkspace.id==${WORKSPACE}`
-    );
-    expect(config.params.include).toContain("sourceWorkspace");
-    expect(config.params.include).toContain("destinationWorkspace");
+    await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+    expect(getMock.mock.calls.map(([url]) => decodeURIComponent(url))).toEqual([
+      "runTrigger?include=template&fields[runTrigger]=enabled,sourceWorkspace,destinationWorkspace,template" +
+        "&fields[template]=name" +
+        `&filter[runTrigger]=(sourceWorkspace.id=='${WORKSPACE}',destinationWorkspace.id=='${WORKSPACE}')`,
+      `organization/org-1/workspace?fields[workspace]=name&filter[workspace]=id=in=('${SOURCE}','${DESTINATION}')`,
+    ]);
+  });
+
+  it("loads the pickers with names only", async () => {
+    renderPage();
+    await screen.findByRole("link", { name: "network" });
+    getMock.mockClear();
+    getMock.mockResolvedValue({ data: { data: [] } });
+
+    await userEvent.click(screen.getByRole("button", { name: /add source workspace/i }));
+
+    await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+    expect(getMock.mock.calls.map(([url]) => decodeURIComponent(url))).toEqual([
+      "organization/org-1/workspace?fields[workspace]=name",
+      "organization/org-1/template?fields[template]=name",
+    ]);
   });
 
   /**
@@ -135,7 +162,7 @@ describe("RunTriggers", () => {
    */
   it("does not offer a source that is already wired", async () => {
     getMock.mockImplementation((url: string) => {
-      if (url === "runTrigger") return Promise.resolve(bothDirections);
+      if (url.startsWith("runTrigger?")) return Promise.resolve(bothDirections);
       if (url.includes("/template")) return Promise.resolve({ data: { data: [] } });
       return Promise.resolve({
         data: {

@@ -3,7 +3,10 @@ import { Alert, Button, Form, message, Modal, Popconfirm, Select, Space, Switch,
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { RunTrigger, RunTriggerRow, Template, Workspace } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import { or } from "../api/rsqlFilter";
+import type { CreateBody, Linkage, UpdateBody } from "../api/writeBodies";
 import "./Workspaces.css";
 
 type Props = {
@@ -18,91 +21,115 @@ type TriggerForm = {
   templateId?: string;
 };
 
-/** Every resource in an include block, keyed so an edge can resolve its own ends. */
-type IncludedIndex = Record<string, { id: string; attributes: { name: string } }>;
+const WORKSPACE_NAME = fields.workspace("name");
+const TEMPLATE_NAME = fields.template("name");
 
-const indexIncluded = (included: any[] | undefined): IncludedIndex => {
-  const index: IncludedIndex = {};
-  (included ?? []).forEach((item) => {
-    index[`${item.type}:${item.id}`] = item;
-  });
-  return index;
+// The trigger's ends are read as linkage: the id arrives even when this user cannot read the
+// other workspace, and only those names are fetched separately once the edges are known.
+const RUN_TRIGGER_FIELDS = fields.runTrigger("enabled", {
+  sourceWorkspace: ids,
+  destinationWorkspace: ids,
+  template: TEMPLATE_NAME,
+});
+
+/** One run-trigger edge as the API returns it, with the template resolved and the ends as linkage. */
+type TriggerEdge = Row<typeof RUN_TRIGGER_FIELDS>;
+
+/** A workspace as the source picker lists it. */
+type WorkspaceNameRow = Row<typeof WORKSPACE_NAME>;
+
+/** A template as the picker lists it. */
+type TemplateNameRow = Row<typeof TEMPLATE_NAME>;
+
+/** One edge as a table row renders it, with the other end already resolved. */
+type TriggerRow = {
+  id: string;
+  enabled: boolean;
+  workspaceId: string;
+  workspaceName: string;
+  templateId?: string;
+  templateName?: string;
 };
 
-const nameOf = (index: IncludedIndex, type: string, id: string | undefined) =>
-  id ? (index[`${type}:${id}`]?.attributes?.name ?? id) : undefined;
+const toRow = (edge: TriggerEdge, otherId: string | undefined, names: Map<string, string>): TriggerRow => ({
+  id: edge.id,
+  enabled: edge.enabled,
+  workspaceId: otherId ?? "",
+  workspaceName: otherId ? (names.get(otherId) ?? otherId) : "",
+  templateId: edge.template?.id,
+  templateName: edge.template?.name ?? undefined,
+});
 
 export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manageWorkspace }: Props) => {
   const [form] = Form.useForm<TriggerForm>();
-  const [incoming, setIncoming] = useState<RunTriggerRow[]>([]);
-  const [outgoing, setOutgoing] = useState<RunTriggerRow[]>([]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [templates, setTemplates] = useState<Template[]>([]);
+  const [incoming, setIncoming] = useState<TriggerRow[]>([]);
+  const [outgoing, setOutgoing] = useState<TriggerRow[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceNameRow[]>([]);
+  const [templates, setTemplates] = useState<TemplateNameRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [visible, setVisible] = useState(false);
 
   const loadTriggers = useCallback(() => {
     setLoading(true);
-    axiosInstance
-      .get("runTrigger", {
-        params: {
-          include: "sourceWorkspace,destinationWorkspace,template",
+    (async () => {
+      try {
+        const edges = await api
+          .runTrigger()
+          .select(RUN_TRIGGER_FIELDS)
           // Both directions in one round trip: a comma is OR in Elide's filter syntax.
-          "filter[runTrigger]": `sourceWorkspace.id==${workspaceId},destinationWorkspace.id==${workspaceId}`,
-        },
-      })
-      .then((response) => {
-        const index = indexIncluded(response.data.included);
-        const edges: RunTrigger[] = response.data.data ?? [];
-
-        const toRow = (trigger: RunTrigger, otherEnd: "sourceWorkspace" | "destinationWorkspace"): RunTriggerRow => {
-          const otherId = trigger.relationships[otherEnd]?.data?.id;
-          const templateId = trigger.relationships.template?.data?.id;
-          return {
-            id: trigger.id,
-            enabled: trigger.attributes.enabled,
-            workspaceId: otherId,
-            workspaceName: nameOf(index, "workspace", otherId) ?? otherId,
-            templateId,
-            templateName: nameOf(index, "template", templateId),
-          };
-        };
-
-        setIncoming(
-          edges
-            .filter((edge) => edge.relationships.destinationWorkspace?.data?.id === workspaceId)
-            .map((edge) => toRow(edge, "sourceWorkspace"))
-        );
-        setOutgoing(
-          edges
-            .filter((edge) => edge.relationships.sourceWorkspace?.data?.id === workspaceId)
-            .map((edge) => toRow(edge, "destinationWorkspace"))
-        );
-        setLoading(false);
-      })
-      .catch((err) => {
+          .where((trigger) =>
+            or(trigger.sourceWorkspace.id.eq(workspaceId), trigger.destinationWorkspace.id.eq(workspaceId))
+          );
+        const incoming = edges
+          .filter((edge) => edge.destinationWorkspace?.id === workspaceId)
+          .map((edge) => ({ edge, otherId: edge.sourceWorkspace?.id }));
+        const outgoing = edges
+          .filter((edge) => edge.sourceWorkspace?.id === workspaceId)
+          .map((edge) => ({ edge, otherId: edge.destinationWorkspace?.id }));
+        const otherIds = [...new Set([...incoming, ...outgoing].flatMap(({ otherId }) => (otherId ? [otherId] : [])))];
+        // A failed name lookup only costs the names: the rows still link by id.
+        const nameRows = otherIds.length
+          ? await Promise.resolve(
+              api
+                .organization(organizationId)
+                .workspace()
+                .select(WORKSPACE_NAME)
+                .where((w) => w.id.in(otherIds))
+            ).catch(() => [])
+          : [];
+        const names = new Map(nameRows.map((row) => [row.id, row.name]));
+        setIncoming(incoming.map(({ edge, otherId }) => toRow(edge, otherId, names)));
+        setOutgoing(outgoing.map(({ edge, otherId }) => toRow(edge, otherId, names)));
+      } catch (err) {
         message.error(getErrorMessage(err));
+      } finally {
         setLoading(false);
-      });
-  }, [workspaceId]);
+      }
+    })();
+  }, [organizationId, workspaceId]);
 
   useEffect(() => {
     loadTriggers();
   }, [loadTriggers]);
 
   const loadPickerData = useCallback(() => {
-    axiosInstance
-      .get(`organization/${organizationId}/workspace`)
-      .then((response) => {
+    (async () => {
+      try {
+        const rows = await api.organization(organizationId).workspace().select(WORKSPACE_NAME);
         // A workspace cannot trigger itself, so it is not offered as a source.
-        setWorkspaces((response.data.data ?? []).filter((item: Workspace) => item.id !== workspaceId));
-      })
-      .catch((err) => message.error(getErrorMessage(err)));
+        setWorkspaces(rows.filter((item) => item.id !== workspaceId));
+      } catch (err) {
+        message.error(getErrorMessage(err));
+      }
+    })();
 
-    axiosInstance
-      .get(`organization/${organizationId}/template`)
-      .then((response) => setTemplates(response.data.data ?? []))
-      .catch((err) => message.error(getErrorMessage(err)));
+    (async () => {
+      try {
+        setTemplates(await api.organization(organizationId).template().select(TEMPLATE_NAME));
+      } catch (err) {
+        message.error(getErrorMessage(err));
+      }
+    })();
   }, [organizationId, workspaceId]);
 
   const onAdd = () => {
@@ -112,7 +139,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
   };
 
   const onCreate = (values: TriggerForm) => {
-    const relationships: Record<string, unknown> = {
+    const relationships: Linkage<"runTrigger"> = {
       // This workspace is the destination: it is the one that will start running. That is
       // also the end the API checks manage rights on, so this is the direction that can be
       // configured from here.
@@ -123,12 +150,12 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       relationships.template = { data: { type: "template", id: values.templateId } };
     }
 
+    const body: CreateBody<"runTrigger"> = {
+      data: { type: "runTrigger", attributes: { enabled: true }, relationships },
+    };
+
     axiosInstance
-      .post(
-        "runTrigger",
-        { data: { type: "runTrigger", attributes: { enabled: true }, relationships } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      )
+      .post("runTrigger", body, { headers: { "Content-Type": "application/vnd.api+json" } })
       .then(() => {
         message.success("Run trigger created successfully");
         setVisible(false);
@@ -138,13 +165,12 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       .catch((err) => message.error(getErrorMessage(err)));
   };
 
-  const onToggle = (row: RunTriggerRow, enabled: boolean) => {
+  const onToggle = (row: TriggerRow, enabled: boolean) => {
+    const body: UpdateBody<"runTrigger"> = {
+      data: { type: "runTrigger", id: row.id, attributes: { enabled } },
+    };
     axiosInstance
-      .patch(
-        `runTrigger/${row.id}`,
-        { data: { type: "runTrigger", id: row.id, attributes: { enabled } } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      )
+      .patch(`runTrigger/${row.id}`, body, { headers: { "Content-Type": "application/vnd.api+json" } })
       .then(() => {
         message.success(enabled ? "Run trigger enabled" : "Run trigger disabled");
         loadTriggers();
@@ -175,7 +201,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
     [workspaces, incoming]
   );
 
-  const workspaceLink = (row: RunTriggerRow) => (
+  const workspaceLink = (row: TriggerRow) => (
     <Link to={`/organizations/${organizationId}/workspaces/${row.workspaceId}`}>{row.workspaceName}</Link>
   );
 
@@ -184,12 +210,12 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       {
         title: "Source workspace",
         key: "workspace",
-        render: (_: string, record: RunTriggerRow) => workspaceLink(record),
+        render: (_: string, record: TriggerRow) => workspaceLink(record),
       },
       {
         title: "Template",
         key: "template",
-        render: (_: string, record: RunTriggerRow) =>
+        render: (_: string, record: TriggerRow) =>
           record.templateName ? (
             <Tag color="default">{record.templateName}</Tag>
           ) : (
@@ -199,7 +225,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       {
         title: "Enabled",
         key: "enabled",
-        render: (_: string, record: RunTriggerRow) => (
+        render: (_: string, record: TriggerRow) => (
           <Switch
             checked={record.enabled}
             disabled={!manageWorkspace}
@@ -210,7 +236,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       {
         title: "Actions",
         key: "action",
-        render: (_: string, record: RunTriggerRow) => (
+        render: (_: string, record: TriggerRow) => (
           <Popconfirm
             okButtonProps={{ danger: true }}
             onConfirm={() => onDelete(record.id)}
@@ -239,12 +265,12 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       {
         title: "Destination workspace",
         key: "workspace",
-        render: (_: string, record: RunTriggerRow) => workspaceLink(record),
+        render: (_: string, record: TriggerRow) => workspaceLink(record),
       },
       {
         title: "Template",
         key: "template",
-        render: (_: string, record: RunTriggerRow) =>
+        render: (_: string, record: TriggerRow) =>
           record.templateName ? (
             <Tag color="default">{record.templateName}</Tag>
           ) : (
@@ -254,7 +280,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
       {
         title: "Enabled",
         key: "enabled",
-        render: (_: string, record: RunTriggerRow) =>
+        render: (_: string, record: TriggerRow) =>
           record.enabled ? <Tag color="green">Enabled</Tag> : <Tag>Disabled</Tag>,
       },
     ],
@@ -340,7 +366,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
               showSearch
               placeholder="Select a workspace"
               optionFilterProp="label"
-              options={selectableSources.map((item) => ({ label: item.attributes.name, value: item.id }))}
+              options={selectableSources.map((item) => ({ label: item.name, value: item.id }))}
             />
           </Form.Item>
           <Form.Item name="templateId" label="Template" extra="Leave empty to use this workspace's default template.">
@@ -348,7 +374,7 @@ export const RunTriggers = ({ organizationId, workspaceId, workspaceName, manage
               allowClear
               placeholder="Default template"
               optionFilterProp="label"
-              options={templates.map((item) => ({ label: item.attributes.name, value: item.id }))}
+              options={templates.map((item) => ({ label: item.name, value: item.id }))}
             />
           </Form.Item>
         </Form>

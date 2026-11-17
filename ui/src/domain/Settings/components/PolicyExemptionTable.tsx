@@ -12,26 +12,18 @@ import {
 import dayjs from "dayjs";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { formatOrdinalDate } from "@/modules/utils/dates";
+import type { ExemptionRow } from "../policyExemptionFields";
 import "../PolicySets.css";
 import "./PolicyComponents.css";
 
 const { Text } = Typography;
 
-export type ExemptionRecord = {
-  id: string;
-  ruleId: string;
-  policySetId: string;
+// The workspace settings page selects the policy set name as well, which still satisfies this row.
+export type ExemptionRecord = ExemptionRow & {
   policySetName: string;
-  ticketReference: string;
-  justification: string;
-  expiresAt: string | number | null;
   scopeType: "ORGANIZATION" | "PROJECT" | "WORKSPACE";
-  workspaceId?: string;
   workspaceName?: string;
-  projectId?: string;
   projectName?: string;
-  createdDate?: string;
-  createdBy?: string;
   isInherited?: boolean;
 };
 
@@ -45,7 +37,7 @@ export type PolicyExemptionTableProps = {
   pageSize?: number;
 };
 
-const renderExpiration = (expiresAt: string | number | null) => {
+const renderExpiration = (expiresAt: string | null) => {
   if (!expiresAt) {
     return <Tag>Permanent</Tag>;
   }
@@ -83,10 +75,10 @@ const renderExpiration = (expiresAt: string | number | null) => {
 
 const scopeLabel = (record: ExemptionRecord) => {
   if (record.scopeType === "WORKSPACE") {
-    return { icon: <AppstoreOutlined />, name: record.workspaceName || record.workspaceId, type: "Workspace" };
+    return { icon: <AppstoreOutlined />, name: record.workspaceName || record.workspace?.id, type: "Workspace" };
   }
   if (record.scopeType === "PROJECT") {
-    return { icon: <FolderOutlined />, name: record.projectName || record.projectId, type: "Project" };
+    return { icon: <FolderOutlined />, name: record.projectName || record.project?.id, type: "Project" };
   }
   return { icon: <GlobalOutlined />, name: "Organization-wide", type: undefined };
 };
@@ -112,7 +104,7 @@ export const PolicyExemptionTable: React.FC<PolicyExemptionTableProps> = ({
       record.isInherited ||
       (currentWorkspaceId &&
         (record.scopeType === "ORGANIZATION" ||
-          (record.scopeType === "PROJECT" && record.workspaceId !== currentWorkspaceId)))
+          (record.scopeType === "PROJECT" && record.workspace?.id !== currentWorkspaceId)))
     );
 
   const columns: ColumnsType<ExemptionRecord> = [
@@ -200,7 +192,7 @@ export const PolicyExemptionTable: React.FC<PolicyExemptionTableProps> = ({
       dataIndex: "expiresAt",
       key: "expiresAt",
       width: 160,
-      render: (expiresAt: string | number | null) => renderExpiration(expiresAt),
+      render: (expiresAt: string | null) => renderExpiration(expiresAt),
     },
     {
       title: "Actions",
