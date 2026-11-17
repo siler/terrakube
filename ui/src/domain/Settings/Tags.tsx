@@ -2,9 +2,11 @@ import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Flex, Form, message, Table, Tooltip, Typography } from "antd";
 import { Loading } from "@/components/feedback/Loading";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { Tag } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { CreateBody, UpdateBody } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
 import "./Settings.css";
 import "./TeamsTagsVariables.css";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
@@ -13,6 +15,11 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import TagFormModal, { TagFormValues } from "./components/TagFormModal";
 
+const TAG_FIELDS = fields.tag("name");
+
+/** An organization tag key as the settings table lists it. */
+type TagRow = Row<typeof TAG_FIELDS>;
+
 type Props = {
   managePermission?: boolean;
 };
@@ -20,35 +27,33 @@ type Props = {
 type AddTagForm = TagFormValues;
 
 export const TagsSettings = ({ managePermission = true }: Props) => {
-  const { orgid } = useParams();
-  const [tags, setTags] = useState<Tag[]>([]);
+  const orgid = useRequiredParam("orgid");
+  const [tags, setTags] = useState<TagRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [visible, setVisible] = useState(false);
   const [tagName, setTagName] = useState<string>();
   const [mode, setMode] = useState("create");
   const [tagId, setTagId] = useState<string>();
-  const [pendingDelete, setPendingDelete] = useState<Tag | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<TagRow | null>(null);
   const [form] = Form.useForm<AddTagForm>();
 
   const onCancel = () => {
     setVisible(false);
   };
-  const onEdit = (id: string) => {
+  const onEdit = async (id: string) => {
     setMode("edit");
     setTagId(id);
     setVisible(true);
-    axiosInstance
-      .get(`organization/${orgid}/tag/${id}`)
-      .then((response) => {
-        setTagName(response.data.data.attributes.name);
-        form.setFieldsValue({
-          name: response.data.data.attributes.name,
-        });
-      })
-      .catch((err) => {
-        message.error(`Could not load the tag: ${getErrorMessage(err)}`);
+    try {
+      const tag = await api.organization(orgid).tag(id).select(TAG_FIELDS);
+      setTagName(tag.name ?? "");
+      form.setFieldsValue({
+        name: tag.name ?? "",
       });
+    } catch (err) {
+      message.error(`Could not load the tag: ${getErrorMessage(err)}`);
+    }
   };
 
   const onNew = () => {
@@ -71,7 +76,7 @@ export const TagsSettings = ({ managePermission = true }: Props) => {
   };
 
   const onCreate = (values: AddTagForm) => {
-    const body = {
+    const body: CreateBody<"tag"> = {
       data: {
         type: "tag",
         attributes: {
@@ -98,7 +103,11 @@ export const TagsSettings = ({ managePermission = true }: Props) => {
   };
 
   const onUpdate = (values: AddTagForm) => {
-    const body = {
+    if (!tagId) {
+      message.error("Could not save the tag: no tag is selected");
+      return;
+    }
+    const body: UpdateBody<"tag"> = {
       data: {
         type: "tag",
         id: tagId,
@@ -125,21 +134,18 @@ export const TagsSettings = ({ managePermission = true }: Props) => {
       });
   };
 
-  const loadTags = () => {
-    axiosInstance
-      .get(`organization/${orgid}/tag`)
-      .then((response) => {
-        setTags(response.data.data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (isPermissionError(err)) {
-          setError(getErrorMessage(err));
-        } else {
-          message.error(`Could not load tags: ${getErrorMessage(err)}`);
-        }
-        setLoading(false);
-      });
+  const loadTags = async () => {
+    try {
+      setTags(await api.organization(orgid).tag().select(TAG_FIELDS));
+    } catch (err) {
+      if (isPermissionError(err)) {
+        setError(getErrorMessage(err));
+      } else {
+        message.error(`Could not load tags: ${getErrorMessage(err)}`);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => {
     setLoading(true);
@@ -198,18 +204,18 @@ export const TagsSettings = ({ managePermission = true }: Props) => {
                     {
                       title: "Key",
                       key: "name",
-                      render: (_: unknown, tag: Tag) => tag.attributes.name,
+                      render: (_: unknown, tag: TagRow) => tag.name,
                     },
                     {
                       title: <span className="settings-list-sr-only">Actions</span>,
                       key: "actions",
                       align: "right" as const,
-                      render: (_: unknown, tag: Tag) => (
+                      render: (_: unknown, tag: TagRow) => (
                         <Flex gap="small" justify="flex-end">
                           <Tooltip title="Edit tag">
                             <Button
                               icon={<EditOutlined />}
-                              aria-label={`Edit tag ${tag.attributes.name}`}
+                              aria-label={`Edit tag ${tag.name}`}
                               disabled={!managePermission}
                               onClick={() => onEdit(tag.id)}
                             />
@@ -218,7 +224,7 @@ export const TagsSettings = ({ managePermission = true }: Props) => {
                             <Button
                               danger
                               icon={<DeleteOutlined />}
-                              aria-label={`Delete tag ${tag.attributes.name}`}
+                              aria-label={`Delete tag ${tag.name}`}
                               disabled={!managePermission}
                               onClick={() => setPendingDelete(tag)}
                             />
@@ -249,8 +255,8 @@ export const TagsSettings = ({ managePermission = true }: Props) => {
             title="Delete tag"
             message={
               <>
-                The tag <strong>{pendingDelete?.attributes.name}</strong> will be removed from every workspace that uses
-                it. This cannot be undone.
+                The tag <strong>{pendingDelete?.name}</strong> will be removed from every workspace that uses it. This
+                cannot be undone.
               </>
             }
             okText="Delete tag"

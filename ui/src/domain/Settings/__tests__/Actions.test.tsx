@@ -12,15 +12,17 @@ jest.mock("@/config/axiosConfig", () => ({
 
 jest.mock("@/components/forms/CodeEditor", () => ({
   CodeEditor: ({ onMount }: { onMount: (editor: unknown) => void }) => {
-    const React = jest.requireActual("react");
-    const ref = React.useRef(null);
+    const React = jest.requireActual<typeof import("react")>("react");
+    const ref = React.useRef<HTMLTextAreaElement>(null);
     React.useEffect(() => {
       onMount({
-        getValue: () => ref.current.value,
+        getValue: () => ref.current?.value ?? "",
         setValue: (value: string) => {
-          ref.current.value = value;
+          if (ref.current) {
+            ref.current.value = value;
+          }
         },
-        focus: () => ref.current.focus(),
+        focus: () => ref.current?.focus(),
       });
     }, []);
     return <textarea aria-label="Action code" ref={ref} />;
@@ -30,27 +32,33 @@ jest.mock("@/components/forms/CodeEditor", () => ({
 const invalidCode = "() => { return (; }";
 const validCode = "function(context) { return <Button>{context.name}</Button>; }";
 
+const ACTION_LIST = "action?fields[action]=name,type,category,version,active";
+const ACTION_EDIT =
+  "action/example?fields[action]=name,description,version,active,type,label,category,displayCriteria,action";
+
 beforeEach(() => {
   jest.clearAllMocks();
-  jest.mocked(axiosInstance.get).mockImplementation(async (url) => ({
-    data: {
-      data:
-        url === "action/example"
-          ? {
-              id: "example",
-              attributes: {
-                name: "Example",
-                type: "Workspace/Action",
-                category: "General",
-                label: "Run",
-                version: "1.0.0",
-                displayCriteria: "[]",
-                action: Buffer.from(invalidCode).toString("base64"),
-              },
-            }
-          : [],
-    },
-  }));
+  jest.mocked(axiosInstance.get).mockImplementation(async (url: string) => {
+    if (url === ACTION_EDIT)
+      return {
+        data: {
+          data: {
+            id: "example",
+            attributes: {
+              name: "Example",
+              type: "Workspace/Action",
+              category: "General",
+              label: "Run",
+              version: "1.0.0",
+              displayCriteria: "[]",
+              action: Buffer.from(invalidCode).toString("base64"),
+            },
+          },
+        },
+      };
+    if (url === ACTION_LIST) return { data: { data: [] } };
+    return Promise.reject(new Error(`Unexpected GET ${url}`));
+  });
   jest.mocked(axiosInstance.post).mockResolvedValue({ data: {} });
   jest.mocked(axiosInstance.patch).mockResolvedValue({ data: {} });
 });
@@ -89,12 +97,61 @@ it.each(["new", "edit"] as const)("blocks invalid code and allows a corrected %s
   fireEvent.click(screen.getByRole("button", { name: mode === "new" ? "Create action" : "Update action" }));
   const save = mode === "new" ? axiosInstance.post : axiosInstance.patch;
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-  expect(jest.mocked(save).mock.calls[0][1]).toEqual(
-    expect.objectContaining({
-      data: expect.objectContaining({
-        attributes: expect.objectContaining({ action: Buffer.from(validCode).toString("base64") }),
-      }),
-    })
-  );
+  const body = jest.mocked(save).mock.calls[0][1];
+  expect(body).toMatchObject({
+    data: { type: "action", id: "example", attributes: { action: Buffer.from(validCode).toString("base64") } },
+  });
+  // the identifier is the resource id, not an attribute
+  expect(body).toHaveProperty("data.attributes");
+  expect(body).not.toHaveProperty("data.attributes.id");
   expect(screen.queryByText("Fix the action code before saving")).not.toBeInTheDocument();
+});
+
+const editActionWith = (displayCriteria: string) =>
+  jest.mocked(axiosInstance.get).mockImplementation(async (url: string) => {
+    if (url === ACTION_EDIT) {
+      return {
+        data: {
+          data: {
+            id: "example",
+            attributes: {
+              name: "Example",
+              type: "Workspace/Action",
+              category: "General",
+              label: "Run",
+              version: "1.0.0",
+              displayCriteria,
+              action: Buffer.from(validCode).toString("base64"),
+            },
+          },
+        },
+      };
+    }
+    if (url === ACTION_LIST) {
+      return { data: { data: [] } };
+    }
+    return Promise.reject(new Error(`Unexpected GET ${url}`));
+  });
+
+it.each([
+  ["no stored criteria", "", "[]"],
+  [
+    "stored criteria",
+    '[{"filter":"true","settings":[{"key":"a","value":"one"}]}]',
+    '[{"filter":"true","settings":[{"key":"a","value":"one"}]}]',
+  ],
+])("opens and saves an action with %s", async (_, stored, saved) => {
+  editActionWith(stored);
+  render(
+    <MemoryRouter>
+      <ActionSettings editorMode="edit" editorId="example" />
+    </MemoryRouter>
+  );
+  await waitFor(() => expect(screen.getByLabelText("Action code")).toHaveValue(validCode));
+
+  fireEvent.click(screen.getByRole("button", { name: "Update action" }));
+  await waitFor(() => expect(axiosInstance.patch).toHaveBeenCalledTimes(1));
+  expect(jest.mocked(axiosInstance.patch).mock.calls[0][1]).toMatchObject({
+    data: { attributes: { displayCriteria: saved } },
+  });
 });

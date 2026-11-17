@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { message } from "antd";
+import { AxiosError, AxiosHeaders } from "axios";
 import axiosInstance from "../../../config/axiosConfig";
 import { SSHKeysSettings } from "../SSHKeys";
 import { AgentSettings } from "../Agents";
@@ -9,7 +10,7 @@ import { AddVCS } from "../AddVCS";
 import { FederatedCredentials } from "../FederatedCredentials";
 import { EditFederatedCredential } from "../EditFederatedCredential";
 import { getConnectUrl } from "../vcsProviders";
-import { VcsType } from "../../types";
+import { VcsType } from "../../generated/apiResources";
 
 jest.spyOn(crypto, "randomUUID").mockReturnValue("uuid-1" as ReturnType<typeof crypto.randomUUID>);
 
@@ -21,7 +22,7 @@ jest.mock("../../../config/axiosConfig", () => ({
     patch: jest.fn().mockResolvedValue({}),
     delete: jest.fn().mockResolvedValue({}),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message) || "Error",
   isPermissionError: () => false,
 }));
 
@@ -34,7 +35,22 @@ const renderAt = (path: string, route: string, element: React.ReactElement) =>
     </MemoryRouter>
   );
 
-const get = axiosInstance.get as jest.Mock;
+const get = jest.mocked(axiosInstance.get);
+
+const SSH_LIST = "organization/org-1/ssh?fields[ssh]=name,description,sshType";
+const VCS_LIST =
+  "organization/org-1/vcs?fields[vcs]=name,vcsType,connectionType,endpoint,clientId,callback,apiUrl,status,createdBy,createdDate";
+const VCS_WORKSPACES = "organization/org-1/vcs/v1?fields[vcs]=workspace";
+const AGENT_LIST = "organization/org-1/agent?fields[agent]=name,description,url";
+// The usage counts read linkage only: the related ids stay requested, the names do not.
+const usage = (collection: string, type: string, rel: string, rsql: string) =>
+  `${collection}?fields[${type}]=${rel}&filter[${type}]=${encodeURIComponent(rsql)}`;
+
+// Answers only the exact URLs given, so a request that drops a field or filter fails the test.
+const respondTo = (routes: Record<string, unknown>) =>
+  get.mockImplementation((url: string) =>
+    url in routes ? Promise.resolve({ data: routes[url] }) : Promise.reject(new Error(`Unexpected GET ${url}`))
+  );
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -54,15 +70,11 @@ describe("SSH keys", () => {
   });
 
   it("deletes a key only after its name is typed", async () => {
-    get.mockImplementation((url: string) =>
-      Promise.resolve({
-        data: {
-          data: url.includes("filter[")
-            ? []
-            : [{ id: "k1", attributes: { name: "deploy", description: "Modules", sshType: "rsa" } }],
-        },
-      })
-    );
+    respondTo({
+      [SSH_LIST]: { data: [{ id: "k1", attributes: { name: "deploy", description: "Modules", sshType: "rsa" } }] },
+      [usage("organization/org-1/workspace", "workspace", "ssh", "ssh.id=='k1'")]: { data: [] },
+      [usage("organization/org-1/module", "module", "ssh", "ssh.id=='k1'")]: { data: [] },
+    });
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "SSH keys (1)" })).toBeInTheDocument();
@@ -76,19 +88,49 @@ describe("SSH keys", () => {
 
     await waitFor(() => expect(axiosInstance.delete).toHaveBeenCalledWith("organization/org-1/ssh/k1"));
   });
+
+  it("sends the typed create body when adding a key", async () => {
+    renderPage();
+
+    fireEvent.click((await screen.findAllByRole("button", { name: /Add an SSH key/ }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "deploy" } });
+    fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "Modules" } });
+    fireEvent.mouseDown(within(dialog).getByLabelText("Key type"));
+    fireEvent.click(await screen.findByText("ED25519"));
+    fireEvent.change(within(dialog).getByLabelText("Private key"), {
+      target: { value: "-----BEGIN PRIVATE KEY-----" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add SSH key" }));
+
+    await waitFor(() =>
+      expect(axiosInstance.post).toHaveBeenCalledWith(
+        "organization/org-1/ssh",
+        {
+          data: {
+            type: "ssh",
+            attributes: {
+              name: "deploy",
+              description: "Modules",
+              sshType: "ed25519",
+              privateKey: "-----BEGIN PRIVATE KEY-----",
+            },
+          },
+        },
+        expect.anything()
+      )
+    );
+  });
 });
 
 describe("Agents", () => {
   it("confirms a delete with the consequence and labels the icon action", async () => {
-    get.mockImplementation((url: string) =>
-      Promise.resolve({
-        data: {
-          data: url.includes("filter[")
-            ? []
-            : [{ id: "a1", attributes: { name: "pool-a", description: "Runners", url: "http://agent:8090" } }],
-        },
-      })
-    );
+    respondTo({
+      [AGENT_LIST]: {
+        data: [{ id: "a1", attributes: { name: "pool-a", description: "Runners", url: "http://agent:8090" } }],
+      },
+      [usage("organization/org-1/workspace", "workspace", "agent", "agent.id=='a1'")]: { data: [] },
+    });
     renderAt("/organizations/org-1/settings/agents", "/organizations/:orgid/settings/agents", <AgentSettings />);
 
     expect(await screen.findByText("http://agent:8090")).toHaveClass("resource-mono");
@@ -111,15 +153,10 @@ describe("delete refusals", () => {
 
   it("refuses to delete an agent pool that workspaces still use, with the count", async () => {
     const errorSpy = jest.spyOn(message, "error");
-    get.mockImplementation((url: string) =>
-      Promise.resolve({
-        data: {
-          data: url.includes("filter[workspace]=agent.id==a1")
-            ? [{ id: "w1" }]
-            : [{ id: "a1", attributes: { name: "pool-a" } }],
-        },
-      })
-    );
+    respondTo({
+      [AGENT_LIST]: { data: [{ id: "a1", attributes: { name: "pool-a" } }] },
+      [usage("organization/org-1/workspace", "workspace", "agent", "agent.id=='a1'")]: { data: [{ id: "w1" }] },
+    });
     renderAt("/organizations/org-1/settings/agents", "/organizations/:orgid/settings/agents", <AgentSettings />);
 
     await confirmDelete("Delete agent pool pool-a", "Delete agent pool");
@@ -132,17 +169,13 @@ describe("delete refusals", () => {
 
   it("refuses to delete an SSH key that workspaces or modules still use, with the counts", async () => {
     const errorSpy = jest.spyOn(message, "error");
-    get.mockImplementation((url: string) =>
-      Promise.resolve({
-        data: {
-          data: url.includes("filter[workspace]=ssh.id==k1")
-            ? [{ id: "w1" }, { id: "w2" }]
-            : url.includes("filter[module]=ssh.id==k1")
-              ? [{ id: "m1" }]
-              : [{ id: "k1", attributes: { name: "deploy" } }],
-        },
-      })
-    );
+    respondTo({
+      [SSH_LIST]: { data: [{ id: "k1", attributes: { name: "deploy" } }] },
+      [usage("organization/org-1/workspace", "workspace", "ssh", "ssh.id=='k1'")]: {
+        data: [{ id: "w1" }, { id: "w2" }],
+      },
+      [usage("organization/org-1/module", "module", "ssh", "ssh.id=='k1'")]: { data: [{ id: "m1" }] },
+    });
     renderAt("/organizations/org-1/settings/ssh", "/organizations/:orgid/settings/ssh", <SSHKeysSettings />);
 
     await confirmDelete("Delete SSH key deploy", "Delete SSH key", "deploy");
@@ -173,8 +206,8 @@ describe("VCS providers", () => {
     renderAt("/organizations/org-1/settings/vcs", "/organizations/:orgid/settings/vcs", <VCSSettings />);
 
   it("offers to connect pending OAuth providers but not managed identities", async () => {
-    get.mockResolvedValueOnce({
-      data: {
+    respondTo({
+      [VCS_LIST]: {
         data: [provider({}), { ...provider({ name: "azure-mi", vcsType: "AZURE_SP_MI", callback: "cb-2" }), id: "v2" }],
       },
     });
@@ -188,8 +221,25 @@ describe("VCS providers", () => {
 
   it("refuses to delete a provider that workspaces still use, with the count", async () => {
     const errorSpy = jest.spyOn(message, "error");
-    get.mockResolvedValueOnce({ data: { data: [provider({ status: "COMPLETED" })] } });
-    get.mockResolvedValueOnce({ data: { data: provider({}), included: [{ id: "w1" }, { id: "w2" }] } });
+    respondTo({
+      [VCS_LIST]: { data: [provider({ status: "COMPLETED" })] },
+      [VCS_WORKSPACES]: {
+        data: {
+          id: "v1",
+          type: "vcs",
+          relationships: {
+            workspace: {
+              data: [
+                { type: "workspace", id: "w1" },
+                { type: "workspace", id: "w2" },
+              ],
+            },
+          },
+        },
+      },
+      [usage("organization/org-1/module", "module", "vcs", "vcs.id=='v1'")]: { data: [] },
+      [usage("policy_set", "policy_set", "vcs", "vcs.id=='v1'")]: { data: [] },
+    });
     renderList();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete VCS provider corp-github" }));
@@ -209,21 +259,18 @@ describe("VCS providers", () => {
 });
 
 describe("VCS provider delete", () => {
+  const unusedVcs = { data: { id: "v1", type: "vcs", relationships: { workspace: { data: [] } } } };
+
   it("refuses to delete a provider that modules or policy sets still use", async () => {
     const errorSpy = jest.spyOn(message, "error");
-    get.mockImplementation((url: string) =>
-      Promise.resolve({
-        data: {
-          data: url.includes("filter[module]=vcs.id==v1")
-            ? [{ id: "m1" }, { id: "m2" }]
-            : url.includes("filter[policy_set]=vcs.id==v1")
-              ? [{ id: "p1" }]
-              : url.includes("include=workspace")
-                ? { id: "v1" }
-                : [{ id: "v1", attributes: { name: "corp-github", vcsType: "GITHUB", connectionType: "STANDALONE" } }],
-        },
-      })
-    );
+    respondTo({
+      [VCS_LIST]: {
+        data: [{ id: "v1", attributes: { name: "corp-github", vcsType: "GITHUB", connectionType: "STANDALONE" } }],
+      },
+      [VCS_WORKSPACES]: unusedVcs,
+      [usage("organization/org-1/module", "module", "vcs", "vcs.id=='v1'")]: { data: [{ id: "m1" }, { id: "m2" }] },
+      [usage("policy_set", "policy_set", "vcs", "vcs.id=='v1'")]: { data: [{ id: "p1" }] },
+    });
     renderAt("/organizations/org-1/settings/vcs", "/organizations/:orgid/settings/vcs", <VCSSettings />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete VCS provider corp-github" }));
@@ -241,20 +288,24 @@ describe("VCS provider delete", () => {
 
   it("explains a conflict from a shared repository webhook the usage check can't see", async () => {
     const errorSpy = jest.spyOn(message, "error");
-    get.mockImplementation((url: string) =>
-      Promise.resolve({
-        data: url.includes("include=workspace")
-          ? { data: { id: "v1" } }
-          : url.includes("filter[")
-            ? { data: [] }
-            : {
-                data: [
-                  { id: "v1", attributes: { name: "corp-github", vcsType: "GITHUB", connectionType: "STANDALONE" } },
-                ],
-              },
+    respondTo({
+      [VCS_LIST]: {
+        data: [{ id: "v1", attributes: { name: "corp-github", vcsType: "GITHUB", connectionType: "STANDALONE" } }],
+      },
+      [VCS_WORKSPACES]: unusedVcs,
+      [usage("organization/org-1/module", "module", "vcs", "vcs.id=='v1'")]: { data: [] },
+      [usage("policy_set", "policy_set", "vcs", "vcs.id=='v1'")]: { data: [] },
+    });
+    const config = { headers: new AxiosHeaders() };
+    jest.mocked(axiosInstance.delete).mockRejectedValueOnce(
+      new AxiosError("Conflict", "ERR_BAD_REQUEST", config, undefined, {
+        data: {},
+        status: 409,
+        statusText: "Conflict",
+        headers: {},
+        config,
       })
     );
-    (axiosInstance.delete as jest.Mock).mockRejectedValueOnce({ response: { status: 409 } });
     renderAt("/organizations/org-1/settings/vcs", "/organizations/:orgid/settings/vcs", <VCSSettings />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete VCS provider corp-github" }));
@@ -293,9 +344,7 @@ describe("Add VCS provider", () => {
     expect(
       await screen.findByRole("heading", { name: "Register Terrakube on GitLab Community Edition" })
     ).toBeVisible();
-    expect((screen.getByLabelText("Redirect URI") as HTMLInputElement).value).toBe(
-      "https://terrakube-api.test/callback/v1/vcs/uuid-1"
-    );
+    expect(screen.getByLabelText("Redirect URI")).toHaveValue("https://terrakube-api.test/callback/v1/vcs/uuid-1");
     expect(screen.getByRole("button", { name: "Copy Redirect URI" })).toBeInTheDocument();
     // Secrets are typed into a password field.
     expect(screen.getByLabelText("Secret")).toHaveAttribute("type", "password");
@@ -314,16 +363,43 @@ describe("Add VCS provider", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add VCS provider" }));
 
     await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
-    const [url, body] = (axiosInstance.post as jest.Mock).mock.calls[0];
+    const [url, body] = jest.mocked(axiosInstance.post).mock.calls[0];
     expect(url).toBe("organization/org-1/vcs");
-    expect(body.data.attributes).toMatchObject({
-      name: "gh-app",
-      vcsType: "GITHUB",
-      connectionType: "STANDALONE",
-      clientId: "970081",
-      endpoint: "https://github.com",
-      apiUrl: "https://api.github.com",
+    expect(body).toMatchObject({
+      data: {
+        attributes: {
+          name: "gh-app",
+          vcsType: "GITHUB",
+          connectionType: "STANDALONE",
+          clientId: "970081",
+          endpoint: "https://github.com",
+          apiUrl: "https://api.github.com",
+        },
+      },
     });
+  });
+
+  it("reports an OAuth provider whose create response has no client ID instead of redirecting", async () => {
+    const errorSpy = jest.spyOn(message, "error");
+    const setMode = jest.fn();
+    renderAt(
+      "/organizations/org-1/settings/vcs/new",
+      "/organizations/:orgid/settings/vcs/new",
+      <AddVCS setMode={setMode} loadVCS={jest.fn()} />
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "GitLab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(await screen.findByPlaceholderText("GitLab"), { target: { value: "gitlab" } });
+    fireEvent.change(screen.getByLabelText("Application ID"), { target: { value: "app-1" } });
+    fireEvent.change(screen.getByLabelText("Secret"), { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add and connect" }));
+
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith(
+        "Could not add the VCS provider: the response did not include the provider's client ID"
+      )
+    );
+    expect(setMode).not.toHaveBeenCalled();
   });
 
   it("sends self-managed GitLab editions to GitLab's OAuth page", () => {
@@ -335,12 +411,18 @@ describe("Add VCS provider", () => {
 
 describe("Federated credentials", () => {
   it("lists issuer and audience in monospace and confirms deletes by name", async () => {
+    const FEDERATED_LIST = "federated?fields[federated]=name,issuerUrl,audience";
+    // The list only counts claims, so the count read asks for linkage alone.
+    const FEDERATED_CLAIM_COUNTS = "federated/f1/claims?fields[federated_claim]=federated";
     get.mockImplementation((url: string) =>
       Promise.resolve({
         data: {
-          data: url.endsWith("/claims")
-            ? []
-            : [{ id: "f1", attributes: { name: "CI_TEAM", issuerUrl: "https://issuer.test", audience: "tk" } }],
+          data:
+            url === FEDERATED_CLAIM_COUNTS
+              ? []
+              : url === FEDERATED_LIST
+                ? [{ id: "f1", attributes: { name: "CI_TEAM", issuerUrl: "https://issuer.test", audience: "tk" } }]
+                : [],
         },
       })
     );
@@ -373,9 +455,61 @@ describe("Federated credentials", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add federated credential" }));
     await waitFor(() => expect(setMode).toHaveBeenCalledWith("list"));
-    expect((axiosInstance.post as jest.Mock).mock.calls.map((call) => call[0])).toEqual([
+    expect(jest.mocked(axiosInstance.post).mock.calls.map((call) => call[0])).toEqual([
       "federated",
       "federated/new-1/claims",
     ]);
+    expect(axiosInstance.post).toHaveBeenCalledWith(
+      "federated",
+      {
+        data: {
+          type: "federated",
+          attributes: { name: "CI_TEAM", issuerUrl: "https://issuer.test", audience: "tk" },
+        },
+      },
+      expect.anything()
+    );
+    expect(axiosInstance.post).toHaveBeenCalledWith(
+      "federated/new-1/claims",
+      { data: { type: "federated_claim", attributes: { claimKey: "repository_owner", claimValue: "acme" } } },
+      expect.anything()
+    );
+  });
+
+  it("patches the credential with the typed update body when editing", async () => {
+    const FEDERATED_ONE = "federated/f1?fields[federated]=name,issuerUrl,audience";
+    const FEDERATED_CLAIMS = "federated/f1/claims?fields[federated_claim]=claimKey,claimValue";
+    get.mockImplementation((url: string) =>
+      url === FEDERATED_ONE
+        ? Promise.resolve({
+            data: {
+              data: { id: "f1", attributes: { name: "CI_TEAM", issuerUrl: "https://issuer.test", audience: "tk" } },
+            },
+          })
+        : url === FEDERATED_CLAIMS
+          ? Promise.resolve({
+              data: { data: [{ id: "c1", attributes: { claimKey: "repository_owner", claimValue: "acme" } }] },
+            })
+          : Promise.reject(new Error(`Unexpected GET ${url}`))
+    );
+
+    render(<EditFederatedCredential mode="edit" setMode={jest.fn()} federatedId="f1" loadFederated={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://issuer.test"));
+    fireEvent.click(screen.getByRole("button", { name: "Update federated credential" }));
+
+    await waitFor(() =>
+      expect(axiosInstance.patch).toHaveBeenCalledWith(
+        "federated/f1",
+        {
+          data: {
+            type: "federated",
+            id: "f1",
+            attributes: { name: "CI_TEAM", issuerUrl: "https://issuer.test", audience: "tk" },
+          },
+        },
+        expect.anything()
+      )
+    );
   });
 });

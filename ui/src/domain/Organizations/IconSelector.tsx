@@ -34,7 +34,7 @@ export const IconSelector = ({ value, color = "#000000", onChange }: IconSelecto
   };
 
   const content = (
-    <div className="icon-selector-panel" style={{ "--org-icon-color": color } as React.CSSProperties}>
+    <div className="icon-selector-panel" style={{ "--org-icon-color": color }}>
       <Input
         aria-label="Search icons"
         placeholder="Search icons..."
@@ -45,7 +45,7 @@ export const IconSelector = ({ value, color = "#000000", onChange }: IconSelecto
       />
       <div className="icon-selector-grid">
         {filteredIcons.map((icon) => {
-          const IconComponent = faIcons[icon as keyof typeof faIcons];
+          const IconComponent = getFaIcon(icon);
           return (
             <div
               key={icon}
@@ -75,7 +75,7 @@ export const IconSelector = ({ value, color = "#000000", onChange }: IconSelecto
 
   return (
     <Popover content={content} trigger="click" placement="bottomLeft">
-      <div className="icon-selector-trigger" style={{ "--org-icon-color": color } as React.CSSProperties}>
+      <div className="icon-selector-trigger" style={{ "--org-icon-color": color }}>
         {SelectedIconComponent ? (
           <SelectedIconComponent className="org-icon" />
         ) : (
