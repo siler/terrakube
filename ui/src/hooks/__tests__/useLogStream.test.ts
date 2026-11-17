@@ -10,7 +10,7 @@ describe("useLogStream", () => {
   });
 
   it("accumulates messages emitted by readEventStream", async () => {
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       onMessage("line 1");
       onMessage("line 2");
     });
@@ -27,7 +27,7 @@ describe("useLogStream", () => {
   });
 
   it("resets accumulated text when the url changes", async () => {
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       onMessage("line 1");
     });
 
@@ -52,12 +52,12 @@ describe("useLogStream", () => {
     });
 
     it("resumes from the last received id after a transient error, keeping accumulated text", async () => {
-      const mock = readEventStream as jest.Mock;
+      const mock = jest.mocked(readEventStream);
       mock.mockImplementationOnce(async (_url, { onMessage }) => {
         onMessage("line 1", "10-0");
         throw new Error("network drop");
       });
-      mock.mockImplementationOnce(() => new Promise(() => {}));
+      mock.mockImplementationOnce(() => new Promise<void>(() => {}));
 
       const { result } = renderHook(() => useLogStream({ url: "http://localhost/stream", enabled: true }));
 
@@ -81,7 +81,7 @@ describe("useLogStream", () => {
     });
 
     it("does not reconnect once the effect has been cleaned up", async () => {
-      const mock = readEventStream as jest.Mock;
+      const mock = jest.mocked(readEventStream);
       mock.mockImplementationOnce(async () => {
         throw new Error("network drop");
       });
@@ -101,7 +101,7 @@ describe("useLogStream", () => {
     });
 
     it("does not reconnect when the stream ends without an error", async () => {
-      const mock = readEventStream as jest.Mock;
+      const mock = jest.mocked(readEventStream);
       mock.mockResolvedValueOnce(undefined);
 
       renderHook(() => useLogStream({ url: "http://localhost/stream", enabled: true }));
@@ -115,7 +115,7 @@ describe("useLogStream", () => {
   });
 
   it("tells the viewer when earlier output could not be replayed", async () => {
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       onMessage('{"reason":"trimmed","recovery":"step-log"}', undefined, "gap");
       onMessage("line 1", "50-0");
     });
