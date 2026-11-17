@@ -12,7 +12,7 @@ describe("reportDeprecatedScope", () => {
     expect(reportDeprecatedScope(source, "action-a")).toEqual(["DateTime"]);
     reportDeprecatedScope(source, "action-a");
     expect(error).toHaveBeenCalledTimes(1);
-    expect(error.mock.calls[0][0]).toMatch(/DateTime.*deprecated.*dayjs/);
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/DateTime.*deprecated.*dayjs/));
   });
 
   it("reports again for a different action", () => {

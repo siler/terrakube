@@ -1,3 +1,4 @@
+import type { AxiosResponse } from "axios";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { message } from "antd";
@@ -6,6 +7,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import axiosInstance from "../../../config/axiosConfig";
 import { clearQueriesOnSignOut, createQueryClient } from "@/modules/api/queryClient";
 import { TeamSettings } from "../Teams";
+import { axiosResponse } from "@/testUtils/fakeAxiosResponse";
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
@@ -110,7 +112,7 @@ describe("TeamSettings list", () => {
 
   it("deletes a team only after its name is typed", async () => {
     respondTo({ [TEAM_LIST]: { data: [team("t-1", "PLATFORM", { role: "read" })] } });
-    jest.mocked(axiosInstance.delete).mockResolvedValue({});
+    jest.mocked(axiosInstance.delete).mockResolvedValue(axiosResponse());
     renderTeams();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete team PLATFORM" }));
@@ -124,10 +126,11 @@ describe("TeamSettings list", () => {
   });
 
   it("reloads the list after a delete, so the deleted team disappears", async () => {
-    (axiosInstance.get as jest.Mock)
-      .mockResolvedValueOnce({ data: { data: [team("t-1", "PLATFORM"), team("t-2", "DEVS")] } })
-      .mockResolvedValue({ data: { data: [team("t-2", "DEVS")] } });
-    (axiosInstance.delete as jest.Mock).mockResolvedValue({});
+    jest
+      .mocked(axiosInstance.get)
+      .mockResolvedValueOnce(axiosResponse({ data: { data: [team("t-1", "PLATFORM"), team("t-2", "DEVS")] } }))
+      .mockResolvedValue(axiosResponse({ data: { data: [team("t-2", "DEVS")] } }));
+    jest.mocked(axiosInstance.delete).mockResolvedValue(axiosResponse());
     renderTeams();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete team PLATFORM" }));
@@ -139,8 +142,8 @@ describe("TeamSettings list", () => {
   });
 
   it("reports a failed delete and keeps the list", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: { data: [team("t-1", "PLATFORM")] } });
-    (axiosInstance.delete as jest.Mock).mockRejectedValue(new Error("in use"));
+    jest.mocked(axiosInstance.get).mockResolvedValue(axiosResponse({ data: { data: [team("t-1", "PLATFORM")] } }));
+    jest.mocked(axiosInstance.delete).mockRejectedValue(new Error("in use"));
     renderTeams();
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete team PLATFORM" }));
@@ -153,7 +156,7 @@ describe("TeamSettings list", () => {
   });
 
   it("refetches the teams when the editor saves, without a remount", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: { data: [] } });
+    jest.mocked(axiosInstance.get).mockResolvedValue(axiosResponse({ data: { data: [] } }));
     renderTeams({ editorMode: "new" });
     await waitFor(() => expect(axiosInstance.get).toHaveBeenCalledTimes(1));
 
@@ -167,15 +170,15 @@ describe("TeamSettings list", () => {
     ["succeeds", "resolve", "Team deleted successfully"],
     ["fails", "reject", "Could not delete the team: in use"],
   ] as const)("reports a delete from the editor that %s after the page is gone", async (_, outcome, text) => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: { data: [team("t-1", "PLATFORM")] } });
-    const request = deferred<object>();
-    (axiosInstance.delete as jest.Mock).mockReturnValue(request.promise);
+    jest.mocked(axiosInstance.get).mockResolvedValue(axiosResponse({ data: { data: [team("t-1", "PLATFORM")] } }));
+    const request = deferred<AxiosResponse<unknown>>();
+    jest.mocked(axiosInstance.delete).mockReturnValue(request.promise);
     const { unmount } = renderTeams({ editorMode: "edit", editorId: "t-1" });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete from editor" }));
     // The editor navigates to the list straight away, which mounts a new page before the server answers.
     unmount();
-    if (outcome === "resolve") request.resolve({});
+    if (outcome === "resolve") request.resolve(axiosResponse());
     else request.reject(new Error("in use"));
 
     expect(await screen.findByText(text)).toBeInTheDocument();
@@ -185,9 +188,10 @@ describe("TeamSettings list", () => {
     const client = createQueryClient();
     const users = new UserManager({ authority: "https://idp.test", client_id: "ui", redirect_uri: "https://ui.test" });
     const stopClearing = clearQueriesOnSignOut(client, users);
-    (axiosInstance.get as jest.Mock)
-      .mockResolvedValueOnce({ data: { data: [team("t-1", "PLATFORM")] } })
-      .mockReturnValue(new Promise(() => {}));
+    jest
+      .mocked(axiosInstance.get)
+      .mockResolvedValueOnce(axiosResponse({ data: { data: [team("t-1", "PLATFORM")] } }))
+      .mockReturnValue(new Promise<never>(() => {}));
     const first = renderTeams({}, client);
     expect(await screen.findByRole("link", { name: "PLATFORM" })).toBeInTheDocument();
 
@@ -203,7 +207,7 @@ describe("TeamSettings list", () => {
 
   it("keeps a single load error message across refetches on window focus", async () => {
     // A new error per request, as axios gives, so every failed refetch reaches the page as a new error.
-    (axiosInstance.get as jest.Mock).mockImplementation(() => Promise.reject(new Error("down")));
+    jest.mocked(axiosInstance.get).mockImplementation(() => Promise.reject(new Error("down")));
     renderTeams();
     expect(await screen.findByText("Could not load teams: down")).toBeInTheDocument();
 
