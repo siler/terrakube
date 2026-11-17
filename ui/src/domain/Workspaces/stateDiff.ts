@@ -1,3 +1,4 @@
+import { isUnknownArray } from "@/modules/utils/typeGuards";
 // Structural diff of two JSON documents (state files): objects are compared by key, arrays by index,
 // and only the paths that differ are kept.
 export type DiffNode =
@@ -18,15 +19,19 @@ class Secret {
   constructor(readonly raw: unknown) {}
 }
 
-type PathStep = { type?: string; value?: unknown };
+// The key a `sensitive_attributes` path step reads: `get_attr` steps a key, `index` steps a list index or map key
+// (`{ value, type }`). Undefined for a malformed step, which then matches nothing.
+const stepKey = (step: unknown): unknown => {
+  if (!isObject(step)) return undefined;
+  return step.type === "index" && isObject(step.value) ? step.value.value : step.value;
+};
 
-// Copy of `value` with the attribute at `path` wrapped in a Secret; `get_attr` steps read a key, `index`
-// steps a list index or map key (`{ value, type }`). A path that does not exist leaves `value` as it is.
-function wrapAt(value: unknown, path: PathStep[]): unknown {
+// Copy of `value` with the attribute at `path` wrapped in a Secret. A path that does not exist leaves `value` as it is.
+function wrapAt(value: unknown, path: readonly unknown[]): unknown {
   if (path.length === 0) return value instanceof Secret ? value : new Secret(value);
   const [step, ...rest] = path;
-  const key = step.type === "index" && isObject(step.value) ? step.value.value : step.value;
-  if (Array.isArray(value) && typeof key === "number" && key in value) {
+  const key = stepKey(step);
+  if (isUnknownArray(value) && typeof key === "number" && key in value) {
     return value.map((item, i) => (i === key ? wrapAt(item, rest) : item));
   }
   if (isObject(value) && typeof key === "string" && has(value, key)) {
@@ -37,13 +42,13 @@ function wrapAt(value: unknown, path: PathStep[]): unknown {
 
 // Raw state: every `{ attributes, sensitive_attributes }` instance gets its sensitive attributes wrapped.
 function markSensitiveAttributes(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(markSensitiveAttributes);
+  if (isUnknownArray(v)) return v.map(markSensitiveAttributes);
   if (!isObject(v)) return v;
   const marked = Object.fromEntries(Object.entries(v).map(([k, c]) => [k, markSensitiveAttributes(c)]));
-  if (isObject(marked.attributes) && Array.isArray(v.sensitive_attributes)) {
+  if (isObject(marked.attributes) && isUnknownArray(v.sensitive_attributes)) {
     marked.attributes = v.sensitive_attributes
-      .filter(Array.isArray)
-      .reduce<unknown>((attributes, path) => wrapAt(attributes, path as PathStep[]), marked.attributes);
+      .filter(isUnknownArray)
+      .reduce<unknown>((attributes, path) => wrapAt(attributes, path), marked.attributes);
   }
   return marked;
 }
@@ -51,7 +56,7 @@ function markSensitiveAttributes(v: unknown): unknown {
 /** Copy of a state value with sensitive resource attributes and the `value` of every `{ sensitive: true }` object (state outputs) masked. */
 export function maskSensitive(v: unknown): unknown {
   if (v instanceof Secret) return SENSITIVE_MASK;
-  if (Array.isArray(v)) return v.map(maskSensitive);
+  if (isUnknownArray(v)) return v.map(maskSensitive);
   if (!isObject(v)) return v;
   return Object.fromEntries(
     Object.entries(v).map(([k, c]) => [k, k === "value" && v.sensitive === true ? SENSITIVE_MASK : maskSensitive(c)])
@@ -73,7 +78,7 @@ function diff(prev: unknown, next: unknown): DiffNode | undefined {
       ? { kind: "changed", prev: SENSITIVE_MASK, next: SENSITIVE_MASK }
       : undefined;
   }
-  if (Array.isArray(prev) && Array.isArray(next)) {
+  if (isUnknownArray(prev) && isUnknownArray(next)) {
     const children: [number, DiffNode][] = [];
     for (let i = 0; i < Math.max(prev.length, next.length); i++) {
       const child =
