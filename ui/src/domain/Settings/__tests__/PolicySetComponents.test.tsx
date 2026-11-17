@@ -1,21 +1,24 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { PolicySetCard, PolicySetFilter, PolicySetTable } from "../components";
+import { type PolicySetRow } from "../policySetFields";
 
 describe("PolicySet Components", () => {
-  const mockItem = {
+  // The components read flat rows now; organization/attachments are linkage the list read selects.
+  const mockItem: PolicySetRow = {
     id: "ps-test-1",
-    attributes: {
-      name: "sample-policy",
-      description: "Sample test description",
-      enforcementLevel: "HARD_MANDATORY",
-      shadowEnforcementLevel: "SOFT_MANDATORY",
-      global: false,
-      overrideTeam: "devops-leads",
-      repository: "https://github.com/org/policies",
-      branch: "main",
-      folder: "/rules",
-    },
+    name: "sample-policy",
+    description: "Sample test description",
+    enforcementLevel: "HARD_MANDATORY",
+    shadowEnforcementLevel: "SOFT_MANDATORY",
+    global: false,
+    overrideTeam: "devops-leads",
+    repository: "https://github.com/org/policies",
+    branch: "main",
+    folder: "/rules",
+    organization: { id: "org-1" },
+    attachments: [],
+    notificationConfiguration: null,
   };
 
   describe("PolicySetCard", () => {
@@ -54,10 +57,7 @@ describe("PolicySet Components", () => {
     });
 
     it("renders Global tag when policy set is global", () => {
-      const globalItem = {
-        ...mockItem,
-        attributes: { ...mockItem.attributes, global: true },
-      };
+      const globalItem = { ...mockItem, global: true };
 
       render(
         <MemoryRouter>
@@ -102,11 +102,9 @@ describe("PolicySet Components", () => {
       const onDelete = jest.fn();
       const onPageChange = jest.fn();
 
-      const itemWithNotif = {
+      const itemWithNotif: PolicySetRow = {
         ...mockItem,
-        relationships: {
-          notificationConfiguration: { data: { id: "notif-1" } },
-        },
+        notificationConfiguration: { id: "notif-1", name: "SecOps Webhook", channelType: "WEBHOOK" },
       };
 
       render(

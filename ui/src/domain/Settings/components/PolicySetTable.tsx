@@ -3,6 +3,7 @@ import { Button, Flex, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { DeleteOutlined, EditOutlined, GlobalOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
+import { type PolicySetRow } from "../policySetFields";
 import { attachmentsLabel, enforcementLabel, renderEnforcementTag } from "./policySetLabels";
 import "../PolicySets.css";
 import "./PolicyComponents.css";
@@ -10,11 +11,11 @@ import "./PolicyComponents.css";
 const { Text } = Typography;
 
 type Props = {
-  policySets: any[];
+  policySets: PolicySetRow[];
   attachmentCounts: Record<string, number>;
   managePermission: boolean;
   onEdit: (id: string) => void;
-  onDelete: (item: any) => void;
+  onDelete: (item: PolicySetRow) => void;
   orgid: string;
   currentPage: number;
   pageSize: number;
@@ -34,14 +35,13 @@ export const PolicySetTable: React.FC<Props> = ({
   onPageChange,
   notificationConfigs,
 }) => {
-  const columns: ColumnsType<any> = [
+  const columns: ColumnsType<PolicySetRow> = [
     {
       title: "Policy set",
-      dataIndex: ["attributes", "name"],
+      dataIndex: "name",
       key: "name",
-      sorter: (a, b) => (a.attributes?.name || "").localeCompare(b.attributes?.name || ""),
-      render: (_: string, record: any) => {
-        const attrs = record.attributes || {};
+      sorter: (a, b) => (a.name || "").localeCompare(b.name || ""),
+      render: (_: string, record: PolicySetRow) => {
         return (
           <div className="policy-cell-stack">
             <Link
@@ -49,11 +49,11 @@ export const PolicySetTable: React.FC<Props> = ({
               className="policy-set-table-link"
               data-testid={`policy-set-table-link-${record.id}`}
             >
-              {attrs.name}
+              {record.name}
             </Link>
-            {attrs.description && (
-              <Text type="secondary" className="policy-cell-secondary" ellipsis={{ tooltip: attrs.description }}>
-                {attrs.description}
+            {record.description && (
+              <Text type="secondary" className="policy-cell-secondary" ellipsis={{ tooltip: record.description }}>
+                {record.description}
               </Text>
             )}
           </div>
@@ -62,15 +62,14 @@ export const PolicySetTable: React.FC<Props> = ({
     },
     {
       title: "Enforcement",
-      dataIndex: ["attributes", "enforcementLevel"],
+      dataIndex: "enforcementLevel",
       key: "enforcementLevel",
       width: 170,
-      render: (level: string, record: any) => {
-        const attrs = record.attributes || {};
+      render: (level: string, record: PolicySetRow) => {
         return (
           <Flex vertical gap={4} align="flex-start">
             {renderEnforcementTag(level)}
-            {attrs.shadowEnforcementLevel && <Tag>Shadow: {enforcementLabel(attrs.shadowEnforcementLevel)}</Tag>}
+            {record.shadowEnforcementLevel && <Tag>Shadow: {enforcementLabel(record.shadowEnforcementLevel)}</Tag>}
           </Flex>
         );
       },
@@ -79,22 +78,21 @@ export const PolicySetTable: React.FC<Props> = ({
       title: "Scope",
       key: "scope",
       width: 190,
-      render: (_: any, record: any) => {
-        const attrs = record.attributes || {};
-        const notifId = record.relationships?.notificationConfiguration?.data?.id;
+      render: (_: unknown, record: PolicySetRow) => {
+        const notifId = record.notificationConfiguration?.id;
         const notif = notifId && notificationConfigs ? notificationConfigs[notifId] : null;
         return (
           <div className="policy-cell-stack">
-            {attrs.global ? (
+            {record.global ? (
               <span>
                 <GlobalOutlined /> Global
               </span>
             ) : (
               <span>{attachmentsLabel(attachmentCounts[record.id] ?? 0)}</span>
             )}
-            {attrs.overrideTeam && (
+            {record.overrideTeam && (
               <Text type="secondary" className="policy-cell-secondary">
-                Override: {attrs.overrideTeam}
+                Override: {record.overrideTeam}
               </Text>
             )}
             {notif && (
@@ -114,14 +112,13 @@ export const PolicySetTable: React.FC<Props> = ({
     {
       title: "Source",
       key: "repository",
-      render: (_: any, record: any) => {
-        const attrs = record.attributes || {};
-        const ref = [attrs.branch, attrs.folder].filter(Boolean).join(" · ");
+      render: (_: unknown, record: PolicySetRow) => {
+        const ref = [record.branch, record.folder].filter(Boolean).join(" · ");
         return (
           <div className="policy-cell-stack">
-            {attrs.repository && (
-              <Text className="policy-mono" ellipsis={{ tooltip: attrs.repository }}>
-                {attrs.repository}
+            {record.repository && (
+              <Text className="policy-mono" ellipsis={{ tooltip: record.repository }}>
+                {record.repository}
               </Text>
             )}
             {ref && (
@@ -138,20 +135,20 @@ export const PolicySetTable: React.FC<Props> = ({
       key: "actions",
       width: 96,
       align: "right",
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: PolicySetRow) => (
         <Flex gap={8} justify="flex-end">
           <Button
             icon={<EditOutlined />}
             onClick={() => onEdit(record.id)}
             disabled={!managePermission}
-            aria-label={`Edit ${record.attributes?.name}`}
+            aria-label={`Edit ${record.name}`}
             data-testid={`table-edit-policy-set-btn-${record.id}`}
           />
           <Button
             icon={<DeleteOutlined />}
             onClick={() => onDelete(record)}
             disabled={!managePermission}
-            aria-label={`Delete ${record.attributes?.name}`}
+            aria-label={`Delete ${record.name}`}
             data-testid={`table-delete-policy-set-btn-${record.id}`}
           />
         </Flex>

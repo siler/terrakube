@@ -1,19 +1,33 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { PolicySetParameters } from "../PolicySetParameters";
-import axiosInstance from "../../../../config/axiosConfig";
+
+type Response = { data: unknown };
+
+const getMock = jest.fn<Promise<Response>, [string]>();
+const postMock = jest.fn<Promise<Response>, [string, unknown, unknown]>();
+const patchMock = jest.fn<Promise<Response>, [string, unknown, unknown]>();
+const deleteMock = jest.fn<Promise<Response>, [string]>();
 
 jest.mock("../../../../config/axiosConfig", () => ({
   __esModule: true,
   default: {
-    get: jest.fn(),
-    delete: jest.fn(),
-    post: jest.fn(),
-    patch: jest.fn(),
+    get: (...args: [string]) => getMock(...args),
+    delete: (...args: [string]) => deleteMock(...args),
+    post: (...args: [string, unknown, unknown]) => postMock(...args),
+    patch: (...args: [string, unknown, unknown]) => patchMock(...args),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error ? err.message : "Error"),
 }));
 
 describe("PolicySetParameters", () => {
+  // Answers only the exact URL given, so a request that drops a field fails the test.
+  const respondTo = (routes: Record<string, unknown>) =>
+    getMock.mockImplementation((url) =>
+      url in routes ? Promise.resolve({ data: routes[url] }) : Promise.reject(new Error(`Unexpected GET ${url}`))
+    );
+
+  const PARAMETERS_URL = "policy_set/ps-100/parameters?fields[policy_set_parameter]=key,value,description";
+
   const sampleParameters = [
     {
       id: "param-1",
@@ -37,8 +51,8 @@ describe("PolicySetParameters", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (axiosInstance.get as jest.Mock).mockResolvedValue({
-      data: {
+    respondTo({
+      [PARAMETERS_URL]: {
         data: sampleParameters,
       },
     });
@@ -67,7 +81,7 @@ describe("PolicySetParameters", () => {
   });
 
   it("opens modal and submits new parameter", async () => {
-    (axiosInstance.post as jest.Mock).mockResolvedValue({
+    postMock.mockResolvedValue({
       data: {
         data: {
           id: "param-3",
@@ -95,26 +109,19 @@ describe("PolicySetParameters", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add parameter" }));
 
-    await waitFor(() => {
-      expect(axiosInstance.post).toHaveBeenCalledWith(
-        "policy_set/ps-100/parameters",
-        expect.objectContaining({
-          data: expect.objectContaining({
-            type: "policy_set_parameter",
-            attributes: expect.objectContaining({
-              key: "new_param",
-              value: "true",
-              description: "test description",
-            }),
-          }),
-        }),
-        expect.anything()
-      );
+    await waitFor(() => expect(postMock).toHaveBeenCalled());
+    const [url, body] = postMock.mock.calls[0];
+    expect(url).toBe("policy_set/ps-100/parameters");
+    expect(body).toMatchObject({
+      data: {
+        type: "policy_set_parameter",
+        attributes: { key: "new_param", value: "true", description: "test description" },
+      },
     });
   });
 
   it("opens edit modal and patches existing parameter", async () => {
-    (axiosInstance.patch as jest.Mock).mockResolvedValue({
+    patchMock.mockResolvedValue({
       data: {
         data: {
           id: "param-1",
@@ -136,25 +143,14 @@ describe("PolicySetParameters", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save parameter" }));
 
-    await waitFor(() => {
-      expect(axiosInstance.patch).toHaveBeenCalledWith(
-        "policy_set/ps-100/parameters/param-1",
-        expect.objectContaining({
-          data: expect.objectContaining({
-            id: "param-1",
-            attributes: expect.objectContaining({
-              key: "max_deletions",
-              value: "10",
-            }),
-          }),
-        }),
-        expect.anything()
-      );
-    });
+    await waitFor(() => expect(patchMock).toHaveBeenCalled());
+    const [url, body] = patchMock.mock.calls[0];
+    expect(url).toBe("policy_set/ps-100/parameters/param-1");
+    expect(body).toMatchObject({ data: { id: "param-1", attributes: { key: "max_deletions", value: "10" } } });
   });
 
   it("opens delete modal and deletes parameter", async () => {
-    (axiosInstance.delete as jest.Mock).mockResolvedValue({});
+    deleteMock.mockResolvedValue({ data: null });
 
     render(<PolicySetParameters policySetId="ps-100" managePermission={true} />);
     expect(await screen.findByText("max_deletions")).toBeInTheDocument();
@@ -165,7 +161,7 @@ describe("PolicySetParameters", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete parameter" }));
 
     await waitFor(() => {
-      expect(axiosInstance.delete).toHaveBeenCalledWith("policy_set/ps-100/parameters/param-1");
+      expect(deleteMock).toHaveBeenCalledWith("policy_set/ps-100/parameters/param-1");
     });
   });
 
@@ -180,7 +176,7 @@ describe("PolicySetParameters", () => {
   });
 
   it("shows an empty state instead of an empty table", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: { data: [] } });
+    respondTo({ [PARAMETERS_URL]: { data: [] } });
     render(<PolicySetParameters policySetId="ps-100" managePermission={true} />);
 
     expect(

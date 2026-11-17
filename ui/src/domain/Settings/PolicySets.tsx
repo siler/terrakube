@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Button, List, Tabs, message } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { api } from "../generated/apiPaths";
+import { POLICY_SET_LIST_FIELDS, type PolicySetRow } from "./policySetFields";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import { Loading } from "@/components/feedback/Loading";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -26,15 +29,15 @@ type Props = {
 };
 
 export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, managePermission = true }) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get("tab") || "sets";
 
-  const [policySets, setPolicySets] = useState<any[]>([]);
+  const [policySets, setPolicySets] = useState<PolicySetRow[]>([]);
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
-  const [pendingDelete, setPendingDelete] = useState<any | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PolicySetRow | null>(null);
 
   // Filter & Search states
   const [searchQuery, setSearchQuery] = useState("");
@@ -52,37 +55,26 @@ export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, mana
   const loadPolicySets = async () => {
     setLoading(true);
     try {
-      const res = await axiosInstance.get(`policy_set?include=attachments,notificationConfiguration`);
-      const items = res.data?.data || [];
+      const rows = await api.policy_set().select(POLICY_SET_LIST_FIELDS);
       // Filter by organization if needed
-      const orgItems = items.filter((item: any) => {
-        const orgRel = item.relationships?.organization?.data;
-        return !orgRel || orgRel.id === orgid;
-      });
+      const orgItems = rows.filter((row) => !row.organization || row.organization.id === orgid);
       setPolicySets(orgItems);
 
-      // Map attachment counts
       const counts: Record<string, number> = {};
-      orgItems.forEach((p: any) => {
-        const atts = p.relationships?.attachments?.data;
-        counts[p.id] = Array.isArray(atts) ? atts.length : 0;
-      });
-      setAttachmentCounts(counts);
-
-      // Map included notification configurations
-      const included = res.data?.included || [];
-      const notifMap: Record<string, { id: string; name: string; channelType: string }> = {};
-      included.forEach((inc: any) => {
-        if (inc.type === "notification_configuration") {
-          notifMap[inc.id] = {
-            id: inc.id,
-            name: inc.attributes?.name || inc.id,
-            channelType: inc.attributes?.channelType || "",
+      const notifConfigs: Record<string, { id: string; name: string; channelType: string }> = {};
+      orgItems.forEach((row) => {
+        counts[row.id] = row.attachments?.length ?? 0;
+        if (row.notificationConfiguration) {
+          notifConfigs[row.notificationConfiguration.id] = {
+            id: row.notificationConfiguration.id,
+            name: row.notificationConfiguration.name || row.notificationConfiguration.id,
+            channelType: row.notificationConfiguration.channelType || "",
           };
         }
       });
-      setNotificationConfigs(notifMap);
-    } catch (err: any) {
+      setAttachmentCounts(counts);
+      setNotificationConfigs(notifConfigs);
+    } catch (err) {
       message.error(getErrorMessage(err));
     } finally {
       setLoading(false);
@@ -101,17 +93,16 @@ export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, mana
       message.success("Policy set deleted successfully");
       setPendingDelete(null);
       void loadPolicySets();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err));
     }
   };
 
   const filteredPolicySets = useMemo(() => {
-    return policySets.filter((item: any) => {
-      const attrs = item.attributes || {};
-      const name = (attrs.name || "").toLowerCase();
-      const desc = (attrs.description || "").toLowerCase();
-      const repo = (attrs.repository || "").toLowerCase();
+    return policySets.filter((row) => {
+      const name = (row.name || "").toLowerCase();
+      const desc = (row.description || "").toLowerCase();
+      const repo = (row.repository || "").toLowerCase();
       const q = searchQuery.trim().toLowerCase();
 
       // 1. Search by name, description, or repository
@@ -121,16 +112,16 @@ export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, mana
 
       // 2. Filter by policy category / enforcement level
       if (categoryFilter !== "ALL") {
-        if ((attrs.enforcementLevel || "").toUpperCase() !== categoryFilter) {
+        if ((row.enforcementLevel || "").toUpperCase() !== categoryFilter) {
           return false;
         }
       }
 
       // 3. Filter by scope (Global vs Attached)
-      if (scopeFilter === "GLOBAL" && !attrs.global) {
+      if (scopeFilter === "GLOBAL" && !row.global) {
         return false;
       }
-      if (scopeFilter === "ATTACHED" && attrs.global) {
+      if (scopeFilter === "ATTACHED" && row.global) {
         return false;
       }
 
@@ -221,7 +212,7 @@ export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, mana
             managePermission={managePermission}
             onEdit={openEdit}
             onDelete={(item) => setPendingDelete(item)}
-            orgid={orgid!}
+            orgid={orgid}
             currentPage={currentPage}
             pageSize={pageSize}
             onPageChange={handlePageChange}
@@ -239,18 +230,19 @@ export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, mana
               onChange: handlePageChange,
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} policy sets`,
             }}
-            renderItem={(item) => {
-              const notifId = item.relationships?.notificationConfiguration?.data?.id;
+            renderItem={(row) => {
               return (
                 <PolicySetCard
-                  key={item.id}
-                  item={item}
-                  attachmentsCount={attachmentCounts[item.id] ?? 0}
+                  key={row.id}
+                  item={row}
+                  attachmentsCount={attachmentCounts[row.id] ?? 0}
                   managePermission={managePermission}
                   onEdit={openEdit}
                   onDelete={(item) => setPendingDelete(item)}
-                  orgid={orgid!}
-                  notificationConfig={notifId ? notificationConfigs[notifId] : undefined}
+                  orgid={orgid}
+                  notificationConfig={
+                    row.notificationConfiguration ? notificationConfigs[row.notificationConfiguration.id] : undefined
+                  }
                 />
               );
             }}
@@ -301,10 +293,12 @@ export const PolicySetsSettings: React.FC<Props> = ({ editorMode, editorId, mana
       <DeleteConfirmationModal
         open={pendingDelete !== null}
         title="Delete policy set"
-        message={`Workspaces will no longer be checked against ${pendingDelete?.attributes?.name}. Its attachments, parameters and exemptions are deleted too. This cannot be undone.`}
-        confirmValue={pendingDelete?.attributes?.name}
+        message={`Workspaces will no longer be checked against ${pendingDelete?.name}. Its attachments, parameters and exemptions are deleted too. This cannot be undone.`}
+        confirmValue={pendingDelete?.name}
         okText="Delete policy set"
-        onConfirm={() => handleDelete(pendingDelete.id)}
+        onConfirm={() => {
+          if (pendingDelete) handleDelete(pendingDelete.id);
+        }}
         onCancel={() => setPendingDelete(null)}
       />
     </div>

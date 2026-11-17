@@ -30,8 +30,7 @@ export const PolicySetFilter: React.FC<Props> = ({
   onResetFilters,
   hasActiveFilters,
 }) => {
-  const handleViewModeChange = (val: string | number) => {
-    const mode = val as PolicySetsViewMode;
+  const handleViewModeChange = (mode: PolicySetsViewMode) => {
     setStoredPolicySetsViewMode(mode);
     onViewModeChange(mode);
   };
@@ -84,7 +83,7 @@ export const PolicySetFilter: React.FC<Props> = ({
         )}
       </div>
 
-      <Segmented
+      <Segmented<PolicySetsViewMode>
         value={viewMode}
         onChange={handleViewModeChange}
         data-testid="policy-set-view-toggle"
