@@ -1,7 +1,8 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import axiosInstance from "@/config/axiosConfig";
+import axiosInstance, { getErrorMessage } from "@/config/axiosConfig";
 import { apiPost } from "@/modules/api/apiWrapper";
 import { EditNotificationConfiguration } from "../EditNotificationConfiguration";
+import { requestAttributes } from "@/testUtils/readRequestBody";
 
 jest.mock("@/config/axiosConfig", () => ({
   __esModule: true,
@@ -26,12 +27,12 @@ const selectChannel = (label: string) => {
 
 describe("EditNotificationConfiguration", () => {
   beforeEach(() => {
-    (axiosInstance.post as jest.Mock).mockReset();
+    jest.mocked(axiosInstance.post).mockReset();
   });
 
   it("creates a workspace-scoped configuration with selected triggers", async () => {
     const onDone = jest.fn();
-    (axiosInstance.post as jest.Mock).mockResolvedValue({ status: 201, data: { data: { id: "new-config" } } });
+    jest.mocked(axiosInstance.post).mockResolvedValue({ status: 201, data: { data: { id: "new-config" } } });
 
     render(<EditNotificationConfiguration orgId="org-1" workspaceId="ws-1" mode="create" onDone={onDone} />);
 
@@ -45,9 +46,35 @@ describe("EditNotificationConfiguration", () => {
     fireEvent.click(screen.getByRole("button", { name: /create/i }));
 
     await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
-    const [url, body] = (axiosInstance.post as jest.Mock).mock.calls[0];
+    const [url, body] = jest.mocked(axiosInstance.post).mock.calls[0];
     expect(url).toBe("organization/org-1/workspace/ws-1/notificationConfiguration");
-    expect(body.data.attributes.name).toBe("Prod Alerts");
+    expect(requestAttributes(body).name).toBe("Prod Alerts");
+  });
+
+  it("reports a create response without an id instead of saving triggers under an undefined configuration", async () => {
+    const onDone = jest.fn();
+    jest.mocked(axiosInstance.patch).mockClear();
+    jest.mocked(getErrorMessage).mockClear();
+    jest.mocked(axiosInstance.post).mockResolvedValue({ status: 201, data: {} });
+
+    render(<EditNotificationConfiguration orgId="org-1" workspaceId="ws-1" mode="create" onDone={onDone} />);
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Prod Alerts" } });
+    selectChannel("Slack");
+    fireEvent.change(screen.getByLabelText("Destination URL"), {
+      target: { value: "https://hooks.slack.com/services/X" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Failed" }));
+    fireEvent.click(screen.getByRole("button", { name: /create/i }));
+
+    await waitFor(() => expect(getErrorMessage).toHaveBeenCalled());
+    expect(axiosInstance.post).toHaveBeenCalledTimes(1);
+    expect(axiosInstance.patch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/relationships/templates"),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it("'select all' toggles every checkbox in that trigger group", async () => {
@@ -71,7 +98,7 @@ describe("EditNotificationConfiguration", () => {
   });
 
   it("sends an ad-hoc test scoped to the organization before the configuration is saved", async () => {
-    (axiosInstance.post as jest.Mock).mockResolvedValue({ status: 200 });
+    jest.mocked(axiosInstance.post).mockResolvedValue({ status: 200 });
 
     render(<EditNotificationConfiguration orgId="org-1" workspaceId="ws-1" mode="create" onDone={jest.fn()} />);
 
@@ -88,7 +115,7 @@ describe("EditNotificationConfiguration", () => {
     fireEvent.click(sendTestButton);
 
     await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
-    const [url, body] = (axiosInstance.post as jest.Mock).mock.calls[0];
+    const [url, body] = jest.mocked(axiosInstance.post).mock.calls[0];
     expect(url).toContain("/notification/v1/organization/org-1/configuration/test");
     expect(body).toMatchObject({ channelType: "WEBHOOK", destinationUrl: "https://example.com/hook" });
 
@@ -196,7 +223,7 @@ describe("EditNotificationConfiguration", () => {
         },
       },
     });
-    (axiosInstance.delete as jest.Mock).mockResolvedValue({});
+    jest.mocked(axiosInstance.delete).mockResolvedValue({});
     const onDone = jest.fn();
 
     render(<EditNotificationConfiguration orgId="org-1" mode="edit" configId="config-1" onDone={onDone} />);
@@ -261,5 +288,48 @@ describe("EditNotificationConfiguration", () => {
 
     expect(screen.getByRole("button", { name: "Create notification" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete this notification" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the stored signing secret alone when the field is cleared before updating", async () => {
+    jest.mocked(axiosInstance.patch).mockReset().mockResolvedValue({ data: {} });
+    (apiPost as jest.Mock).mockResolvedValue({
+      data: {
+        notification_configuration: {
+          edges: [
+            {
+              node: {
+                name: "Hook",
+                channelType: "WEBHOOK",
+                destinationUrl: "https://example.com/hook",
+                active: true,
+                workspace: { edges: [] },
+                triggers: { edges: [{ node: { id: "trigger-1", jobStatus: "failed" } }] },
+                templates: { edges: [] },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    render(<EditNotificationConfiguration orgId="org-1" mode="edit" configId="config-1" onDone={jest.fn()} />);
+
+    // The field appears only once Form.useWatch reports the loaded WEBHOOK channel, a render after the values land.
+    const secret = await screen.findByLabelText("Signing secret (optional)");
+    fireEvent.change(secret, { target: { value: "typed" } });
+    fireEvent.change(secret, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Update notification" }));
+
+    await waitFor(() =>
+      expect(axiosInstance.patch).toHaveBeenCalledWith(
+        "notification_configuration/config-1",
+        expect.anything(),
+        expect.anything()
+      )
+    );
+    const update = jest
+      .mocked(axiosInstance.patch)
+      .mock.calls.find(([url]) => url === "notification_configuration/config-1");
+    expect(requestAttributes(JSON.parse(JSON.stringify(update?.[1])))).not.toHaveProperty("signingSecret");
   });
 });

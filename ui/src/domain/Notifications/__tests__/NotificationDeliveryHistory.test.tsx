@@ -11,7 +11,7 @@ jest.mock("@/config/axiosConfig", () => ({
 
 describe("NotificationDeliveryHistory", () => {
   it("renders sent and failed deliveries with status and error detail", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({
+    jest.mocked(axiosInstance.get).mockResolvedValue({
       data: [
         {
           id: "d1",
@@ -47,7 +47,7 @@ describe("NotificationDeliveryHistory", () => {
   });
 
   it("renders nothing when there are no deliveries", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValue({ data: [] });
+    jest.mocked(axiosInstance.get).mockResolvedValue({ data: [] });
 
     const { container } = render(<NotificationDeliveryHistory workspaceId="ws-1" />);
 
@@ -66,10 +66,11 @@ describe("NotificationDeliveryHistory", () => {
       lastError: "connection refused",
       createdDate: "2026-08-12T00:00:00Z",
     };
-    (axiosInstance.get as jest.Mock)
+    jest
+      .mocked(axiosInstance.get)
       .mockResolvedValueOnce({ data: [failedDelivery] })
       .mockResolvedValueOnce({ data: [{ ...failedDelivery, status: "PENDING", lastError: null }] });
-    (axiosInstance.post as jest.Mock).mockResolvedValue({});
+    jest.mocked(axiosInstance.post).mockResolvedValue({});
 
     render(<NotificationDeliveryHistory workspaceId="ws-1" />);
     await waitFor(() => expect(screen.getByText("Failed")).toBeInTheDocument());
@@ -84,5 +85,33 @@ describe("NotificationDeliveryHistory", () => {
       )
     );
     await waitFor(() => expect(screen.getByText("Pending")).toBeInTheDocument());
+  });
+
+  it("drops rows it cannot render and ignores a body that is not a list", async () => {
+    const sent = {
+      id: "d2",
+      jobId: 41,
+      configurationName: "Prod Alerts",
+      channelType: "SLACK",
+      status: "SENT",
+      attemptCount: 1,
+      lastAttemptAt: null,
+      lastError: null,
+      createdDate: "2026-08-11T23:00:00Z",
+    };
+    jest.mocked(axiosInstance.get).mockResolvedValueOnce({
+      data: [sent, { ...sent, id: "d3", channelType: "EMAIL" }, { ...sent, id: "d4", status: "BOUNCED" }],
+    });
+
+    const { unmount } = render(<NotificationDeliveryHistory workspaceId="ws-1" />);
+
+    await waitFor(() => expect(screen.getByText("Sent")).toBeInTheDocument());
+    expect(screen.getByText("The last 1 notification attempts for this workspace's runs.")).toBeInTheDocument();
+    unmount();
+
+    jest.mocked(axiosInstance.get).mockResolvedValueOnce({ data: { error: "unexpected" } });
+    const { container } = render(<NotificationDeliveryHistory workspaceId="ws-1" />);
+
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 });
