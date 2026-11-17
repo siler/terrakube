@@ -3,6 +3,10 @@ import { Button, Typography, message } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { useParams } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { api, fields } from "../generated/apiPaths";
+import { ids } from "../api/fieldSelection";
+import { readNames, type ScopeNames } from "../policyScopeNames";
+import { POLICY_EXEMPTION_FIELDS, type ExemptionRow } from "./policyExemptionFields";
 import {
   ExemptionRecord,
   ExemptionScopeFilter,
@@ -18,11 +22,16 @@ type Props = {
   managePermission?: boolean;
 };
 
+// The picker lists a policy set's name; the org filter counts on the organization linkage.
+const POLICY_SET_PICKER_FIELDS = fields.policy_set("name", { organization: ids });
+const WORKSPACE_NAME_SELECTION = fields.workspace("name");
+const PROJECT_NAME_SELECTION = fields.project("name");
+
 export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = true }) => {
   const { orgid } = useParams<{ orgid: string }>();
 
-  const [rawExemptions, setRawExemptions] = useState<any[]>([]);
-  const [includedMap, setIncludedMap] = useState<Record<string, Record<string, any>>>({});
+  const [rawExemptions, setRawExemptions] = useState<ExemptionRow[]>([]);
+  const [scopeNames, setScopeNames] = useState<ScopeNames>({ workspace: new Map(), project: new Map() });
   const [policySets, setPolicySets] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
 
@@ -35,7 +44,7 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
   // Modal states
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
-  const [editingExemption, setEditingExemption] = useState<any | null>(null);
+  const [editingExemption, setEditingExemption] = useState<ExemptionRecord | null>(null);
 
   const loadExemptions = async () => {
     if (!orgid) return;
@@ -43,40 +52,39 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
     try {
       // 1. Fetch policy sets for policySet filter dropdown
       try {
-        const psRes = await axiosInstance.get("policy_set");
-        const allPs = psRes.data?.data || [];
-        const orgPs = allPs.filter((p: any) => {
-          const orgRel = p.relationships?.organization?.data;
-          return !orgRel || orgRel.id === orgid;
-        });
+        const rows = await api.policy_set().select(POLICY_SET_PICKER_FIELDS);
         setPolicySets(
-          orgPs.map((p: any) => ({
-            id: p.id,
-            name: p.attributes?.name || p.id,
-          }))
+          rows
+            .filter((row) => !row.organization || row.organization.id === orgid)
+            .map((row) => ({ id: row.id, name: row.name || row.id }))
         );
       } catch {
         // Fallback if policy set query fails
       }
 
-      // 2. Fetch exemptions with included relationships
-      const res = await axiosInstance.get(`organization/${orgid}/policyExemption?include=policySet,workspace,project`);
-
-      const items = res.data?.data || [];
-      const included = res.data?.included || [];
-
-      // Build quick lookup map for included resources by type:id
-      const incMap: Record<string, Record<string, any>> = {};
-      included.forEach((inc: any) => {
-        if (!incMap[inc.type]) {
-          incMap[inc.type] = {};
-        }
-        incMap[inc.type][inc.id] = inc.attributes;
-      });
-
-      setIncludedMap(incMap);
-      setRawExemptions(items);
-    } catch (err: any) {
+      // 2. Fetch exemptions, then the names of what they scope to
+      const rows = await api.organization(orgid).policyExemption().select(POLICY_EXEMPTION_FIELDS);
+      const workspaceIds = [...new Set(rows.flatMap((row) => (row.workspace ? [row.workspace.id] : [])))];
+      const projectIds = [...new Set(rows.flatMap((row) => (row.project ? [row.project.id] : [])))];
+      const [workspaceNames, projectNames] = await Promise.all([
+        readNames(workspaceIds, (scopeIds) =>
+          api
+            .organization(orgid)
+            .workspace()
+            .select(WORKSPACE_NAME_SELECTION)
+            .where((w) => w.id.in(scopeIds))
+        ),
+        readNames(projectIds, (scopeIds) =>
+          api
+            .organization(orgid)
+            .project()
+            .select(PROJECT_NAME_SELECTION)
+            .where((p) => p.id.in(scopeIds))
+        ),
+      ]);
+      setRawExemptions(rows);
+      setScopeNames({ workspace: workspaceNames, project: projectNames });
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to load policy exemptions");
     } finally {
       setLoading(false);
@@ -89,18 +97,14 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
 
   // Transform raw Elide exemptions to UI records
   const exemptionRecords = useMemo<ExemptionRecord[]>(() => {
-    return rawExemptions.map((item: any) => {
-      const attrs = item.attributes || {};
-      const rels = item.relationships || {};
+    return rawExemptions.map((row) => {
+      const psId = row.policySet?.id;
+      const wsId = row.workspace?.id;
+      const projId = row.project?.id;
 
-      const psId = rels.policySet?.data?.id;
-      const wsId = rels.workspace?.data?.id;
-      const projId = rels.project?.data?.id;
-
-      const psName =
-        includedMap["policy_set"]?.[psId]?.name || policySets.find((p) => p.id === psId)?.name || psId || "Policy Set";
-      const wsName = includedMap["workspace"]?.[wsId]?.name;
-      const projName = includedMap["project"]?.[projId]?.name;
+      const psName = policySets.find((p) => p.id === psId)?.name || psId || "Policy Set";
+      const wsName = wsId ? scopeNames.workspace.get(wsId) : undefined;
+      const projName = projId ? scopeNames.project.get(projId) : undefined;
 
       let scopeType: "ORGANIZATION" | "PROJECT" | "WORKSPACE" = "ORGANIZATION";
       if (wsId) {
@@ -110,23 +114,18 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
       }
 
       return {
-        id: item.id,
-        ruleId: attrs.ruleId || "",
-        policySetId: psId,
+        ...row,
+        ruleId: row.ruleId || "",
         policySetName: psName,
-        ticketReference: attrs.ticketReference || "",
-        justification: attrs.justification || "",
-        expiresAt: attrs.expiresAt || null,
+        ticketReference: row.ticketReference || "",
+        justification: row.justification || "",
+        expiresAt: row.expiresAt || null,
         scopeType,
-        workspaceId: wsId,
         workspaceName: wsName,
-        projectId: projId,
         projectName: projName,
-        createdDate: attrs.createdDate,
-        createdBy: attrs.createdBy,
       };
     });
-  }, [rawExemptions, includedMap, policySets]);
+  }, [rawExemptions, scopeNames, policySets]);
 
   // Compute status counts
   const statusCounts = useMemo(() => {
@@ -189,7 +188,7 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
       }
 
       // 3. Policy set filter
-      if (policySetFilter !== "ALL" && rec.policySetId !== policySetFilter) {
+      if (policySetFilter !== "ALL" && rec.policySet?.id !== policySetFilter) {
         return false;
       }
 
@@ -229,7 +228,7 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
       await axiosInstance.delete(`policy_exemption/${record.id}`);
       message.success(`Policy exemption for ${record.ruleId} revoked successfully`);
       void loadExemptions();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to revoke policy exemption");
     }
   };
@@ -295,11 +294,11 @@ export const PolicyExemptionsSettings: React.FC<Props> = ({ managePermission = t
             editingExemption
               ? {
                   id: editingExemption.id,
-                  policySetId: editingExemption.policySetId,
+                  policySetId: editingExemption.policySet?.id || "",
                   ruleId: editingExemption.ruleId,
                   scopeType: editingExemption.scopeType,
-                  workspaceId: editingExemption.workspaceId,
-                  projectId: editingExemption.projectId,
+                  workspaceId: editingExemption.workspace?.id,
+                  projectId: editingExemption.project?.id,
                   ticketReference: editingExemption.ticketReference,
                   justification: editingExemption.justification,
                   expiresAt: editingExemption.expiresAt,

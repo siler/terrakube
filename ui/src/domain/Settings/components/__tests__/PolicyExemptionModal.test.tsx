@@ -9,13 +9,13 @@ jest.mock("../../../../config/axiosConfig", () => ({
     post: jest.fn(),
     patch: jest.fn(),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message) || "Error",
 }));
 
 describe("PolicyExemptionModal", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (axiosInstance.get as jest.Mock).mockImplementation((url: string) => {
+    jest.mocked(axiosInstance.get).mockImplementation((url: string) => {
       if (url.includes("/policySet")) {
         return Promise.resolve({
           data: {
@@ -70,9 +70,19 @@ describe("PolicyExemptionModal", () => {
     expect(screen.getByText("Never expires")).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(axiosInstance.get).toHaveBeenCalledWith("organization/org-1/policySet");
-      expect(axiosInstance.get).toHaveBeenCalledWith("organization/org-1/workspace?fields[workspace]=name");
-      expect(axiosInstance.get).toHaveBeenCalledWith("organization/org-1/project");
+      // The typed query sends its abort config as the second argument.
+      expect(axiosInstance.get).toHaveBeenCalledWith(
+        "organization/org-1/policySet?fields[policy_set]=name",
+        expect.anything()
+      );
+      expect(axiosInstance.get).toHaveBeenCalledWith(
+        "organization/org-1/workspace?fields[workspace]=name",
+        expect.anything()
+      );
+      expect(axiosInstance.get).toHaveBeenCalledWith(
+        "organization/org-1/project?fields[project]=name",
+        expect.anything()
+      );
     });
   });
 
@@ -99,7 +109,7 @@ describe("PolicyExemptionModal", () => {
   });
 
   it("submits create exemption payload", async () => {
-    (axiosInstance.post as jest.Mock).mockResolvedValueOnce({
+    jest.mocked(axiosInstance.post).mockResolvedValueOnce({
       data: { data: { id: "ex-new-1" } },
     });
 
@@ -125,27 +135,24 @@ describe("PolicyExemptionModal", () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(axiosInstance.post).toHaveBeenCalledWith(
-        "policy_exemption",
-        expect.objectContaining({
-          data: expect.objectContaining({
-            type: "policy_exemption",
-            attributes: expect.objectContaining({
-              ruleId: "aws_s3_no_public",
-              ticketReference: "SEC-100",
-              justification: "Approved exception for public assets",
-            }),
-          }),
-        }),
-        expect.anything()
-      );
+      expect(axiosInstance.post).toHaveBeenCalledWith("policy_exemption", expect.anything(), expect.anything());
+    });
+    expect(jest.mocked(axiosInstance.post).mock.calls[0][1]).toMatchObject({
+      data: {
+        type: "policy_exemption",
+        attributes: {
+          ruleId: "aws_s3_no_public",
+          ticketReference: "SEC-100",
+          justification: "Approved exception for public assets",
+        },
+      },
     });
 
     expect(onSuccessMock).toHaveBeenCalled();
   });
 
   it("toggles indefinite exemption when clicking the switch or label text", async () => {
-    (axiosInstance.post as jest.Mock).mockResolvedValueOnce({
+    jest.mocked(axiosInstance.post).mockResolvedValueOnce({
       data: { data: { id: "ex-new-2" } },
     });
 
@@ -182,18 +189,10 @@ describe("PolicyExemptionModal", () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(axiosInstance.post).toHaveBeenCalledWith(
-        "policy_exemption",
-        expect.objectContaining({
-          data: expect.objectContaining({
-            attributes: expect.objectContaining({
-              ruleId: "aws_s3_no_public",
-              expiresAt: null,
-            }),
-          }),
-        }),
-        expect.anything()
-      );
+      expect(axiosInstance.post).toHaveBeenCalledWith("policy_exemption", expect.anything(), expect.anything());
+    });
+    expect(jest.mocked(axiosInstance.post).mock.calls[0][1]).toMatchObject({
+      data: { attributes: { ruleId: "aws_s3_no_public", expiresAt: null } },
     });
 
     expect(onSuccessMock).toHaveBeenCalled();

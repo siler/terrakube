@@ -1,8 +1,11 @@
 import { Button, Checkbox, Form, Select, Spin, Table, Typography, message } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
-import { Workspace } from "../../types";
+import { api, fields } from "../../generated/apiPaths";
+import type { AtomicOperationsBody } from "../../api/writeBodies";
+import type { Row } from "../../api/fieldSelection";
+import type { WorkspacePageRow } from "../workspaceQuery";
 import { atomicHeader } from "../Workspaces";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
@@ -11,7 +14,8 @@ import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal
 import "../Workspaces.css";
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
   onWorkspaceUpdate?: () => void;
 };
@@ -20,18 +24,16 @@ type UpdateStateSharedForm = {
   globalRemoteState: boolean;
 };
 
-interface SharedWorkspace {
-  id: string;
-  name: string;
-}
+const WORKSPACE_NAME_SELECTION = fields.workspace("name");
 
-// Quoting lets names hold spaces, commas or quotes; Elide still reads an edge `*` as a wildcard.
-const rsqlQuote = (value: string) => `'${value.replace(/[\\']/g, (char) => `\\${char}`)}'`;
+/** A workspace as the state-sharing picker and access table read it. */
+type SharedWorkspace = Row<typeof WORKSPACE_NAME_SELECTION>;
 
-export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUpdate }: Props) => {
-  const [form] = Form.useForm();
+const SEARCH_DEBOUNCE_MS = 300;
+
+export const WorkspaceStateShared = ({ organizationId, workspace, manageWorkspace, onWorkspaceUpdate }: Props) => {
+  const [form] = Form.useForm<UpdateStateSharedForm>();
   const globalRemoteState = Form.useWatch("globalRemoteState", form);
-  const organizationId = workspace.relationships.organization.data.id;
   const id = workspace.id;
   const [waiting, setWaiting] = useState(false);
   const [sharedWorkspaces, setSharedWorkspaces] = useState<SharedWorkspace[]>([]);
@@ -39,10 +41,21 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
   const [fetching, setFetching] = useState(false);
   const [options, setOptions] = useState<SharedWorkspace[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<SharedWorkspace | null>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Bumped on every keystroke so only the response to the latest query may land.
+  const latestSearch = useRef(0);
+
+  useEffect(
+    () => () => {
+      clearTimeout(searchTimer.current);
+      latestSearch.current += 1;
+    },
+    []
+  );
 
   useEffect(() => {
     const ids =
-      workspace.attributes.sharedIds
+      workspace.sharedIds
         ?.split(",")
         .map((id) => id.trim())
         .filter((id) => id !== "") || [];
@@ -52,13 +65,14 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
     }
 
     setLoadingTable(true);
-    const filter = encodeURIComponent(`id=in=(${ids.map(rsqlQuote).join(",")})`);
-    axiosInstance
-      .get(`/organization/${organizationId}/workspace?fields[workspace]=name&filter[workspace]=${filter}`)
-      .then((response) => {
-        const found: { id: string; attributes: { name: string } }[] = response.data.data ?? [];
-        return new Map(found.map((item) => [item.id, item.attributes.name]));
-      })
+    Promise.resolve(
+      api
+        .organization(organizationId)
+        .workspace()
+        .select(WORKSPACE_NAME_SELECTION)
+        .where((w) => w.id.in(ids))
+    )
+      .then((found) => new Map(found.map((item) => [item.id, item.name])))
       .catch(() => new Map<string, string>())
       .then((names) => {
         // A deleted or unreadable workspace stays listed so its access can still be revoked.
@@ -67,34 +81,46 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
         );
         setLoadingTable(false);
       });
-  }, [organizationId, workspace.attributes.sharedIds]);
+  }, [organizationId, workspace.sharedIds]);
 
-  const fetchWorkspaceOptions = async (search: string) => {
+  const fetchWorkspaceOptions = async (search: string, request: number) => {
+    try {
+      const found = await api
+        .organization(organizationId)
+        .workspace()
+        .select(WORKSPACE_NAME_SELECTION)
+        .where((w) => w.name.contains(search));
+      if (request !== latestSearch.current) {
+        return;
+      }
+      setOptions(found);
+    } catch (error) {
+      if (request === latestSearch.current) {
+        console.error("Error fetching workspaces:", error);
+      }
+    } finally {
+      if (request === latestSearch.current) {
+        setFetching(false);
+      }
+    }
+  };
+
+  const searchWorkspaces = (search: string) => {
+    clearTimeout(searchTimer.current);
+    latestSearch.current += 1;
+    const request = latestSearch.current;
     if (!search) {
       setOptions([]);
+      setFetching(false);
       return;
     }
     setFetching(true);
-    try {
-      const filter = encodeURIComponent(`name==${rsqlQuote(`*${search}*`)}`);
-      const response = await axiosInstance.get(
-        `/organization/${organizationId}/workspace?fields[workspace]=name&filter[workspace]=${filter}`
-      );
-      const workspaces = response.data.data.map((item: any) => ({
-        id: item.id,
-        name: item.attributes.name,
-      }));
-      setOptions(workspaces);
-    } catch (error) {
-      console.error("Error fetching workspaces:", error);
-    } finally {
-      setFetching(false);
-    }
+    searchTimer.current = setTimeout(() => void fetchWorkspaceOptions(search, request), SEARCH_DEBOUNCE_MS);
   };
 
   const updateSharedIds = async (updatedWorkspaces: SharedWorkspace[]) => {
     const sharedIdsString = updatedWorkspaces.map((ws) => ws.id).join(",");
-    const body = {
+    const body: AtomicOperationsBody<"workspace"> = {
       "atomic:operations": [
         {
           op: "update",
@@ -127,7 +153,9 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
     }
 
     const selectedWs = options.find((ws) => ws.id === workspaceId);
-    if (!selectedWs) return;
+    if (!selectedWs) {
+      return;
+    }
 
     setWaiting(true);
     try {
@@ -153,7 +181,7 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
 
   const onFinish = (values: UpdateStateSharedForm) => {
     setWaiting(true);
-    const body = {
+    const body: AtomicOperationsBody<"workspace"> = {
       "atomic:operations": [
         {
           op: "update",
@@ -196,7 +224,7 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
           form={form}
           name="state-shared"
           onFinish={onFinish}
-          initialValues={{ globalRemoteState: workspace.attributes.globalRemoteState }}
+          initialValues={{ globalRemoteState: workspace.globalRemoteState }}
           disabled={!manageWorkspace}
           saveDisabled={!manageWorkspace}
         >
@@ -222,7 +250,7 @@ export const WorkspaceStateShared = ({ workspace, manageWorkspace, onWorkspaceUp
                 aria-label="Add a workspace by name"
                 placeholder="Add a workspace by name"
                 filterOption={false}
-                onSearch={fetchWorkspaceOptions}
+                onSearch={searchWorkspaces}
                 onSelect={handleSelectWorkspace}
                 value={null}
                 loading={fetching}

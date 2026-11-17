@@ -3,66 +3,107 @@ import { PlayCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Alert, Button, Tooltip, message } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
 import { ORGANIZATION_ARCHIVE } from "../../../config/actionTypes";
-import { Workspace } from "../../types";
+import { api, fields } from "../../generated/apiPaths";
+import { ids, type Row } from "../../api/fieldSelection";
+import { readNames, type ScopeNames } from "../../policyScopeNames";
+import type { WorkspacePageRow } from "../workspaceQuery";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import PolicyStatusTag from "@/components/display/PolicyStatusTag";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
+import { isRecord } from "@/modules/utils/typeGuards";
 import { ExemptionRecord, PolicyExemptionModal, PolicyExemptionTable } from "../../Settings/components";
 import "../Workspaces.css";
 
 type Props = {
-  workspace: Workspace;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
   planJob?: boolean;
   onWorkspaceUpdate?: () => void;
 };
 
+const POLICY_EXEMPTION_FIELDS = fields.policy_exemption(
+  "ruleId",
+  "ticketReference",
+  "justification",
+  "expiresAt",
+  "createdDate",
+  "createdBy",
+  // The scope comes from the linkage ids, which arrive even for a related resource this user cannot
+  // read; the names are looked up separately because Elide drops such a resource from `included`.
+  { policySet: ["name"], workspace: ids, project: ids }
+);
+
+/** One policy exemption with the names of what it exempts and scopes to. */
+type ExemptionRow = Row<typeof POLICY_EXEMPTION_FIELDS>;
+
+/** The server's `message` from a failed evaluation dispatch, else the thrown error's own message. */
+const evaluationErrorMessage = (error: unknown): string | undefined => {
+  if (axios.isAxiosError(error) && isRecord(error.response?.data)) {
+    const serverMessage = error.response.data.message;
+    if (typeof serverMessage === "string" && serverMessage) {
+      return serverMessage;
+    }
+  }
+  return error instanceof Error ? error.message : undefined;
+};
+
+const WORKSPACE_NAME_SELECTION = fields.workspace("name");
+const PROJECT_NAME_SELECTION = fields.project("name");
+
 export const WorkspacePolicies = ({ workspace, manageWorkspace, planJob = false, onWorkspaceUpdate }: Props) => {
   const navigate = useNavigate();
-  const organizationId =
-    workspace?.relationships?.organization?.data?.id || sessionStorage.getItem(ORGANIZATION_ARCHIVE);
+  const organizationId = workspace?.organization?.id || sessionStorage.getItem(ORGANIZATION_ARCHIVE);
   const workspaceId = workspace?.id;
-  const workspaceProjectId = workspace?.relationships?.project?.data?.id;
-  const isLocked = workspace?.attributes?.locked;
-  const lastJobStatus = workspace?.attributes?.lastJobStatus;
-  const complianceStatus = workspace?.attributes?.policyComplianceStatus || "UNKNOWN";
+  const workspaceProjectId = workspace?.project?.id;
+  const isLocked = workspace?.locked;
+  const lastJobStatus = workspace?.lastJobStatus;
+  const complianceStatus = workspace?.policyComplianceStatus || "UNKNOWN";
 
   const { permissions: orgPermissions } = useOrgPermissions(organizationId || undefined);
   const canManagePolicies = orgPermissions.managePolicies;
 
   const [loading, setLoading] = useState(false);
-  const [rawExemptions, setRawExemptions] = useState<any[]>([]);
-  const [includedMap, setIncludedMap] = useState<Record<string, Record<string, any>>>({});
+  const [exemptions, setExemptions] = useState<ExemptionRow[]>([]);
+  const [scopeNames, setScopeNames] = useState<ScopeNames>({ workspace: new Map(), project: new Map() });
   const [exemptionsLoading, setExemptionsLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
-  const [editingExemption, setEditingExemption] = useState<any | null>(null);
+  const [editingExemption, setEditingExemption] = useState<ExemptionRecord | null>(null);
 
-  const loadExemptions = () => {
+  const loadExemptions = async () => {
     if (!organizationId) return;
     setExemptionsLoading(true);
-    axiosInstance
-      .get(`organization/${organizationId}/policyExemption?include=policySet,workspace,project`)
-      .then((res) => {
-        const items = res.data?.data || [];
-        const included = res.data?.included || [];
-
-        const incMap: Record<string, Record<string, any>> = {};
-        included.forEach((inc: any) => {
-          if (!incMap[inc.type]) {
-            incMap[inc.type] = {};
-          }
-          incMap[inc.type][inc.id] = inc.attributes;
-        });
-
-        setIncludedMap(incMap);
-        setRawExemptions(items);
-      })
-      .catch(() => {})
-      .finally(() => setExemptionsLoading(false));
+    try {
+      const rows = await api.organization(organizationId).policyExemption().select(POLICY_EXEMPTION_FIELDS);
+      const workspaceIds = [...new Set(rows.flatMap((row) => (row.workspace ? [row.workspace.id] : [])))];
+      const projectIds = [...new Set(rows.flatMap((row) => (row.project ? [row.project.id] : [])))];
+      const [workspaceNames, projectNames] = await Promise.all([
+        readNames(workspaceIds, (scopeIds) =>
+          api
+            .organization(organizationId)
+            .workspace()
+            .select(WORKSPACE_NAME_SELECTION)
+            .where((w) => w.id.in(scopeIds))
+        ),
+        readNames(projectIds, (scopeIds) =>
+          api
+            .organization(organizationId)
+            .project()
+            .select(PROJECT_NAME_SELECTION)
+            .where((p) => p.id.in(scopeIds))
+        ),
+      ]);
+      setExemptions(rows);
+      setScopeNames({ workspace: workspaceNames, project: projectNames });
+    } catch {
+      // The table keeps whatever exemptions it last loaded.
+    } finally {
+      setExemptionsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -70,46 +111,39 @@ export const WorkspacePolicies = ({ workspace, manageWorkspace, planJob = false,
   }, [organizationId, workspaceId]);
 
   const workspaceExemptions = useMemo<ExemptionRecord[]>(() => {
-    return rawExemptions
-      .filter((item: any) => {
-        const wsId = item.relationships?.workspace?.data?.id;
-        const projId = item.relationships?.project?.data?.id;
+    return exemptions
+      .filter((item) => {
+        const wsId = item.workspace?.id;
+        const projId = item.project?.id;
 
         if (wsId && wsId === workspaceId) return true;
         if (projId && projId === workspaceProjectId) return true;
         if (!wsId && !projId) return true;
         return false;
       })
-      .map((item: any) => {
-        const attrs = item.attributes || {};
-        const rels = item.relationships || {};
-        const psId = rels.policySet?.data?.id;
-        const wsId = rels.workspace?.data?.id;
-        const projId = rels.project?.data?.id;
+      .map((item) => {
+        const psId = item.policySet?.id;
+        const wsId = item.workspace?.id;
+        const projId = item.project?.id;
 
         let scopeType: "ORGANIZATION" | "PROJECT" | "WORKSPACE" = "ORGANIZATION";
         if (wsId) scopeType = "WORKSPACE";
         else if (projId) scopeType = "PROJECT";
 
         return {
-          id: item.id,
-          ruleId: attrs.ruleId || "",
-          policySetId: psId,
-          policySetName: includedMap["policy_set"]?.[psId]?.name || psId || "Policy Set",
-          ticketReference: attrs.ticketReference || "",
-          justification: attrs.justification || "",
-          expiresAt: attrs.expiresAt || null,
+          ...item,
+          ruleId: item.ruleId || "",
+          policySetName: item.policySet?.name || psId || "Policy Set",
+          ticketReference: item.ticketReference || "",
+          justification: item.justification || "",
+          expiresAt: item.expiresAt || null,
           scopeType,
-          workspaceId: wsId,
-          workspaceName: includedMap["workspace"]?.[wsId]?.name,
-          projectId: projId,
-          projectName: includedMap["project"]?.[projId]?.name,
-          createdDate: attrs.createdDate,
-          createdBy: attrs.createdBy,
+          workspaceName: wsId ? scopeNames.workspace.get(wsId) : undefined,
+          projectName: projId ? scopeNames.project.get(projId) : undefined,
           isInherited: wsId !== workspaceId,
         };
       });
-  }, [rawExemptions, includedMap, workspaceId, workspaceProjectId]);
+  }, [exemptions, scopeNames, workspaceId, workspaceProjectId]);
 
   const handleCreateExemption = () => {
     setModalMode("create");
@@ -129,7 +163,7 @@ export const WorkspacePolicies = ({ workspace, manageWorkspace, planJob = false,
       message.success(`Policy exemption for ${rec.ruleId} revoked successfully`);
       loadExemptions();
       onWorkspaceUpdate?.();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to revoke exemption");
     }
   };
@@ -157,18 +191,19 @@ export const WorkspacePolicies = ({ workspace, manageWorkspace, planJob = false,
     setLoading(true);
     const origin = apiUrl("");
     axiosInstance
-      .post(`${origin}/policy/v1/organization/${organizationId}/workspace/${workspaceId}/evaluation`)
+      .post<unknown>(`${origin}/policy/v1/organization/${organizationId}/workspace/${workspaceId}/evaluation`)
       .then((response) => {
         message.success("Policy evaluation dispatched successfully");
         if (onWorkspaceUpdate) {
           onWorkspaceUpdate();
         }
-        if (response?.data?.jobId) {
-          navigate(`/organizations/${organizationId}/workspaces/${workspaceId}/runs/${response.data.jobId}`);
+        const jobId = isRecord(response.data) ? response.data.jobId : undefined;
+        if (typeof jobId === "string" && jobId) {
+          navigate(`/organizations/${organizationId}/workspaces/${workspaceId}/runs/${jobId}`);
         }
       })
-      .catch((error) => {
-        const errorMsg = error?.response?.data?.message || error?.message || "Failed to dispatch policy evaluation";
+      .catch((error: unknown) => {
+        const errorMsg = evaluationErrorMessage(error) || "Failed to dispatch policy evaluation";
         message.error("Policy evaluation failed: " + errorMsg);
       })
       .finally(() => {
@@ -260,17 +295,17 @@ export const WorkspacePolicies = ({ workspace, manageWorkspace, planJob = false,
           lockedScope={{
             scopeType: "WORKSPACE",
             workspaceId: workspaceId,
-            workspaceName: workspace?.attributes?.name,
+            workspaceName: workspace?.name,
           }}
           initialData={
             editingExemption
               ? {
                   id: editingExemption.id,
-                  policySetId: editingExemption.policySetId,
+                  policySetId: editingExemption.policySet?.id,
                   ruleId: editingExemption.ruleId,
                   scopeType: editingExemption.scopeType,
-                  workspaceId: editingExemption.workspaceId,
-                  projectId: editingExemption.projectId,
+                  workspaceId: editingExemption.workspace?.id,
+                  projectId: editingExemption.project?.id,
                   ticketReference: editingExemption.ticketReference,
                   justification: editingExemption.justification,
                   expiresAt: editingExemption.expiresAt,

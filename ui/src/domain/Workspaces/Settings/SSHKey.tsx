@@ -2,32 +2,38 @@ import { Form, Select, Spin, message } from "antd";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
-import { SshKey, Workspace } from "../../types";
+import { api, fields } from "../../generated/apiPaths";
+import type { AtomicOperationsBody } from "../../api/writeBodies";
+import type { Row } from "../../api/fieldSelection";
+import type { WorkspacePageRow } from "../workspaceQuery";
 import { atomicHeader } from "../Workspaces";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import { SettingsForm } from "@/components/settings/SettingsForm";
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
   onWorkspaceUpdate?: () => void;
 };
 
-export const WorkspaceSSHKey = ({ workspace, manageWorkspace, onWorkspaceUpdate }: Props) => {
-  const organizationId = workspace.relationships.organization.data.id;
+const SSH_FIELDS = fields.ssh("name");
+
+/** An organization SSH key as the key picker lists it. */
+type SshKeyRow = Row<typeof SSH_FIELDS>;
+
+export const WorkspaceSSHKey = ({ organizationId, workspace, manageWorkspace, onWorkspaceUpdate }: Props) => {
   const id = workspace.id;
-  const [sshKeys, setSSHKeys] = useState<SshKey[]>([]);
+  const [sshKeys, setSSHKeys] = useState<SshKeyRow[]>([]);
   const [waiting, setWaiting] = useState(false);
 
   useEffect(() => {
-    axiosInstance.get(`organization/${organizationId}/ssh`).then((response) => {
-      setSSHKeys(response.data.data);
-    });
+    api.organization(organizationId).ssh().select(SSH_FIELDS).then(setSSHKeys);
   }, [organizationId]);
 
   const onFinish = (values: { moduleSshKey?: string }) => {
     setWaiting(true);
-    const body = {
+    const body: AtomicOperationsBody<"workspace"> = {
       "atomic:operations": [
         {
           op: "update",
@@ -70,7 +76,7 @@ export const WorkspaceSSHKey = ({ workspace, manageWorkspace, onWorkspaceUpdate 
           onFinish={onFinish}
           saveLabel="Update SSH key"
           saveDisabled={!manageWorkspace}
-          initialValues={{ moduleSshKey: workspace.attributes?.moduleSshKey || "" }}
+          initialValues={{ moduleSshKey: workspace.moduleSshKey || "" }}
         >
           <Form.Item
             name="moduleSshKey"
@@ -86,7 +92,7 @@ export const WorkspaceSSHKey = ({ workspace, manageWorkspace, onWorkspaceUpdate 
               disabled={!manageWorkspace}
               options={[
                 { value: "", label: "(No SSH key)" },
-                ...sshKeys.map((sshKey) => ({ value: sshKey.id, label: sshKey.attributes?.name })),
+                ...sshKeys.map((sshKey) => ({ value: sshKey.id, label: sshKey.name })),
               ]}
             />
           </Form.Item>

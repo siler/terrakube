@@ -3,42 +3,56 @@ import dayjs from "dayjs";
 import { ExemptionRecord, PolicyExemptionTable } from "../PolicyExemptionTable";
 import { formatOrdinalDate } from "@/modules/utils/dates";
 
+const exemption = (record: Partial<ExemptionRecord> & Pick<ExemptionRecord, "id" | "ruleId">): ExemptionRecord => ({
+  policySet: { id: "ps-1" },
+  workspace: null,
+  project: null,
+  policySetName: "",
+  ticketReference: "",
+  justification: "",
+  expiresAt: null,
+  createdDate: null,
+  createdBy: null,
+  scopeType: "ORGANIZATION",
+  ...record,
+});
+
 describe("PolicyExemptionTable", () => {
   const sampleExemptions: ExemptionRecord[] = [
-    {
+    exemption({
       id: "ex-1",
       ruleId: "aws_s3_no_public_bucket",
-      policySetId: "ps-1",
+      policySet: { id: "ps-1" },
       policySetName: "AWS Security Baseline",
       ticketReference: "SEC-8842",
       justification: "Static website assets bucket approved for public read",
       expiresAt: "2099-12-31T23:59:59Z",
       scopeType: "WORKSPACE",
-      workspaceId: "ws-1",
+      workspace: { id: "ws-1" },
       workspaceName: "frontend-prod",
-    },
-    {
+    }),
+    exemption({
       id: "ex-2",
       ruleId: "require_cost_center_tag",
-      policySetId: "ps-2",
+      policySet: { id: "ps-2" },
       policySetName: "FinOps Tagging",
       ticketReference: "FIN-1234",
       justification: "Temporary waiver during account migration",
       expiresAt: null, // Permanent
       scopeType: "ORGANIZATION",
-    },
-    {
+    }),
+    exemption({
       id: "ex-3",
       ruleId: "deny_open_ssh",
-      policySetId: "ps-1",
+      policySet: { id: "ps-1" },
       policySetName: "AWS Security Baseline",
       ticketReference: "SEC-9999",
       justification: "Bastion host emergency access",
       expiresAt: "2020-01-01T00:00:00Z", // Expired
       scopeType: "PROJECT",
-      projectId: "proj-1",
+      project: { id: "proj-1" },
       projectName: "Core Infrastructure",
-    },
+    }),
   ];
 
   it("renders table with records and status badges", () => {
@@ -100,16 +114,16 @@ describe("PolicyExemptionTable", () => {
 
   it("shows long rule IDs in full, wrapping at underscores, and renders fallback dashes when fields are empty", () => {
     const emptyExemption: ExemptionRecord[] = [
-      {
+      exemption({
         id: "ex-4",
         ruleId: "long_rule_name_preventing_vertical_character_wrap",
-        policySetId: "ps-3",
+        policySet: { id: "ps-3" },
         policySetName: "",
         ticketReference: "",
         justification: "",
         expiresAt: null,
         scopeType: "ORGANIZATION",
-      },
+      }),
     ];
 
     render(
@@ -125,27 +139,22 @@ describe("PolicyExemptionTable", () => {
     expect(dashes.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("handles numeric timestamp expiresAt without throwing expiresAt.slice is not a function", () => {
-    const timestampExemption: ExemptionRecord[] = [
-      {
+  it("renders a future expiry as its date", () => {
+    const futureExemption: ExemptionRecord[] = [
+      exemption({
         id: "ex-5",
         ruleId: "password_length_hard_mandatory",
-        policySetId: "ps-4",
+        policySet: { id: "ps-4" },
         policySetName: "Security Standards",
         ticketReference: "SEC-101",
         justification: "Legacy waiver",
-        expiresAt: 1924905600000, // Year 2031 timestamp (number)
+        expiresAt: new Date(1924905600000).toISOString(),
         scopeType: "WORKSPACE",
-      },
+      }),
     ];
 
     render(
-      <PolicyExemptionTable
-        items={timestampExemption}
-        managePermission={true}
-        onEdit={jest.fn()}
-        onDelete={jest.fn()}
-      />
+      <PolicyExemptionTable items={futureExemption} managePermission={true} onEdit={jest.fn()} onDelete={jest.fn()} />
     );
 
     expect(screen.getByText("password_length_hard_mandatory")).toBeInTheDocument();

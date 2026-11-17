@@ -4,10 +4,14 @@ import { GlobalOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
-import { Agent, Template, TofuRelease, VcsModel, Workspace } from "../../types";
+import { responseStatus } from "@/modules/api/errorStatus";
+import { parseVersionIndex } from "../createWorkspaceParsers";
+import { api, fields } from "../../generated/apiPaths";
+import type { AtomicOperationsBody, FormValues, RelationshipBody } from "../../api/writeBodies";
+import type { Row } from "../../api/fieldSelection";
+import type { OrgTemplateRow, WorkspacePageRow } from "../workspaceQuery";
 import {
   atomicHeader,
-  compareVersions,
   genericHeader,
   getIaCIconById,
   getIaCNameById,
@@ -15,8 +19,7 @@ import {
   iacTypes,
   validateTerraformVersion,
 } from "../Workspaces";
-import projectService from "@/modules/projects/projectService";
-import { ProjectModel } from "@/domain/types";
+import projectService, { type Project } from "@/modules/projects/projectService";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
@@ -27,94 +30,91 @@ import VcsLogo from "@/components/display/VcsLogo";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 
 type Props = {
-  workspaceData: Workspace;
-  orgTemplates: Template[];
+  organizationId: string;
+  workspaceData: WorkspacePageRow;
+  orgTemplates: OrgTemplateRow[];
   manageWorkspace: boolean;
   onWorkspaceUpdate?: () => void;
 };
 
-type UpdateWorkspaceForm = {
-  name: string;
-  description?: string;
-  folder?: string;
-  executionMode: string;
-  terraformVersion: string;
-  iacType: string;
-  branch: string;
-  defaultTemplate?: string;
-  restrictApplyToConfiguredBranch?: boolean;
-  requireApproveToApply?: boolean;
-  executorAgent?: string;
+const AGENT_FIELDS = fields.agent("name");
+
+/** An executor agent as the settings form lists it. */
+type AgentRow = Row<typeof AGENT_FIELDS>;
+
+const VCS_FIELDS = fields.vcs("name", "vcsType");
+
+/** A VCS provider as the settings form lists it. */
+type VcsRow = Row<typeof VCS_FIELDS>;
+
+type UpdateWorkspaceForm = Pick<
+  FormValues<"workspace">,
+  "name" | "executionMode" | "terraformVersion" | "iacType" | "branch"
+> & {
+  description?: FormValues<"workspace">["description"];
+  folder?: FormValues<"workspace">["folder"];
+  defaultTemplate?: FormValues<"workspace">["defaultTemplate"];
+  restrictApplyToConfiguredBranch?: FormValues<"workspace">["restrictApplyToConfiguredBranch"];
+  requireApproveToApply?: FormValues<"workspace">["requireApproveToApply"];
+  // Optional: CLI-driven workspaces have no repository field to submit.
+  source?: FormValues<"workspace">["source"];
+  // Relationship pickers hold ids (or the "default"/"none"/"public" sentinels), not workspace attributes.
+  executorAgent: string;
   project?: string;
   vcs?: string;
-  source?: string;
 };
 
-export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace, onWorkspaceUpdate }: Props) => {
-  const organizationId = workspaceData.relationships.organization.data.id;
+export const WorkspaceGeneral = ({
+  organizationId,
+  workspaceData,
+  orgTemplates,
+  manageWorkspace,
+  onWorkspaceUpdate,
+}: Props) => {
   const id = workspaceData.id;
   const { Option } = Select;
   const [selectedIac, setSelectedIac] = useState("");
   const { permissions: orgPermissions } = useOrgPermissions();
   // Terrakube before 2.34.0 does not know the setting and does not report it.
-  const supportsBranchRestriction = workspaceData.attributes?.restrictApplyToConfiguredBranch !== undefined;
-  const supportsApproveRule = workspaceData.attributes?.requireApproveToApply !== undefined;
+  const supportsBranchRestriction = workspaceData.restrictApplyToConfiguredBranch !== undefined;
+  const supportsApproveRule = workspaceData.requireApproveToApply !== undefined;
   const [terraformVersions, setTerraformVersions] = useState<string[]>([]);
-  const [agentList, setAgentList] = useState<Agent[]>([]);
-  const [projectList, setProjectList] = useState<ProjectModel[]>([]);
-  const [vcsList, setVcsList] = useState<VcsModel[]>([]);
+  const [agentList, setAgentList] = useState<AgentRow[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
+  const [vcsList, setVcsList] = useState<VcsRow[]>([]);
   const [waiting, setWaiting] = useState(false);
   // Values held back until the user confirms that the webhook on the old repository gets deleted.
   const [pendingValues, setPendingValues] = useState<UpdateWorkspaceForm | null>(null);
-  const webhookId = workspaceData.relationships?.webhook?.data?.id;
-  const initialVcsId = workspaceData.relationships?.vcs?.data?.id ?? "public";
+  const webhookId = workspaceData.webhook?.id;
+  const initialVcsId = workspaceData.vcs?.id ?? "public";
   // CLI-driven workspaces have no repository to point at.
-  const vcsDriven = workspaceData.attributes?.source !== "empty";
+  const vcsDriven = workspaceData.source !== "empty";
 
   const loadVersions = (iacType: string) => {
     const versionsApi = `${apiUrl("")}/${iacType}/index.json`;
-    axiosInstance.get(versionsApi).then((resp) => {
-      const tfVersions = [];
-      if (iacType === "tofu") {
-        resp.data.forEach((release: TofuRelease) => {
-          if (!release.tag_name.includes("-")) tfVersions.push(release.tag_name.replace("v", ""));
-        });
-      } else {
-        for (const version in resp.data.versions) {
-          if (!version.includes("-")) tfVersions.push(version);
-        }
-      }
-      setTerraformVersions(tfVersions.sort(compareVersions).reverse());
-    });
+    axiosInstance
+      .get<unknown>(versionsApi)
+      .then((resp) => setTerraformVersions(parseVersionIndex(iacType, resp.data)))
+      .catch((error) => message.error(getErrorMessage(error)));
   };
 
   useEffect(() => {
     setWaiting(true);
-    const iacType = workspaceData.attributes?.iacType;
+    const iacType = workspaceData.iacType;
     const versionsApi = `${apiUrl("")}/${iacType}/index.json`;
 
     // Parallel load: versions, agent list, projects, and VCS providers
     Promise.all([
-      axiosInstance.get(versionsApi),
-      axiosInstance.get(`organization/${organizationId}/agent`),
+      axiosInstance.get<unknown>(versionsApi),
+      api.organization(organizationId).agent().select(AGENT_FIELDS),
       projectService.listProjects(organizationId),
-      axiosInstance.get(`organization/${organizationId}/vcs`),
+      api.organization(organizationId).vcs().select(VCS_FIELDS),
     ])
-      .then(([versionsRes, agentsRes, projectsRes, vcsRes]) => {
-        const tfVersions: string[] = [];
-        if (iacType === "tofu") {
-          versionsRes.data.forEach((release: TofuRelease) => {
-            if (!release.tag_name.includes("-")) tfVersions.push(release.tag_name.replace("v", ""));
-          });
-        } else {
-          for (const version in versionsRes.data.versions) {
-            if (!version.includes("-")) tfVersions.push(version);
-          }
-        }
-        setTerraformVersions(tfVersions.sort(compareVersions).reverse());
-        setAgentList(agentsRes.data.data);
-        if (!projectsRes.isError) setProjectList(projectsRes.data ?? []);
-        setVcsList(vcsRes.data?.data ?? []);
+      .then(([versionsRes, agents, projects, vcs]) => {
+        setTerraformVersions(parseVersionIndex(iacType, versionsRes.data));
+        setAgentList(agents);
+        if (!projects.isError) setProjectList(projects.data);
+        setVcsList(vcs);
         setWaiting(false);
       })
       .catch((error) => {
@@ -122,14 +122,14 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
         message.error(getErrorMessage(error));
         setWaiting(false);
       });
-  }, [organizationId, workspaceData.attributes?.iacType]);
+  }, [organizationId, workspaceData.iacType]);
 
   const handleIacChange = (iac: string) => {
     setSelectedIac(iac);
     loadVersions(iac);
   };
   const onFinish = (values: UpdateWorkspaceForm) => {
-    const repoChanged = values.source !== undefined && values.source !== workspaceData.attributes?.source;
+    const repoChanged = values.source !== undefined && values.source !== workspaceData.source;
     const vcsChanged = values.vcs !== undefined && values.vcs !== initialVcsId;
     // The webhook lives on the old repository and was registered with the old connection, so it would keep
     // starting runs from the wrong repository. Delete it first: the API removes the remote hook using the
@@ -148,9 +148,9 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
         await axiosInstance.delete(`organization/${organizationId}/workspace/${id}/webhook/${webhookId}`, {
           headers: { "Content-Type": undefined },
         });
-      } catch (error: any) {
+      } catch (error) {
         // 404 means the row is already gone; remote cleanup may still have failed.
-        if (error?.response?.status !== 404) {
+        if (responseStatus(error) !== 404) {
           message.error(`Couldn't delete the webhook, the workspace was not changed: ${getErrorMessage(error)}`);
           setWaiting(false);
           return;
@@ -161,7 +161,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
     const updateFailureMessage = deleteWebhook
       ? "Workspace update failed after the webhook was deleted. Set it up again under Webhook."
       : "Workspace update failed";
-    const body = {
+    const body: AtomicOperationsBody<"workspace"> = {
       "atomic:operations": [
         {
           op: "update",
@@ -193,22 +193,11 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
       ],
     };
 
-    const requests: Promise<any>[] = [axiosInstance.post("/operations", body, atomicHeader)];
+    const operationsRequest = axiosInstance.post<unknown>("/operations", body, atomicHeader);
+    const requests: Promise<unknown>[] = [];
 
-    let bodyAgent;
-
-    if (values.executorAgent === "default") {
-      bodyAgent = {
-        data: null,
-      };
-    } else {
-      bodyAgent = {
-        data: {
-          type: "agent",
-          id: values.executorAgent,
-        },
-      };
-    }
+    const bodyAgent: RelationshipBody<"workspace", "agent"> =
+      values.executorAgent === "default" ? { data: null } : { data: { type: "agent", id: values.executorAgent } };
 
     requests.push(
       axiosInstance.patch(
@@ -218,7 +207,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
       )
     );
 
-    const bodyProject =
+    const bodyProject: RelationshipBody<"workspace", "project"> =
       values.project && values.project !== "none" ? { data: { type: "project", id: values.project } } : { data: null };
 
     requests.push(
@@ -230,7 +219,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
     );
 
     if (values.vcs !== undefined && values.vcs !== initialVcsId) {
-      const bodyVcs =
+      const bodyVcs: RelationshipBody<"workspace", "vcs"> =
         values.vcs && values.vcs !== "public"
           ? {
               data: {
@@ -248,8 +237,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
     }
 
     try {
-      const responses = await Promise.all(requests);
-      const operationsRes = responses[0];
+      const [operationsRes] = await Promise.all([operationsRequest, ...requests]);
       if (operationsRes.status === 200) {
         message.success("Workspace updated successfully");
         onWorkspaceUpdate?.();
@@ -264,7 +252,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
     }
   };
 
-  const iacName = getIaCNameById(selectedIac || workspaceData.attributes?.iacType);
+  const iacName = getIaCNameById(selectedIac || workspaceData.iacType);
 
   return (
     <div className="generalSettings">
@@ -278,23 +266,20 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
           onFinish={onFinish}
           saveDisabled={!manageWorkspace}
           initialValues={{
-            name: workspaceData.attributes?.name,
-            description: workspaceData.attributes?.description,
-            folder: workspaceData.attributes?.folder,
-            executionMode: workspaceData.attributes?.executionMode || "remote",
-            terraformVersion: workspaceData.attributes?.terraformVersion,
-            iacType: workspaceData.attributes?.iacType,
-            branch: workspaceData.attributes?.branch,
-            defaultTemplate: workspaceData.attributes?.defaultTemplate,
-            restrictApplyToConfiguredBranch: workspaceData.attributes?.restrictApplyToConfiguredBranch ?? false,
-            requireApproveToApply: workspaceData.attributes?.requireApproveToApply ?? false,
-            executorAgent:
-              workspaceData.relationships.agent?.data?.id == null
-                ? "default"
-                : workspaceData.relationships.agent.data?.id,
-            project: workspaceData.relationships.project?.data?.id ?? "none",
-            vcs: workspaceData.relationships?.vcs?.data?.id ?? "public",
-            source: workspaceData.attributes?.source,
+            name: workspaceData.name,
+            description: workspaceData.description,
+            folder: workspaceData.folder,
+            executionMode: workspaceData.executionMode || "remote",
+            terraformVersion: workspaceData.terraformVersion,
+            iacType: workspaceData.iacType,
+            branch: workspaceData.branch,
+            defaultTemplate: workspaceData.defaultTemplate,
+            restrictApplyToConfiguredBranch: workspaceData.restrictApplyToConfiguredBranch ?? false,
+            requireApproveToApply: workspaceData.requireApproveToApply ?? false,
+            executorAgent: workspaceData.agent?.id == null ? "default" : workspaceData.agent?.id,
+            project: workspaceData.project?.id ?? "none",
+            vcs: workspaceData.vcs?.id ?? "public",
+            source: workspaceData.source,
           }}
           name="form-settings"
         >
@@ -347,7 +332,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
             >
               <Select placeholder="Select an executor agent" disabled={!manageWorkspace}>
                 {agentList.map(function (agentKey) {
-                  return <Option key={agentKey?.id}>{agentKey?.attributes?.name}</Option>;
+                  return <Option key={agentKey?.id}>{agentKey?.name}</Option>;
                 })}
                 <Option key="default">default</Option>
               </Select>
@@ -460,8 +445,8 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
                 {vcsList.map((vcsItem) => (
                   <Option key={vcsItem.id} value={vcsItem.id}>
                     <Space>
-                      <VcsLogo type={vcsItem.attributes.vcsType} size={16} />
-                      <span>{vcsItem.attributes.name}</span>
+                      <VcsLogo type={vcsItem.vcsType} size={16} />
+                      <span>{vcsItem.name}</span>
                     </Space>
                   </Option>
                 ))}
@@ -471,14 +456,16 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
               <Form.Item
                 name="source"
                 label="Repository URL"
-                normalize={(value) => value?.trim()}
+                normalize={(value: unknown) => (typeof value === "string" ? value.trim() : value)}
                 extra="The Git repository this workspace clones, over https or ssh. The configured branch must exist in the new repository. State, variables and run history are kept when it changes."
                 rules={[
                   { required: true, pattern: gitRepoUrlPattern, message: "Enter a valid https or ssh Git URL." },
                   // "empty" marks a CLI-driven workspace; it is not a repository.
                   {
-                    validator: (_, value) =>
-                      value?.trim() === "empty" ? Promise.reject(new Error("Enter a Git URL.")) : Promise.resolve(),
+                    validator: (_, value: unknown) =>
+                      typeof value === "string" && value.trim() === "empty"
+                        ? Promise.reject(new Error("Enter a Git URL."))
+                        : Promise.resolve(),
                   },
                 ]}
               >
@@ -499,7 +486,7 @@ export const WorkspaceGeneral = ({ workspaceData, orgTemplates, manageWorkspace,
             >
               <Select placeholder="Select a default template" disabled={!manageWorkspace}>
                 {orgTemplates.map(function (template) {
-                  return <Option key={template?.id}>{template?.attributes?.name}</Option>;
+                  return <Option key={template?.id}>{template?.name}</Option>;
                 })}
               </Select>
             </Form.Item>

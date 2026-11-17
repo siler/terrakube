@@ -1,14 +1,14 @@
 import { NotificationConfigurationList } from "@/domain/Notifications/NotificationConfigurationList";
 import { NotificationDeliveryHistory } from "@/domain/Notifications/NotificationDeliveryHistory";
-import { Workspace } from "../../types";
+import type { WorkspacePageRow } from "../workspaceQuery";
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
 };
 
-export const WorkspaceNotifications = ({ workspace, manageWorkspace }: Props) => {
-  const organizationId = workspace.relationships.organization.data.id;
+export const WorkspaceNotifications = ({ organizationId, workspace, manageWorkspace }: Props) => {
   return (
     <>
       <NotificationConfigurationList

@@ -1,5 +1,6 @@
 import { apiUrl } from "@/config/apiUrls";
 import { DownOutlined, GithubOutlined, GitlabOutlined, LockOutlined } from "@ant-design/icons";
+import axios from "axios";
 import {
   Alert,
   AutoComplete,
@@ -8,6 +9,7 @@ import {
   Dropdown,
   Flex,
   Form,
+  type FormProps,
   Input,
   List,
   Segmented,
@@ -25,22 +27,21 @@ import { SiBitbucket, SiGit } from "react-icons/si";
 import { VscAzureDevops } from "react-icons/vsc";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../config/actionTypes";
-import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import axiosInstance, { getErrorMessage, jsonApiErrorDetail } from "../../config/axiosConfig";
 import organizationService from "@/modules/organizations/organizationService";
+import { VcsConnectionType, type ExecutionMode } from "../generated/apiResources";
+import { api, fields } from "../generated/apiPaths";
+import type { AtomicOperationsBody, FormValues, Linkage } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
+import { VcsRepositoryGroup, VcsRepositorySummary, VcsTypeExtended } from "../types";
+import { gitRepoUrlPattern, validateTerraformVersion } from "./Workspaces";
 import {
-  ProjectModel,
-  SshKey,
-  Template,
-  TofuRelease,
-  VcsConnectionType,
-  VcsModel,
-  VcsRepositoryGroup,
-  VcsRepositoryPage,
-  VcsRepositorySummary,
-  VcsTypeExtended,
-} from "../types";
-import { compareVersions, gitRepoUrlPattern, validateTerraformVersion } from "./Workspaces";
-import projectService from "@/modules/projects/projectService";
+  firstAtomicResultId,
+  parseVcsRepositoryGroups,
+  parseVcsRepositoryPage,
+  parseVersionIndex,
+} from "./createWorkspaceParsers";
+import projectService, { type Project } from "@/modules/projects/projectService";
 import { withBasePath } from "../../config/basePath";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { PermissionErrorMessage } from "@/components/feedback/PermissionErrorMessage";
@@ -56,6 +57,23 @@ const validateMessages = {
 };
 const { Option } = Select;
 
+const SSH_FIELDS = fields.ssh("name");
+
+/** An SSH key as the create form lists it. */
+type SshKeyRow = Row<typeof SSH_FIELDS>;
+
+const TEMPLATE_FIELDS = fields.template("name");
+
+/** An organization template as the create form lists it. */
+type TemplateRow = Row<typeof TEMPLATE_FIELDS>;
+
+const VCS_FIELDS = fields.vcs("name", "vcsType");
+
+/** A VCS provider as the create form lists it. */
+type VcsRow = Row<typeof VCS_FIELDS>;
+
+type RepoPickerMode = "list" | "manual";
+
 type IacType = {
   id: string;
   name: string;
@@ -63,25 +81,22 @@ type IacType = {
   icon?: string;
 };
 
-type CreateWorkspaceForm = {
-  source: string;
-  folder: string;
-  name: string;
-  terraformVersion: string;
-  branch: string;
-  iacType: string;
-  defaultTemplate: string;
+type CreateWorkspaceForm = Pick<
+  FormValues<"workspace">,
+  "source" | "folder" | "name" | "terraformVersion" | "branch" | "defaultTemplate"
+> & {
+  // Relationship pickers hold ids, not workspace attributes; iacType comes from the chosen IaC card, not the form.
   sshKey?: string;
   project?: string;
 };
 
 export const CreateWorkspace = () => {
   const [organizationName, setOrganizationName] = useState<string | null>();
-  const [executionMode, setExecutionMode] = useState<string | null>();
+  const [executionMode, setExecutionMode] = useState<ExecutionMode | null>();
   const [terraformVersions, setTerraformVersions] = useState<string[]>([]);
-  const [vcs, setVCS] = useState<VcsModel[]>([]);
-  const [sshKeys, setSSHKeys] = useState<SshKey[]>([]);
-  const [orgTemplates, setOrgTemplates] = useState<Template[]>([]);
+  const [vcs, setVCS] = useState<VcsRow[]>([]);
+  const [sshKeys, setSSHKeys] = useState<SshKeyRow[]>([]);
+  const [orgTemplates, setOrgTemplates] = useState<TemplateRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [vcsButtonsVisible, setVCSButtonsVisible] = useState(true);
@@ -97,7 +112,7 @@ export const CreateWorkspace = () => {
     sessionStorage.setItem(ORGANIZATION_ARCHIVE, orgid);
   }
   const organizationId = orgid || sessionStorage.getItem(ORGANIZATION_ARCHIVE);
-  const [repoPickerMode, setRepoPickerMode] = useState<"list" | "manual">("list");
+  const [repoPickerMode, setRepoPickerMode] = useState<RepoPickerMode>("list");
   const [discoveryUnsupported, setDiscoveryUnsupported] = useState(false);
   const [vcsGroups, setVcsGroups] = useState<VcsRepositoryGroup[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string>("");
@@ -115,7 +130,7 @@ export const CreateWorkspace = () => {
     id: "terraform",
     name: "Terraform",
   });
-  const [projectList, setProjectList] = useState<ProjectModel[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
   const vcsLink = (vcsType: VcsTypeExtended, connectionType?: VcsConnectionType) =>
     `/organizations/${organizationId}/settings/vcs/new/${vcsType}${connectionType ? `?connectionType=${connectionType}` : ""}`;
 
@@ -202,41 +217,27 @@ export const CreateWorkspace = () => {
 
     // Parallel load: versions, SSH keys, templates, VCS, and projects
     Promise.all([
-      axiosInstance.get(versionsApi),
-      axiosInstance.get(`organization/${organizationId}/ssh`),
-      axiosInstance.get(`organization/${organizationId}/template`),
-      axiosInstance.get(`organization/${organizationId}/vcs`),
+      axiosInstance.get<unknown>(versionsApi),
+      api.organization(organizationId).ssh().select(SSH_FIELDS),
+      api.organization(organizationId).template().select(TEMPLATE_FIELDS),
+      api.organization(organizationId).vcs().select(VCS_FIELDS),
       projectService.listProjects(organizationId),
     ])
-      .then(([versionsRes, sshRes, templatesRes, vcsRes, projectsRes]) => {
-        // Process versions
-        const tfVersions: string[] = [];
-        if (iacType.id === "tofu") {
-          (versionsRes.data as TofuRelease[]).forEach((release) => {
-            if (!release.tag_name.includes("-")) tfVersions.push(release.tag_name.replace("v", ""));
-          });
-        } else {
-          for (const version in versionsRes.data.versions) {
-            if (!version.includes("-")) tfVersions.push(version);
-          }
-        }
-        tfVersions.sort(compareVersions).reverse();
+      .then(([versionsRes, sshKeyRows, templateRows, vcsRows, projectsRes]) => {
+        const tfVersions = parseVersionIndex(iacType.id, versionsRes.data);
         setTerraformVersions(tfVersions);
         if (tfVersions.length > 0) {
           form.setFieldsValue({ terraformVersion: tfVersions[0] });
         }
 
-        // Set SSH keys
-        setSSHKeys(sshRes.data.data);
+        setSSHKeys(sshKeyRows);
 
-        // Set templates
-        setOrgTemplates(templatesRes.data.data);
-        if (templatesRes.data.data.length > 0) {
-          form.setFieldsValue({ defaultTemplate: templatesRes.data.data[0].id });
+        setOrgTemplates(templateRows);
+        if (templateRows.length > 0) {
+          form.setFieldsValue({ defaultTemplate: templateRows[0].id });
         }
 
-        // Set VCS
-        setVCS(vcsRes.data.data);
+        setVCS(vcsRows);
 
         // Set projects
         if (!projectsRes.isError) {
@@ -292,9 +293,9 @@ export const CreateWorkspace = () => {
     setGroupsLoading(true);
     setRepoError(null);
     axiosInstance
-      .get(vcsApiUrl(`/vcs/v1/${id}/groups`))
+      .get<unknown>(vcsApiUrl(`/vcs/v1/${id}/groups`))
       .then((response) => {
-        const groups: VcsRepositoryGroup[] = response.data || [];
+        const groups = parseVcsRepositoryGroups(response.data);
         setVcsGroups(groups);
         setGroupsLoading(false);
         if (groups.length > 0) {
@@ -323,9 +324,12 @@ export const CreateWorkspace = () => {
       setRepoError(null);
     }
     axiosInstance
-      .get(vcsApiUrl(`/vcs/v1/${id}/repositories`), { params: { group, search, page } })
+      .get<unknown>(vcsApiUrl(`/vcs/v1/${id}/repositories`), { params: { group, search, page } })
       .then((response) => {
-        const data: VcsRepositoryPage = response.data;
+        const data = parseVcsRepositoryPage(response.data);
+        if (!data) {
+          throw new Error("Unexpected repository page shape");
+        }
         setRepoResults((prev) => (append ? [...prev, ...data.items] : data.items));
         setRepoHasMore(data.hasMore);
         setRepoPage(data.page);
@@ -370,14 +374,14 @@ export const CreateWorkspace = () => {
     setVCSButtonsVisible(true);
   };
 
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<CreateWorkspaceForm>();
   const handleGitContinueClick = () => {
     setCurrent(4);
     setStep4Hidden(false);
     setStep3Hidden(true);
-    const source = form.getFieldValue("source");
+    const source: unknown = form.getFieldValue("source");
 
-    if (source != null) {
+    if (typeof source === "string") {
       const nameValue = source.match("/([^/]+)/?$");
       if (nameValue != null && nameValue.length > 0) {
         form.setFieldsValue({ name: nameValue[1].replace(".git", "") });
@@ -395,40 +399,47 @@ export const CreateWorkspace = () => {
     form.setFieldsValue({ source: "empty", branch: "remote-content" });
   };
 
-  const onFinishFailed = (errorInfo: any) => {
+  const onFinishFailed: FormProps<CreateWorkspaceForm>["onFinishFailed"] = (errorInfo) => {
     console.log(errorInfo.values);
     console.log(errorInfo.errorFields);
   };
 
   const loadVersions = (iacType: IacType) => {
     const versionsApi = `${apiUrl("")}/${iacType.id}/index.json`;
-    axiosInstance.get(versionsApi).then((resp) => {
-      const tfVersions = [];
-      if (iacType.id === "tofu") {
-        (resp.data as TofuRelease[]).forEach((release) => {
-          if (!release.tag_name.includes("-")) tfVersions.push(release.tag_name.replace("v", ""));
-        });
-      } else {
-        for (const version in resp.data.versions) {
-          if (!version.includes("-")) tfVersions.push(version);
+    axiosInstance
+      .get<unknown>(versionsApi)
+      .then((resp) => {
+        const tfVersions = parseVersionIndex(iacType.id, resp.data);
+        setTerraformVersions(tfVersions);
+        if (tfVersions.length > 0) {
+          form.setFieldsValue({ terraformVersion: tfVersions[0] });
         }
-      }
-      tfVersions.sort(compareVersions).reverse();
-      setTerraformVersions(tfVersions);
-      if (tfVersions.length > 0) {
-        form.setFieldsValue({ terraformVersion: tfVersions[0] });
-      }
-    });
+      })
+      .catch((error) => {
+        message.error(getErrorMessage(error));
+      });
   };
 
   const onFinish = async (values: CreateWorkspaceForm) => {
     // Guard against double-submits (e.g. an impatient second click before the
     // first request resolves).
-    if (creating) return;
+    if (creating) {
+      return;
+    }
     setCreating(true);
 
     const workspace_lid = crypto.randomUUID();
-    const body = {
+    const relationships: Linkage<"workspace"> = {};
+    if (vcsId !== "") {
+      relationships.vcs = { data: { type: "vcs", id: vcsId } };
+    }
+    if (values.sshKey) {
+      relationships.ssh = { data: { type: "ssh", id: values.sshKey } };
+    }
+    if (values.project && values.project !== "none") {
+      relationships.project = { data: { type: "project", id: values.project } };
+    }
+    const body: AtomicOperationsBody<"workspace"> = {
       "atomic:operations": [
         {
           op: "add",
@@ -446,59 +457,36 @@ export const CreateWorkspace = () => {
               defaultTemplate: values.defaultTemplate,
               executionMode: executionMode,
             },
-            relationships: {},
+            relationships,
           },
         },
       ],
     };
 
-    if (vcsId !== "") {
-      (body["atomic:operations"][0].data.relationships as any)["vcs"] = {
-        data: {
-          type: "vcs",
-          id: vcsId,
-        },
-      };
-    }
-
-    if (values.sshKey) {
-      (body["atomic:operations"][0].data.relationships as any)["ssh"] = {
-        data: {
-          type: "ssh",
-          id: values.sshKey,
-        },
-      };
-    }
-
-    if (values.project && values.project !== "none") {
-      (body["atomic:operations"][0].data.relationships as any)["project"] = {
-        data: {
-          type: "project",
-          id: values.project,
-        },
-      };
-    }
-
     try {
       // axios only resolves for 2xx responses, so getting here always means success —
       // checking for one specific status code risks silently doing nothing if the API
       // ever returns a different 2xx.
-      const response = await axiosInstance.post(`/operations`, body, {
+      const response = await axiosInstance.post<unknown>(`/operations`, body, {
         headers: {
           "Content-Type": 'application/vnd.api+json;ext="https://jsonapi.org/ext/atomic"',
           Accept: 'application/vnd.api+json;ext="https://jsonapi.org/ext/atomic"',
         },
       });
-      const workspaceId = response.data["atomic:results"][0].data.id;
+      const workspaceId = firstAtomicResultId(response.data);
+      if (!workspaceId) {
+        throw new Error("Workspace create response carried no workspace id");
+      }
       message.success("Workspace created successfully");
       navigate(`/organizations/${organizationId}/workspaces/${workspaceId}`);
-    } catch (error: any) {
-      if (error.response?.status === 403) {
+    } catch (error) {
+      const response = axios.isAxiosError(error) ? error.response : undefined;
+      if (response?.status === 403) {
         message.error(<PermissionErrorMessage action="create workspaces" permission="Manage Workspaces" />);
       } else {
-        console.error("Failed to create workspace:", error.response?.status, error.response?.data, error);
+        console.error("Failed to create workspace:", response?.status, response?.data, error);
         message.error(
-          error.response?.data?.errors?.[0]?.detail ||
+          jsonApiErrorDetail(response?.data) ||
             "An error occurred while submitting the workspace. Please contact your system administrator."
         );
       }
@@ -671,13 +659,13 @@ export const CreateWorkspace = () => {
                     return (
                       <Button
                         key={item.id}
-                        icon={<VcsLogo type={item.attributes.vcsType} size={20} />}
+                        icon={<VcsLogo type={item.vcsType} size={20} />}
                         onClick={() => {
                           handleGitClick(item.id);
                         }}
                         size="large"
                       >
-                        &nbsp;{item.attributes.name}
+                        &nbsp;{item.name}
                       </Button>
                     );
                   })
@@ -746,9 +734,9 @@ export const CreateWorkspace = () => {
           </div>
 
           {!discoveryUnsupported && vcsId !== "" && (
-            <Segmented
+            <Segmented<RepoPickerMode>
               value={repoPickerMode}
-              onChange={(value) => setRepoPickerMode(value as "list" | "manual")}
+              onChange={setRepoPickerMode}
               options={[
                 { label: "Browse repositories", value: "list" },
                 { label: "Enter URL manually", value: "manual" },
@@ -894,7 +882,7 @@ export const CreateWorkspace = () => {
           >
             <Select placeholder="Select Template" className="ws-create-field">
               {orgTemplates.map(function (template) {
-                return <Option key={template?.id}>{template?.attributes?.name}</Option>;
+                return <Option key={template?.id}>{template?.name}</Option>;
               })}
             </Select>
           </Form.Item>
@@ -925,7 +913,7 @@ export const CreateWorkspace = () => {
           >
             <Select placeholder="select SSH Key" className="ws-create-field">
               {sshKeys.map(function (sshKey) {
-                return <Option key={sshKey?.id}>{sshKey?.attributes?.name}</Option>;
+                return <Option key={sshKey?.id}>{sshKey?.name}</Option>;
               })}
             </Select>
           </Form.Item>

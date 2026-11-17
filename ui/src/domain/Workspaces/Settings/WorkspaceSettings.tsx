@@ -7,19 +7,22 @@ import { WorkspaceNotifications } from "./Notifications";
 import { WorkspaceAdvanced } from "./Advanced";
 import { WorkspaceStateShared } from "./StateShared";
 import { WorkspaceTeamAccess } from "./TeamAccess";
-import { Workspace, Template, VcsType } from "../../types";
+import type { VcsTypeOrUnknown } from "../../types";
+import type { OrgTemplateRow, WorkspacePageRow } from "../workspaceQuery";
 
 type Props = {
-  workspace: Workspace;
-  orgTemplates: Template[];
+  organizationId: string;
+  workspace: WorkspacePageRow;
+  orgTemplates: OrgTemplateRow[];
   manageWorkspace: boolean;
   planJob?: boolean;
-  vcsProvider?: VcsType;
+  vcsProvider?: VcsTypeOrUnknown;
   onWorkspaceUpdate?: () => void;
   activeSection: string;
 };
 
 export const WorkspaceSettings = ({
+  organizationId,
   workspace,
   orgTemplates,
   manageWorkspace,
@@ -47,6 +50,7 @@ export const WorkspaceSettings = ({
     case "locking":
       return (
         <WorkspaceLocking
+          organizationId={organizationId}
           workspace={workspace}
           manageWorkspace={manageWorkspace}
           onWorkspaceUpdate={handleWorkspaceUpdate}
@@ -55,6 +59,7 @@ export const WorkspaceSettings = ({
     case "sshkey":
       return (
         <WorkspaceSSHKey
+          organizationId={organizationId}
           workspace={workspace}
           manageWorkspace={manageWorkspace}
           onWorkspaceUpdate={handleWorkspaceUpdate}
@@ -63,6 +68,7 @@ export const WorkspaceSettings = ({
     case "webhook":
       return (
         <WorkspaceWebhook
+          organizationId={organizationId}
           workspace={workspace}
           vcsProvider={vcsProvider}
           orgTemplates={orgTemplates}
@@ -71,23 +77,35 @@ export const WorkspaceSettings = ({
         />
       );
     case "notifications":
-      return <WorkspaceNotifications workspace={workspace} manageWorkspace={manageWorkspace} />;
+      return (
+        <WorkspaceNotifications
+          organizationId={organizationId}
+          workspace={workspace}
+          manageWorkspace={manageWorkspace}
+        />
+      );
     case "advanced":
-      return <WorkspaceAdvanced workspace={workspace} manageWorkspace={manageWorkspace} />;
+      return (
+        <WorkspaceAdvanced organizationId={organizationId} workspace={workspace} manageWorkspace={manageWorkspace} />
+      );
     case "state-shared":
       return (
         <WorkspaceStateShared
+          organizationId={organizationId}
           workspace={workspace}
           manageWorkspace={manageWorkspace}
           onWorkspaceUpdate={handleWorkspaceUpdate}
         />
       );
     case "team-access":
-      return <WorkspaceTeamAccess workspace={workspace} manageWorkspace={manageWorkspace} />;
+      return (
+        <WorkspaceTeamAccess organizationId={organizationId} workspace={workspace} manageWorkspace={manageWorkspace} />
+      );
     case "general":
     default:
       return (
         <WorkspaceGeneral
+          organizationId={organizationId}
           workspaceData={workspace}
           orgTemplates={orgTemplates}
           manageWorkspace={manageWorkspace}

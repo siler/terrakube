@@ -2,34 +2,37 @@ import { UNLOCK_CONFIRM_TEXT } from "./lockingCopy";
 import { Alert, Button, Form, Input, Modal, message } from "antd";
 import { useState } from "react";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
-import { Workspace } from "../../types";
+import type { UpdateBody } from "@/domain/api/writeBodies";
+import type { WorkspacePageRow } from "../workspaceQuery";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import { SettingsForm } from "@/components/settings/SettingsForm";
 import "../Workspaces.css";
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
   onWorkspaceUpdate: () => void;
 };
 
-export const WorkspaceLocking = ({ workspace, manageWorkspace, onWorkspaceUpdate }: Props) => {
-  const organizationId = workspace.relationships.organization.data.id;
+export const WorkspaceLocking = ({ organizationId, workspace, manageWorkspace, onWorkspaceUpdate }: Props) => {
   const workspaceId = workspace.id;
-  const workspaceName = workspace.attributes.name;
-  const isLocked = workspace.attributes.locked;
-  const lockDescription = workspace.attributes.lockDescription;
+  const workspaceName = workspace.name;
+  const isLocked = workspace.locked;
+  const lockDescription = workspace.lockDescription;
 
   const [loading, setLoading] = useState(false);
   // Hook-based modal so the confirmation follows the app theme (light/dark).
   const [modal, contextHolder] = Modal.useModal();
 
-  const setLock = (locked: boolean, description: string) =>
-    axiosInstance.patch(
-      `organization/${organizationId}/workspace/${workspaceId}`,
-      { data: { type: "workspace", id: workspaceId, attributes: { locked, lockDescription: description } } },
-      { headers: { "Content-Type": "application/vnd.api+json" } }
-    );
+  const setLock = (locked: boolean, description: string) => {
+    const body: UpdateBody<"workspace"> = {
+      data: { type: "workspace", id: workspaceId, attributes: { locked, lockDescription: description } },
+    };
+    return axiosInstance.patch(`organization/${organizationId}/workspace/${workspaceId}`, body, {
+      headers: { "Content-Type": "application/vnd.api+json" },
+    });
+  };
 
   const handleLock = (values: { lockDescription?: string }) => {
     setLoading(true);

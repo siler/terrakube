@@ -1,12 +1,26 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { WorkspaceGeneral } from "../General";
-import axiosInstance from "../../../../config/axiosConfig";
+import type { WorkspacePageRow } from "../../workspaceQuery";
+import { workspacePageRow } from "@/testUtils/workspacePageRow";
+import { recordOf } from "@/testUtils/readRequestBody";
+
+type MockResponse = { status?: number; data?: unknown };
+
+const mockGet = jest.fn<Promise<MockResponse>, [url: string, config?: unknown]>();
+const mockPost = jest.fn<Promise<MockResponse>, [url: string, body?: unknown, config?: unknown]>();
+const mockPatch = jest.fn<Promise<MockResponse>, [url: string, body?: unknown, config?: unknown]>();
+const mockDelete = jest.fn<Promise<MockResponse>, [url: string, config?: unknown]>();
 
 jest.mock("../../../../config/axiosConfig", () => ({
   __esModule: true,
-  default: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  default: {
+    get: (...args: Parameters<typeof mockGet>) => mockGet(...args),
+    post: (...args: Parameters<typeof mockPost>) => mockPost(...args),
+    patch: (...args: Parameters<typeof mockPatch>) => mockPatch(...args),
+    delete: (...args: Parameters<typeof mockDelete>) => mockDelete(...args),
+  },
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message ? err.message : "Error"),
 }));
 jest.mock("@/modules/projects/projectService", () => ({
   __esModule: true,
@@ -19,29 +33,31 @@ jest.mock("@/modules/permissions/useOrgPermissions", () => ({
 
 const REPO = "https://github.com/acme/infra.git";
 
-const workspace = (source: string, relationships: Record<string, unknown> = {}) =>
-  ({
+const workspace = (source: string, related: Partial<WorkspacePageRow> = {}): WorkspacePageRow =>
+  workspacePageRow({
     id: "ws-1",
-    attributes: {
-      name: "prod",
-      source,
-      branch: "main",
-      iacType: "terraform",
-      terraformVersion: "1.9.0",
-      restrictApplyToConfiguredBranch: false,
-      requireApproveToApply: false,
-    },
-    relationships: {
-      organization: { data: { id: "org-1" } },
-      vcs: { data: { type: "vcs", id: "vcs-1" } },
-      ...relationships,
-    },
-  }) as any;
+    name: "prod",
+    source,
+    branch: "main",
+    iacType: "terraform",
+    terraformVersion: "1.9.0",
+    restrictApplyToConfiguredBranch: false,
+    requireApproveToApply: false,
+    organization: { id: "org-1", name: "acme" },
+    vcs: { id: "vcs-1", vcsType: "GITHUB" },
+    ...related,
+  });
 
-const renderGeneral = (ws: any, onWorkspaceUpdate = jest.fn()) =>
+const renderGeneral = (ws: WorkspacePageRow, onWorkspaceUpdate = jest.fn()) =>
   render(
     <MemoryRouter>
-      <WorkspaceGeneral workspaceData={ws} orgTemplates={[]} manageWorkspace onWorkspaceUpdate={onWorkspaceUpdate} />
+      <WorkspaceGeneral
+        organizationId="org-1"
+        workspaceData={ws}
+        orgTemplates={[]}
+        manageWorkspace
+        onWorkspaceUpdate={onWorkspaceUpdate}
+      />
     </MemoryRouter>
   );
 
@@ -50,8 +66,19 @@ const changeRepoAndSave = async (url: string) => {
   fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 };
 
-const savedSource = () =>
-  (axiosInstance.post as jest.Mock).mock.calls[0][1]["atomic:operations"][0].data.attributes.source;
+/** The workspace attributes the first atomic operations request sent. */
+const savedAttributes = (): Record<string, unknown> => {
+  const operations = recordOf(mockPost.mock.calls[0]?.[1])["atomic:operations"];
+  if (!Array.isArray(operations)) {
+    throw new Error(`Expected atomic operations, got ${JSON.stringify(operations)}`);
+  }
+  const operation: unknown = operations[0];
+  return recordOf(recordOf(recordOf(operation).data).attributes);
+};
+
+const savedSource = () => savedAttributes().source;
+
+const getUrls = () => mockGet.mock.calls.map(([url]) => url);
 
 beforeAll(() => {
   window._env_ = { ...window._env_, REACT_APP_TERRAKUBE_API_URL: "http://localhost/api" };
@@ -60,12 +87,12 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockOrgPermissions = { manageVcs: false, manageWorkspace: true };
-  (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+  mockGet.mockImplementation((url: string) =>
     Promise.resolve({ data: url.endsWith("index.json") ? { versions: { "1.9.0": {} } } : { data: [] } })
   );
-  (axiosInstance.post as jest.Mock).mockResolvedValue({ status: 200 });
-  (axiosInstance.patch as jest.Mock).mockResolvedValue({ status: 204 });
-  (axiosInstance.delete as jest.Mock).mockResolvedValue({ status: 204 });
+  mockPost.mockResolvedValue({ status: 200 });
+  mockPatch.mockResolvedValue({ status: 204 });
+  mockDelete.mockResolvedValue({ status: 204 });
 });
 
 describe("WorkspaceGeneral repository URL", () => {
@@ -74,9 +101,9 @@ describe("WorkspaceGeneral repository URL", () => {
 
     await changeRepoAndSave("git@gitlab.com:acme/infra.git");
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedSource()).toBe("git@gitlab.com:acme/infra.git");
-    expect(axiosInstance.delete).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 
   it("trims a new repository URL before saving", async () => {
@@ -84,18 +111,18 @@ describe("WorkspaceGeneral repository URL", () => {
 
     await changeRepoAndSave("  https://gitlab.com/acme/infra.git  ");
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedSource()).toBe("https://gitlab.com/acme/infra.git");
   });
 
   it("does not delete the webhook when only repository URL whitespace changes", async () => {
-    renderGeneral(workspace(REPO, { webhook: { data: { type: "webhook", id: "hook-1" } } }));
+    renderGeneral(workspace(REPO, { webhook: { id: "hook-1" } }));
 
     await changeRepoAndSave(`  ${REPO}  `);
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedSource()).toBe(REPO);
-    expect(axiosInstance.delete).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
     expect(screen.queryByText(/Saving deletes it/)).not.toBeInTheDocument();
   });
 
@@ -105,11 +132,11 @@ describe("WorkspaceGeneral repository URL", () => {
       const onWorkspaceUpdate = jest.fn();
       const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
       if (failure === "request rejection") {
-        (axiosInstance.post as jest.Mock).mockRejectedValue(new Error("Update unavailable"));
+        mockPost.mockRejectedValue(new Error("Update unavailable"));
       } else {
-        (axiosInstance.post as jest.Mock).mockResolvedValue({ status: 500 });
+        mockPost.mockResolvedValue({ status: 500 });
       }
-      renderGeneral(workspace(REPO, { webhook: { data: { type: "webhook", id: "hook-1" } } }), onWorkspaceUpdate);
+      renderGeneral(workspace(REPO, { webhook: { id: "hook-1" } }), onWorkspaceUpdate);
 
       try {
         await changeRepoAndSave("https://gitlab.com/acme/infra.git");
@@ -117,9 +144,7 @@ describe("WorkspaceGeneral repository URL", () => {
 
         expect(await screen.findByText(/Workspace update failed after the webhook was deleted/)).toBeInTheDocument();
         expect(onWorkspaceUpdate).toHaveBeenCalledTimes(1);
-        expect(onWorkspaceUpdate.mock.invocationCallOrder[0]).toBeLessThan(
-          (axiosInstance.post as jest.Mock).mock.invocationCallOrder[0]
-        );
+        expect(onWorkspaceUpdate.mock.invocationCallOrder[0]).toBeLessThan(mockPost.mock.invocationCallOrder[0]);
       } finally {
         consoleError.mockRestore();
       }
@@ -127,78 +152,78 @@ describe("WorkspaceGeneral repository URL", () => {
   );
 
   it("deletes the webhook before pointing the workspace at another repository", async () => {
-    renderGeneral(workspace(REPO, { webhook: { data: { type: "webhook", id: "hook-1" } } }));
+    renderGeneral(workspace(REPO, { webhook: { id: "hook-1" } }));
 
     await changeRepoAndSave("https://gitlab.com/acme/infra.git");
 
     expect(await screen.findByText(/Saving deletes it/)).toBeInTheDocument();
-    expect(axiosInstance.post).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete webhook and save" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
-    expect(axiosInstance.delete).toHaveBeenCalledWith(
-      "organization/org-1/workspace/ws-1/webhook/hook-1",
-      expect.anything()
-    );
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    expect(mockDelete).toHaveBeenCalledWith("organization/org-1/workspace/ws-1/webhook/hook-1", expect.anything());
     // The API removes the remote hook using the workspace's current repository, so the delete must land first.
-    expect((axiosInstance.delete as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
-      (axiosInstance.post as jest.Mock).mock.invocationCallOrder[0]
-    );
+    expect(mockDelete.mock.invocationCallOrder[0]).toBeLessThan(mockPost.mock.invocationCallOrder[0]);
     expect(savedSource()).toBe("https://gitlab.com/acme/infra.git");
   });
 
   it("leaves the workspace unchanged when the webhook cannot be deleted", async () => {
-    (axiosInstance.delete as jest.Mock).mockRejectedValue(new Error("424"));
-    renderGeneral(workspace(REPO, { webhook: { data: { type: "webhook", id: "hook-1" } } }));
+    mockDelete.mockRejectedValue(new Error("424"));
+    renderGeneral(workspace(REPO, { webhook: { id: "hook-1" } }));
 
     await changeRepoAndSave("https://gitlab.com/acme/infra.git");
     fireEvent.click(await screen.findByRole("button", { name: "Delete webhook and save" }));
 
-    await waitFor(() => expect(axiosInstance.delete).toHaveBeenCalled());
-    expect(axiosInstance.post).not.toHaveBeenCalled();
-    expect(axiosInstance.patch).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockDelete).toHaveBeenCalled());
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockPatch).not.toHaveBeenCalled();
   });
 
   it("retries the update when an earlier save already deleted the webhook", async () => {
-    (axiosInstance.delete as jest.Mock).mockRejectedValue({ response: { status: 404 } });
-    renderGeneral(workspace(REPO, { webhook: { data: { type: "webhook", id: "hook-1" } } }));
+    mockDelete.mockRejectedValue({ response: { status: 404 } });
+    renderGeneral(workspace(REPO, { webhook: { id: "hook-1" } }));
 
     await changeRepoAndSave("https://gitlab.com/acme/infra.git");
     fireEvent.click(await screen.findByRole("button", { name: "Delete webhook and save" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedSource()).toBe("https://gitlab.com/acme/infra.git");
   });
 
   it("also deletes the webhook when only the VCS provider changes", async () => {
-    (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+    mockGet.mockImplementation((url: string) =>
       Promise.resolve({
         data: url.endsWith("index.json")
           ? { versions: { "1.9.0": {} } }
-          : url.endsWith("/vcs")
+          : url.includes("/vcs?")
             ? { data: [{ id: "vcs-2", attributes: { name: "GitLab", vcsType: "GITLAB" } }] }
             : { data: [] },
       })
     );
-    renderGeneral(workspace(REPO, { webhook: { data: { type: "webhook", id: "hook-1" } } }));
+    renderGeneral(workspace(REPO, { webhook: { id: "hook-1" } }));
 
     fireEvent.mouseDown(await screen.findByLabelText("VCS provider"));
+
+    // The order Promise.all loads the settings form's option lists in.
+    expect(getUrls()).toEqual([
+      expect.stringContaining("index.json"),
+      "organization/org-1/agent?fields[agent]=name",
+      "organization/org-1/vcs?fields[vcs]=name,vcsType",
+    ]);
+
     fireEvent.click(await screen.findByText("GitLab"));
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete webhook and save" }));
 
     await waitFor(() =>
-      expect(axiosInstance.patch).toHaveBeenCalledWith(
+      expect(mockPatch).toHaveBeenCalledWith(
         "/organization/org-1/workspace/ws-1/relationships/vcs",
         { data: { type: "vcs", id: "vcs-2" } },
         expect.anything()
       )
     );
-    expect(axiosInstance.delete).toHaveBeenCalledWith(
-      "organization/org-1/workspace/ws-1/webhook/hook-1",
-      expect.anything()
-    );
+    expect(mockDelete).toHaveBeenCalledWith("organization/org-1/workspace/ws-1/webhook/hook-1", expect.anything());
   });
 
   it("does not accept the CLI-driven marker as a repository", async () => {
@@ -207,7 +232,7 @@ describe("WorkspaceGeneral repository URL", () => {
     await changeRepoAndSave("empty");
 
     expect(await screen.findByText("Enter a Git URL.")).toBeInTheDocument();
-    expect(axiosInstance.post).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
   });
 
   it("hides the field for CLI-driven workspaces and does not send a source", async () => {
@@ -217,15 +242,12 @@ describe("WorkspaceGeneral repository URL", () => {
     expect(screen.queryByLabelText("Repository URL")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedSource()).toBeUndefined();
   });
 });
 
 describe("WorkspaceGeneral branch restriction", () => {
-  const savedAttributes = () =>
-    (axiosInstance.post as jest.Mock).mock.calls[0][1]["atomic:operations"][0].data.attributes;
-
   it("saves the setting with the workspace for an organization manager", async () => {
     renderGeneral(workspace(REPO));
 
@@ -234,13 +256,13 @@ describe("WorkspaceGeneral branch restriction", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedAttributes().restrictApplyToConfiguredBranch).toBe(true);
   });
 
   it("shows the saved value", async () => {
     const restricted = workspace(REPO);
-    restricted.attributes.restrictApplyToConfiguredBranch = true;
+    restricted.restrictApplyToConfiguredBranch = true;
     renderGeneral(restricted);
 
     expect(
@@ -257,12 +279,12 @@ describe("WorkspaceGeneral branch restriction", () => {
     ).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedAttributes()).not.toHaveProperty("restrictApplyToConfiguredBranch");
   });
 
   it("is disabled with an explanation on a CLI-driven workspace, which has no branch to restrict", async () => {
-    renderGeneral(workspace("empty", { vcs: undefined }));
+    renderGeneral(workspace("empty", { vcs: null }));
 
     expect(
       await screen.findByRole("checkbox", { name: /Only run apply and destroy from the default branch/ })
@@ -272,7 +294,8 @@ describe("WorkspaceGeneral branch restriction", () => {
 
   it("hides the setting and does not send it to a Terrakube that does not report it", async () => {
     const older = workspace(REPO);
-    delete older.attributes.restrictApplyToConfiguredBranch;
+    // Older Terrakube versions omit the attribute, which the row type cannot express.
+    Reflect.deleteProperty(older, "restrictApplyToConfiguredBranch");
     renderGeneral(older);
 
     await screen.findByLabelText("Repository URL");
@@ -281,14 +304,12 @@ describe("WorkspaceGeneral branch restriction", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedAttributes()).not.toHaveProperty("restrictApplyToConfiguredBranch");
   });
 });
 
 describe("WorkspaceGeneral approve rule", () => {
-  const savedAttributes = () =>
-    (axiosInstance.post as jest.Mock).mock.calls[0][1]["atomic:operations"][0].data.attributes;
   const name = /Require the approve permission to start an apply with no approval step/;
 
   it("saves the setting with the workspace for an organization manager", async () => {
@@ -297,7 +318,7 @@ describe("WorkspaceGeneral approve rule", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name }));
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedAttributes().requireApproveToApply).toBe(true);
   });
 
@@ -308,20 +329,21 @@ describe("WorkspaceGeneral approve rule", () => {
     expect(await screen.findByRole("checkbox", { name })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedAttributes()).not.toHaveProperty("requireApproveToApply");
   });
 
   it("is hidden and not sent to a Terrakube that does not report it", async () => {
     const older = workspace(REPO);
-    delete older.attributes.requireApproveToApply;
+    // Older Terrakube versions omit the attribute, which the row type cannot express.
+    Reflect.deleteProperty(older, "requireApproveToApply");
     renderGeneral(older);
 
     await screen.findByRole("button", { name: "Save settings" });
     expect(screen.queryByRole("checkbox", { name })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
     expect(savedAttributes()).not.toHaveProperty("requireApproveToApply");
   });
 });

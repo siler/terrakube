@@ -909,6 +909,7 @@ export const WorkspaceDetails = ({
         return (
           <Suspense fallback={<LoadingFallback />}>
             <WorkspaceSettings
+              organizationId={organizationId}
               workspace={workspace}
               vcsProvider={vcsProvider}
               orgTemplates={templates ?? []}

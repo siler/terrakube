@@ -3,8 +3,14 @@ import { Alert, Button, Checkbox, Form, Popconfirm, Segmented, Select, Spin, Swi
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
+import { responseStatus } from "@/modules/api/errorStatus";
 import { configuredBranch, isPlanOnlyTemplate } from "../../Jobs/planOnlyTemplate";
-import { Template, VcsType, WebhookEvent, WebhookEventPathType, Workspace } from "../../types";
+import { VcsTypeOrUnknown } from "../../types";
+import { WebhookEventPathType, WebhookEventType } from "../../generated/apiResources";
+import { api, fields } from "../../generated/apiPaths";
+import type { AtomicOperation, AtomicOperationsBody, UpdateBody, WriteAttributes } from "../../api/writeBodies";
+import type { Row } from "../../api/fieldSelection";
+import type { OrgTemplateRow, WorkspacePageRow } from "../workspaceQuery";
 import { atomicHeader } from "../Workspaces";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
@@ -14,15 +20,32 @@ import { IdField } from "@/components/settings/IdField";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PatternListInput, PatternPlayground } from "./PatternListInput";
 import { isValidRegex, joinList, looksLikeWildcard, splitList } from "./patterns";
+import { isOneOf, isRecord, isStringArray } from "@/modules/utils/typeGuards";
 import "./Webhook.css";
 
 type PathMode = "any" | WebhookEventPathType;
+
+const WEBHOOK_FIELDS = fields.webhook("remoteHookId", "migratedV2", "syncError");
+
+const WEBHOOK_EVENT_FIELDS = fields.webhook_event(
+  "priority",
+  "event",
+  "branch",
+  "pathType",
+  "path",
+  "templateId",
+  "prWorkflowEnabled",
+  "prApplyEnabled"
+);
+
+/** A webhook trigger as this page lists and edits it. */
+type WebhookEventRow = Row<typeof WEBHOOK_EVENT_FIELDS>;
 
 // What a trigger looks like in the form. The API stores branches and paths as comma-separated strings and "any" as
 // a catch-all pattern, so these are converted on load (fromEvent) and on save (toAttributes).
 type Trigger = {
   id: string;
-  event?: string;
+  event?: WebhookEventType;
   anyBranch: boolean;
   branches: string[];
   pathMode: PathMode;
@@ -54,68 +77,119 @@ const newTrigger = (overrides: Partial<Trigger> = {}): Trigger => ({
   ...overrides,
 });
 
-const fromEvent = (event: WebhookEvent): Trigger => {
-  const pathType = event.attributes.pathType || WebhookEventPathType.REGEX;
-  const anyBranch = (event.attributes.branch ?? "").trim() === ANY_BRANCH;
-  const anyPath = pathType === WebhookEventPathType.PATTERN && (event.attributes.path ?? "").trim() === ANY_PATH;
+const fromEvent = (event: WebhookEventRow): Trigger => {
+  const pathType = event.pathType || WebhookEventPathType.REGEX;
+  const anyBranch = (event.branch ?? "").trim() === ANY_BRANCH;
+  const anyPath = pathType === WebhookEventPathType.PATTERN && (event.path ?? "").trim() === ANY_PATH;
   return {
     id: event.id,
-    event: (event.attributes.event || "").toString().toLowerCase(),
+    event: event.event,
     anyBranch,
-    branches: anyBranch ? [] : splitList(event.attributes.branch),
+    branches: anyBranch ? [] : splitList(event.branch),
     pathMode: anyPath ? "any" : pathType,
-    paths: anyPath ? [] : splitList(event.attributes.path),
-    template: event.attributes.templateId,
-    prWorkflowEnabled: event.attributes.prWorkflowEnabled || false,
-    prApplyEnabled: event.attributes.prApplyEnabled || false,
+    paths: anyPath ? [] : splitList(event.path),
+    template: event.templateId,
+    prWorkflowEnabled: event.prWorkflowEnabled || false,
+    prApplyEnabled: event.prApplyEnabled || false,
     created: true,
   };
 };
 
+const PATH_MODES = ["any", WebhookEventPathType.PATTERN, WebhookEventPathType.REGEX] as const;
+const EVENT_TYPES = Object.values(WebhookEventType);
+
+const isOptional = <T,>(value: unknown, guard: (v: unknown) => v is T): value is T | undefined =>
+  value === undefined || guard(value);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
+// The form store is untyped; its triggers are only what this page put there and the fields it renders.
+const isTrigger = (value: unknown): value is Trigger =>
+  isRecord(value) &&
+  isString(value.id) &&
+  isOptional(value.event, (v) => isOneOf(EVENT_TYPES, v)) &&
+  isBoolean(value.anyBranch) &&
+  isStringArray(value.branches) &&
+  isOneOf(PATH_MODES, value.pathMode) &&
+  isStringArray(value.paths) &&
+  isOptional(value.template, isString) &&
+  isBoolean(value.prWorkflowEnabled) &&
+  isBoolean(value.prApplyEnabled) &&
+  isOptional(value.created, isBoolean);
+
+/** A trigger with every field the API requires. */
+type CompleteTrigger = Trigger & { event: WebhookEventType; template: string };
+
+const isComplete = (trigger: Trigger): trigger is CompleteTrigger => Boolean(trigger.event && trigger.template);
+
 // A release has no changed files, so it never filters on paths.
-const filtersPaths = (trigger: Trigger) => trigger.event !== "release" && trigger.pathMode !== "any";
+const filtersPaths = (trigger: Trigger) => trigger.event !== WebhookEventType.RELEASE && trigger.pathMode !== "any";
 
 // Triggers are checked from the lowest priority up, so the list order is the priority.
-const toAttributes = (trigger: Trigger, position: number) => ({
-  priority: position + 1,
-  event: trigger.event!.toUpperCase(),
-  branch: trigger.anyBranch ? ANY_BRANCH : joinList(trigger.branches),
-  path: filtersPaths(trigger) ? joinList(trigger.paths) : ANY_PATH,
-  pathType: filtersPaths(trigger) ? trigger.pathMode : WebhookEventPathType.PATTERN,
-  templateId: trigger.template,
-  prWorkflowEnabled: trigger.prWorkflowEnabled || false,
-  prApplyEnabled: trigger.prApplyEnabled || false,
-});
+const toAttributes = (trigger: CompleteTrigger, position: number): WriteAttributes<"webhook_event"> => {
+  const pathMode = filtersPaths(trigger) ? trigger.pathMode : "any";
+  return {
+    priority: position + 1,
+    event: trigger.event,
+    branch: trigger.anyBranch ? ANY_BRANCH : joinList(trigger.branches),
+    path: pathMode !== "any" ? joinList(trigger.paths) : ANY_PATH,
+    pathType: pathMode !== "any" ? pathMode : WebhookEventPathType.PATTERN,
+    templateId: trigger.template,
+    prWorkflowEnabled: trigger.prWorkflowEnabled || false,
+    prApplyEnabled: trigger.prApplyEnabled || false,
+  };
+};
 
-const EVENT_LABELS: Record<string, string> = { push: "Push", pull_request: "Pull request", release: "Release" };
-const SHARED_WEBHOOK_VCS = [VcsType.GITHUB, VcsType.GITLAB, VcsType.AZURE_SP_MI, VcsType.AZURE_DEVOPS];
+const EVENT_OPTIONS: { value: WebhookEventType; label: string }[] = [
+  { value: WebhookEventType.PUSH, label: "Push" },
+  { value: WebhookEventType.PULL_REQUEST, label: "Pull request" },
+  { value: WebhookEventType.RELEASE, label: "Release" },
+];
+
+const eventLabel = (event?: WebhookEventType) =>
+  EVENT_OPTIONS.find((option) => option.value === event)?.label ?? "New trigger";
+
+const SHARED_WEBHOOK_VCS: VcsTypeOrUnknown[] = [
+  VcsTypeOrUnknown.GITHUB,
+  VcsTypeOrUnknown.GITLAB,
+  VcsTypeOrUnknown.AZURE_SP_MI,
+  VcsTypeOrUnknown.AZURE_DEVOPS,
+];
 // Explicitly drop Content-Type: Elide's Spring routing maps DELETE requests carrying
 // "application/vnd.api+json" to its relationship-delete handler, which then rejects them.
 const deleteHeaders = { headers: { "Content-Type": undefined } };
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
-  orgTemplates: Template[];
-  vcsProvider?: VcsType;
+  orgTemplates: OrgTemplateRow[];
+  vcsProvider?: VcsTypeOrUnknown;
   onWorkspaceUpdate?: () => void;
 };
 
 export const WorkspaceWebhook = ({
+  organizationId,
   workspace,
   vcsProvider,
   orgTemplates,
   manageWorkspace,
   onWorkspaceUpdate,
 }: Props) => {
-  const organizationId = workspace.relationships.organization.data.id;
   const workspaceId = workspace.id;
-  const webhookId = workspace.relationships.webhook?.data?.id;
-  const hasVcs = Boolean(workspace.relationships.vcs?.data?.id);
+  const webhookId = workspace.webhook?.id;
+  const hasVcs = Boolean(workspace.vcs?.id);
   const baseUrl = `organization/${organizationId}/workspace/${workspaceId}/webhook`;
 
   const [form] = Form.useForm<{ events: Trigger[] }>();
   const triggers: Trigger[] = Form.useWatch("events", { form, preserve: true }) ?? [];
+  // Unlike the watched list, the store is current within the same event handler.
+  const readTriggers = (): Trigger[] => {
+    const value: unknown = form.getFieldValue("events");
+    return Array.isArray(value) ? value.filter(isTrigger) : [];
+  };
   const [loading, setLoading] = useState(Boolean(webhookId && hasVcs));
   const [saving, setSaving] = useState(false);
   const [webhookEnabled, setWebhookEnabled] = useState(Boolean(webhookId));
@@ -137,23 +211,21 @@ export const WorkspaceWebhook = ({
       return;
     }
     setLoading(true);
-    Promise.all([axiosInstance.get(`${baseUrl}/${webhookId}`), axiosInstance.get(`${baseUrl}/${webhookId}/events`)])
-      .then(([webhookRes, eventsRes]) => {
-        setRemoteHookId(webhookRes.data.data.attributes.remoteHookId);
-        setMigratedV2(webhookRes.data.data.attributes.migratedV2 || false);
-        setSyncError(webhookRes.data.data.attributes.syncError || "");
+    const webhook = api.organization(organizationId).workspace(workspaceId).webhook(webhookId);
+    Promise.all([webhook.select(WEBHOOK_FIELDS), webhook.events().select(WEBHOOK_EVENT_FIELDS)])
+      .then(([webhookData, events]) => {
+        setRemoteHookId(webhookData?.remoteHookId ?? "");
+        setMigratedV2(webhookData?.migratedV2 || false);
+        setSyncError(webhookData?.syncError || "");
         // Ascending, the order the API checks triggers in.
-        const events: Trigger[] = eventsRes.data.data
-          .sort((a: WebhookEvent, b: WebhookEvent) => a.attributes.priority - b.attributes.priority)
-          .map(fromEvent);
-        form.setFieldsValue({ events });
+        form.setFieldsValue({ events: events.sort((a, b) => a.priority - b.priority).map(fromEvent) });
       })
       .catch((error) => message.error(`Couldn't load the webhook: ${getErrorMessage(error)}`))
       .finally(() => setLoading(false));
-  }, [baseUrl, webhookId, hasVcs, form]);
+  }, [organizationId, workspaceId, webhookId, hasVcs, form]);
 
   const addTrigger = (trigger: Trigger = newTrigger()) => {
-    form.setFieldValue("events", [...(form.getFieldValue("events") ?? []), trigger]);
+    form.setFieldValue("events", [...readTriggers(), trigger]);
     setExpanded((ids) => [...ids, trigger.id]);
   };
 
@@ -162,7 +234,7 @@ export const WorkspaceWebhook = ({
   const removeTrigger = (trigger: Trigger) => {
     form.setFieldValue(
       "events",
-      (form.getFieldValue("events") as Trigger[]).filter((t) => t.id !== trigger.id)
+      readTriggers().filter((t) => t.id !== trigger.id)
     );
     if (trigger.created) {
       setDeletedIds((ids) => [...ids, trigger.id]);
@@ -200,24 +272,34 @@ export const WorkspaceWebhook = ({
       setConfirmDisable(true);
       return;
     }
-    const events: Trigger[] = form.getFieldValue("events") ?? [];
+    const value: unknown = form.getFieldValue("events");
+    const stored: unknown[] = Array.isArray(value) ? value : [];
+    const current = stored.filter(isTrigger);
+    const events = current.filter(isComplete);
+    // Field validation covers this, but a trigger must never be dropped or sent half-filled.
+    if (events.length !== stored.length) {
+      message.error("Choose an event and a template for every trigger.");
+      setExpanded(current.filter((t) => !isComplete(t)).map((t) => t.id));
+      return;
+    }
     const newWebhookId = webhookId ?? crypto.randomUUID();
-    const body = {
+    const webhookOperation: AtomicOperation<"webhook"> = {
+      op: webhookId ? "update" : "add",
+      href: `/${baseUrl}`,
+      data: {
+        type: "webhook",
+        id: newWebhookId,
+        ...(!webhookId && createShared && { attributes: { migratedV2: true } }),
+      },
+    };
+    const body: AtomicOperationsBody<"webhook" | "webhook_event"> = {
       "atomic:operations": [
-        ...deletedIds.map((id) => ({ op: "remove", href: `/${baseUrl}/${newWebhookId}/events/${id}` })),
-        {
-          op: webhookId ? "update" : "add",
-          href: `/${baseUrl}`,
-          data: {
-            type: "webhook",
-            id: newWebhookId,
-            ...(!webhookId && createShared && { attributes: { migratedV2: true } }),
-          },
-          relationships: {
-            events: { data: events.map((event) => ({ type: "webhook_event", id: event.id })) },
-          },
-        },
-        ...events.map((event, position) => ({
+        ...deletedIds.map((id): AtomicOperation<"webhook"> => ({
+          op: "remove",
+          href: `/${baseUrl}/${newWebhookId}/events/${id}`,
+        })),
+        webhookOperation,
+        ...events.map((event, position): AtomicOperation<"webhook_event"> => ({
           op: event.created ? "update" : "add",
           href: event.created ? `/${baseUrl}/${newWebhookId}/events/${event.id}` : `/${baseUrl}/${newWebhookId}/events`,
           data: { type: "webhook_event", id: event.id, attributes: toAttributes(event, position) },
@@ -240,9 +322,9 @@ export const WorkspaceWebhook = ({
       setCreateShared(false);
       message.success("Webhook saved");
       onWorkspaceUpdate?.();
-    } catch (error: any) {
+    } catch (error) {
       message.error(
-        error?.response?.status === 424
+        responseStatus(error) === 424
           ? "The VCS connection can't manage webhooks on this repository. It needs Webhooks: write, and Pull requests: write to post plans."
           : `Couldn't save the webhook: ${getErrorMessage(error)}`
       );
@@ -253,21 +335,26 @@ export const WorkspaceWebhook = ({
 
   // Both directions are one PATCH. Going back to a dedicated webhook creates it on the repository straight away,
   // so the new repository webhook ID is read again.
-  const setShared = async (shared: boolean) => {
+  const setShared = async (id: string, shared: boolean) => {
     setSaving(true);
     try {
-      const response = await axiosInstance.patch(
-        `${baseUrl}/${webhookId}`,
-        { data: { type: "webhook", id: webhookId, attributes: { migratedV2: shared } } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      );
+      const body: UpdateBody<"webhook"> = {
+        data: { type: "webhook", id, attributes: { migratedV2: shared } },
+      };
+      const response = await axiosInstance.patch(`${baseUrl}/${id}`, body, {
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
       if (response.status !== 200 && response.status !== 204) {
         throw new Error(`Unexpected response ${response.status}`);
       }
       setMigratedV2(shared);
       if (!shared) {
-        const webhookRes = await axiosInstance.get(`${baseUrl}/${webhookId}`);
-        setRemoteHookId(webhookRes.data.data.attributes.remoteHookId ?? "");
+        const webhookData = await api
+          .organization(organizationId)
+          .workspace(workspaceId)
+          .webhook(id)
+          .select(WEBHOOK_FIELDS);
+        setRemoteHookId(webhookData?.remoteHookId ?? "");
       }
       message.success(shared ? "Migrated to a shared webhook" : "Switched to a webhook for this workspace");
     } catch (error) {
@@ -279,18 +366,18 @@ export const WorkspaceWebhook = ({
 
   // A workspace that restricts apply to its configured branch does not start a run that can change infrastructure
   // from a pull request, or from a push to another branch. A release is not affected.
-  const restrictApply = Boolean(workspace.attributes?.restrictApplyToConfiguredBranch);
-  const workspaceBranch = configuredBranch(workspace.attributes?.branch);
+  const restrictApply = Boolean(workspace.restrictApplyToConfiguredBranch);
+  const workspaceBranch = configuredBranch(workspace.branch);
 
   const restrictionNotice = (trigger: Trigger): string | null => {
-    if (!restrictApply || !trigger.template || trigger.event === "release") {
+    if (!restrictApply || !trigger.template || trigger.event === WebhookEventType.RELEASE) {
       return null;
     }
     const template = orgTemplates.find((t) => t.id === trigger.template);
-    if (!template || isPlanOnlyTemplate(template.attributes?.tcl)) {
+    if (!template || isPlanOnlyTemplate(template.tcl ?? undefined)) {
       return null;
     }
-    if (trigger.event === "pull_request") {
+    if (trigger.event === WebhookEventType.PULL_REQUEST) {
       return `This workspace only applies from ${workspaceBranch}, so a pull request can only run a plan-only template. This trigger will not start a run. Choose a plan-only template.`;
     }
     const otherBranches = trigger.anyBranch || trigger.branches.some((b) => configuredBranch(b) !== workspaceBranch);
@@ -299,12 +386,12 @@ export const WorkspaceWebhook = ({
       : null;
   };
 
-  const templateName = (id?: string) => orgTemplates.find((t) => t.id === id)?.attributes?.name;
+  const templateName = (id?: string) => orgTemplates.find((t) => t.id === id)?.name;
 
   const branchText = (trigger: Trigger) => (trigger.anyBranch ? "any branch" : trigger.branches.join(", "));
 
   const pathText = (trigger: Trigger) => {
-    if (trigger.event === "release") {
+    if (trigger.event === WebhookEventType.RELEASE) {
       return "";
     }
     if (trigger.pathMode === "any") {
@@ -315,9 +402,8 @@ export const WorkspaceWebhook = ({
   };
 
   const summaryText = (trigger: Trigger) =>
-    [EVENT_LABELS[trigger.event ?? ""] ?? "New trigger", branchText(trigger), pathText(trigger)]
-      .filter(Boolean)
-      .join(" · ") + (trigger.template ? ` → ${templateName(trigger.template) ?? trigger.template}` : "");
+    [eventLabel(trigger.event), branchText(trigger), pathText(trigger)].filter(Boolean).join(" · ") +
+    (trigger.template ? ` → ${templateName(trigger.template) ?? trigger.template}` : "");
 
   const header = (
     <SettingsPageHeader
@@ -359,7 +445,10 @@ export const WorkspaceWebhook = ({
           onFinish={save}
           onFinishFailed={({ errorFields }) => {
             const ids = errorFields
-              .map((field) => triggers[field.name[1] as number]?.id)
+              .map((field) => {
+                const index = field.name[1];
+                return typeof index === "number" ? triggers[index]?.id : undefined;
+              })
               .filter((id): id is string => Boolean(id));
             setExpanded((current) => [...new Set([...current, ...ids])]);
           }}
@@ -431,7 +520,7 @@ export const WorkspaceWebhook = ({
                       }
                       okText={migratedV2 ? "Switch" : "Migrate"}
                       cancelText="Cancel"
-                      onConfirm={() => setShared(!migratedV2)}
+                      onConfirm={() => setShared(webhookId, !migratedV2)}
                       disabled={!manageWorkspace}
                     >
                       <Button disabled={!manageWorkspace}>
@@ -467,19 +556,24 @@ export const WorkspaceWebhook = ({
                     {fields.length > 0 && (
                       <ul className="webhook-triggers">
                         {fields.map(({ key, name }) => {
-                          const trigger: Trigger | undefined = triggers[name] ?? form.getFieldValue(["events", name]);
+                          const stored: unknown = form.getFieldValue(["events", name]);
+                          const trigger = triggers[name] ?? (isTrigger(stored) ? stored : undefined);
                           if (!trigger) {
                             return null;
                           }
                           const open = expanded.includes(trigger.id);
                           const panelId = `webhook-trigger-${trigger.id}`;
-                          const isRelease = trigger.event === "release";
+                          const isRelease = trigger.event === WebhookEventType.RELEASE;
                           const meta = [
                             `Order ${name + 1}`,
                             !isRelease && trigger.pathMode === WebhookEventPathType.REGEX && "Regex paths",
                             !isRelease && trigger.pathMode === WebhookEventPathType.PATTERN && "Wildcard paths",
-                            trigger.event === "pull_request" && trigger.prWorkflowEnabled && "Plan posted on PRs",
-                            trigger.event === "pull_request" && trigger.prApplyEnabled && "Apply by comment",
+                            trigger.event === WebhookEventType.PULL_REQUEST &&
+                              trigger.prWorkflowEnabled &&
+                              "Plan posted on PRs",
+                            trigger.event === WebhookEventType.PULL_REQUEST &&
+                              trigger.prApplyEnabled &&
+                              "Apply by comment",
                             !trigger.created && "Not saved",
                           ].filter(Boolean);
                           return (
@@ -487,7 +581,7 @@ export const WorkspaceWebhook = ({
                               <div className="webhook-trigger-summary">
                                 <div className="webhook-trigger-text">
                                   <span className="webhook-trigger-title">
-                                    {EVENT_LABELS[trigger.event ?? ""] ?? "New trigger"}
+                                    {eventLabel(trigger.event)}
                                     {branchText(trigger) && (
                                       <>
                                         {" · "}
@@ -554,10 +648,7 @@ export const WorkspaceWebhook = ({
                                         <Select
                                           placeholder="Select an event"
                                           disabled={!manageWorkspace}
-                                          options={Object.entries(EVENT_LABELS).map(([value, label]) => ({
-                                            value,
-                                            label,
-                                          }))}
+                                          options={EVENT_OPTIONS}
                                         />
                                       </Form.Item>
                                       <Form.Item
@@ -569,7 +660,7 @@ export const WorkspaceWebhook = ({
                                             Regexes matching the whole{" "}
                                             {isRelease
                                               ? "tag"
-                                              : trigger.event === "pull_request"
+                                              : trigger.event === WebhookEventType.PULL_REQUEST
                                                 ? "PR source branch name"
                                                 : "branch name"}
                                             : <code>main</code> only matches main, <code>release/.*</code> matches every
@@ -648,7 +739,7 @@ export const WorkspaceWebhook = ({
                                                 if (!value?.length) {
                                                   throw new Error("Enter at least one path.");
                                                 }
-                                                const mode = form.getFieldValue(["events", name, "pathMode"]);
+                                                const mode: unknown = form.getFieldValue(["events", name, "pathMode"]);
                                                 const bad =
                                                   mode === WebhookEventPathType.REGEX &&
                                                   value.find((pattern) => !isValidRegex(pattern));
@@ -660,7 +751,7 @@ export const WorkspaceWebhook = ({
                                             {
                                               warningOnly: true,
                                               validator: async (_, value?: string[]) => {
-                                                const mode = form.getFieldValue(["events", name, "pathMode"]);
+                                                const mode: unknown = form.getFieldValue(["events", name, "pathMode"]);
                                                 const wildcard =
                                                   mode === WebhookEventPathType.REGEX &&
                                                   value?.find((pattern) => looksLikeWildcard(pattern));
@@ -712,7 +803,7 @@ export const WorkspaceWebhook = ({
                                           disabled={!manageWorkspace}
                                           options={orgTemplates.map((t) => ({
                                             value: t.id,
-                                            label: t.attributes?.name,
+                                            label: t.name,
                                           }))}
                                         />
                                       </Form.Item>
@@ -721,7 +812,7 @@ export const WorkspaceWebhook = ({
                                       )}
                                     </div>
                                     <div className="webhook-column">
-                                      {trigger.event === "pull_request" && (
+                                      {trigger.event === WebhookEventType.PULL_REQUEST && (
                                         <>
                                           <Form.Item
                                             name={[name, "prWorkflowEnabled"]}
