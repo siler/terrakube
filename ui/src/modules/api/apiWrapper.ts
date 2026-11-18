@@ -3,6 +3,7 @@ import { mgr } from "../../config/authConfig";
 import { apiUrl } from "../../config/apiUrls";
 import getUserFromStorage from "../../config/authUser";
 import { ApiError, ApiResponse, RequestOptions } from "./types";
+import { GraphQLRequestError } from "./graphqlRequest";
 import { ResponseShapeError } from "./responseShapeError";
 import { isRecord } from "../utils/typeGuards";
 
@@ -83,6 +84,13 @@ async function requestWrapper<T>(
         responseCode: 200,
       };
     }
+    if (error instanceof GraphQLRequestError) {
+      return {
+        isError: true,
+        error: { status: "GraphQL request failed", message: error.message },
+        responseCode: 200,
+      };
+    }
     if (axios.isAxiosError(error)) {
       if (error.response?.status === 401) {
         // Token rejected by the API - sign out so the user lands back on Login.
@@ -143,6 +151,12 @@ async function requestWrapper<T>(
       };
     }
   }
+}
+
+/** Runs a typed GraphQL read as an {@link ApiResponse}, reporting failures the way {@link apiPost} does. */
+export async function apiGraphQL<T>(read: () => Promise<T>): Promise<ApiResponse<T>> {
+  // The GraphQL client attaches the token itself.
+  return await requestWrapper(false, async () => ({ isError: false, data: await read(), responseCode: 200 }));
 }
 
 /** Reads a response body into the caller's type, throwing {@link ResponseShapeError} when it does not fit. */
