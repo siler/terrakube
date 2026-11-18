@@ -5,7 +5,7 @@ import {
   QuestionCircleOutlined,
   SyncOutlined,
 } from "@ant-design/icons";
-import type { JobStatus } from "@/domain/generated/apiResources";
+import type { JobStatus } from "@/domain/generated/graphql/graphql";
 
 type JobStatusGroup = {
   key: string;

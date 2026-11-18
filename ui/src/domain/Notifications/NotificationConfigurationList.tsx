@@ -5,14 +5,64 @@ import { Loading } from "@/components/feedback/Loading";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axiosInstance, { getErrorMessage, isPermissionError } from "@/config/axiosConfig";
-import { apiPost } from "@/modules/api/apiWrapper";
-import { NotificationConfiguration } from "../types";
+import { graphql } from "@/domain/generated/graphql";
+import type { NotificationConfigurationsQuery } from "@/domain/generated/graphql/graphql";
+import { ConnectionNode, connectionNodes, graphqlRequest } from "@/modules/api/graphqlRequest";
 import { channelMetaFor } from "./channelMeta";
 import { EditNotificationConfiguration } from "./EditNotificationConfiguration";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import { EmptyState } from "@/components/feedback/EmptyState";
+
+// Every relationship is a connection in Elide's GraphQL, even a to-one like workspace.
+const NotificationConfigurations = graphql(`
+  query NotificationConfigurations($orgIds: [String]) {
+    organization(ids: $orgIds) {
+      edges {
+        node {
+          notificationConfiguration {
+            edges {
+              node {
+                id
+                name
+                description
+                channelType
+                active
+                workspace {
+                  edges {
+                    node {
+                      id
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
+
+type NotificationConfigurationNode = ConnectionNode<
+  ConnectionNode<NotificationConfigurationsQuery["organization"]>["notificationConfiguration"]
+>;
+
+const toConfiguration = (node: NotificationConfigurationNode) => {
+  const workspaceId = connectionNodes(node.workspace)[0]?.id;
+  return {
+    id: node.id ?? "",
+    name: node.name ?? "",
+    description: node.description,
+    channelType: node.channelType ?? null,
+    active: node.active ?? false,
+    // A lazily-fetched workspace can serialize its id as the string "null"; that is no workspace too.
+    workspaceId: workspaceId && workspaceId !== "null" ? workspaceId : null,
+  };
+};
+
+type NotificationConfiguration = ReturnType<typeof toConfiguration>;
 
 type Props = {
   orgId: string;
@@ -62,67 +112,12 @@ export const NotificationConfigurationList = ({
 
   const load = () => {
     setLoading(true);
-    const body = {
-      // workspace (and every other relationship in this schema) is exposed as a
-      // Relay-style Connection in GraphQL, even for a to-one field - "workspace { id }"
-      // is invalid and fails the whole query; it must be "workspace { edges { node { id } } }".
-      query: `{
-        organization(ids: ["${orgId}"]) {
-          edges { node {
-            notificationConfiguration {
-              edges { node {
-                id
-                name
-                description
-                channelType
-                destinationUrl
-                active
-                workspace { edges { node { id } } }
-              } }
-            }
-          } }
-        }
-      }`,
-    };
-    apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
-      dataWrapped: true,
-      contentType: "application/json",
-    })
-      .then((response: any) => {
-        if (!response?.data) {
-          // A GraphQL error still resolves this promise (HTTP 200 with an
-          // "errors" array, no "data") - fail loudly instead of silently
-          // rendering an empty list.
-          message.error("Failed to load notification configurations");
-          setLoading(false);
-          return;
-        }
-        const edges = response.data?.organization?.edges?.[0]?.node?.notificationConfiguration?.edges || [];
-        const all: NotificationConfiguration[] = edges.map((edge: any) => {
-          const rawWorkspaceNode = edge.node.workspace?.edges?.[0]?.node ?? null;
-          // Defensive: a lazily-fetched Workspace relationship could serialize its id as the
-          // literal string "null" instead of a real UUID or JSON null (see NotificationConfiguration.workspace
-          // for the root cause and fix) - treat that the same as no workspace at all rather than
-          // let it silently fail both branches of the scope filter below.
-          const workspaceNode = rawWorkspaceNode && rawWorkspaceNode.id !== "null" ? rawWorkspaceNode : null;
-          return {
-            id: edge.node.id,
-            attributes: {
-              name: edge.node.name,
-              description: edge.node.description,
-              channelType: edge.node.channelType,
-              destinationUrl: edge.node.destinationUrl,
-              active: edge.node.active,
-            },
-            relationships: { workspace: { data: workspaceNode ? { id: workspaceNode.id } : null } },
-          };
-        });
-        const scoped = workspaceId
-          ? all.filter(
-              (c) => c.relationships?.workspace?.data === null || c.relationships?.workspace?.data?.id === workspaceId
-            )
-          : all.filter((c) => c.relationships?.workspace?.data === null);
-        setConfigurations(scoped);
+    graphqlRequest(NotificationConfigurations, { orgIds: [orgId] })
+      .then((data) => {
+        const all = connectionNodes(connectionNodes(data.organization)[0]?.notificationConfiguration).map(
+          toConfiguration
+        );
+        setConfigurations(all.filter((c) => c.workspaceId === null || c.workspaceId === workspaceId));
         setLoading(false);
       })
       .catch((err) => {
@@ -140,13 +135,11 @@ export const NotificationConfigurationList = ({
   }, [orgId, workspaceId]);
 
   // On the org-level page (no workspaceId), "configurations" is already org-scoped only (see
-  // the "scoped" filter in load()), so the primary list there is simply all of them - there's no
+  // the filter in load()), so the primary list there is simply all of them - there's no
   // "inherited" concept without a workspace to inherit into. Purely additive, no overrides: a
   // workspace gets both its own configs and every organization-wide default, together.
-  const primaryConfigs = workspaceId
-    ? configurations.filter((c) => c.relationships?.workspace?.data !== null)
-    : configurations;
-  const inheritedConfigs = workspaceId ? configurations.filter((c) => c.relationships?.workspace?.data === null) : [];
+  const primaryConfigs = workspaceId ? configurations.filter((c) => c.workspaceId !== null) : configurations;
+  const inheritedConfigs = workspaceId ? configurations.filter((c) => c.workspaceId === null) : [];
 
   const onDelete = (id: string) => {
     axiosInstance
@@ -175,9 +168,9 @@ export const NotificationConfigurationList = ({
   }
 
   const renderItem = (item: NotificationConfiguration, inherited: boolean) => {
-    const meta = channelMetaFor(item.attributes.channelType);
+    const meta = channelMetaFor(item.channelType);
     const ChannelIcon = meta?.icon ?? BellOutlined;
-    const name = item.attributes.name;
+    const name = item.name;
     return (
       <List.Item
         actions={
@@ -211,12 +204,12 @@ export const NotificationConfigurationList = ({
           description={
             <>
               <div>
-                <Tag>{meta?.label ?? item.attributes.channelType ?? "Unknown channel"}</Tag>
-                {!item.attributes.active && <Tag color="warning">Disabled</Tag>}
+                <Tag>{meta?.label ?? item.channelType ?? "Unknown channel"}</Tag>
+                {!item.active && <Tag color="warning">Disabled</Tag>}
               </div>
-              {item.attributes.description && (
+              {item.description && (
                 <Typography.Text type="secondary" className="notification-meta-text">
-                  {item.attributes.description}
+                  {item.description}
                 </Typography.Text>
               )}
             </>
@@ -307,7 +300,7 @@ export const NotificationConfigurationList = ({
           <DeleteConfirmationModal
             open={pendingDelete !== null}
             title="Delete notification"
-            message={`Runs stop sending messages for ${pendingDelete?.attributes.name}. This cannot be undone.`}
+            message={`Runs stop sending messages for ${pendingDelete?.name}. This cannot be undone.`}
             okText="Delete notification"
             onConfirm={() => {
               if (pendingDelete) {
