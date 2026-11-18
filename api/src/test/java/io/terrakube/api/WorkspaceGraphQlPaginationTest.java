@@ -1,5 +1,7 @@
 package io.terrakube.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.restassured.response.Response;
 import io.terrakube.api.rs.Organization;
 import io.terrakube.api.rs.job.JobStatus;
@@ -85,9 +87,11 @@ class WorkspaceGraphQlPaginationTest extends ServerApplicationTests {
         String uiRequest = new String(getClass().getResourceAsStream("/workspace-page-request.json").readAllBytes(),
                 java.nio.charset.StandardCharsets.UTF_8);
         // Other suites (AccessTests) leave extra workspaces in this organization; pin the page to the demo rows.
-        String body = uiRequest.replace("workspace(first: $first, after: $after,  sort: $sort)",
-                "workspace(first: $first, after: $after, sort: $sort, filter: \\\"name=in=(" + String.join(",", DEMO_NAMES) + ")\\\")");
-        assertThat(body).isNotEqualTo(uiRequest);
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode request = (ObjectNode) mapper.readTree(uiRequest);
+        ObjectNode variables = (ObjectNode) request.get("variables");
+        variables.put("filter", variables.get("filter").asText() + ";name=in=(" + String.join(",", DEMO_NAMES) + ")");
+        String body = mapper.writeValueAsString(request);
         for (String group : List.of("TERRAKUBE_DEVELOPERS", "TERRAKUBE_ADMIN")) {
             Response response = given().headers("Authorization", "Bearer " + generatePAT(group), "Content-Type", "application/json")
                     .body(body).post("/graphql/api/v1");
