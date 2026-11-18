@@ -56,7 +56,6 @@
     "api-types:generate": "node scripts/api-types/generate.mts",
     "api-types:paths": "node scripts/api-types/generatePaths.mts",
     "api-types:test": "node --test \"scripts/api-types/__tests__/*.test.mts\"",
-    "graphql:schema": "node scripts/api-types/graphql-schema.mts",
     "graphql:generate": "graphql-codegen --config codegen.ts"
   },
   "eslintConfig": {
