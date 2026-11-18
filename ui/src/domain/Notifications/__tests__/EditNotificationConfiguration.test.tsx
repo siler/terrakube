@@ -1,8 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import axiosInstance, { getErrorMessage } from "@/config/axiosConfig";
-import { apiPost } from "@/modules/api/apiWrapper";
+import axiosInstance, { axiosGraphQL, getErrorMessage } from "@/config/axiosConfig";
 import { EditNotificationConfiguration } from "../EditNotificationConfiguration";
-import { requestAttributes } from "@/testUtils/readRequestBody";
+import { recordOf, requestAttributes } from "@/testUtils/readRequestBody";
 
 jest.mock("@/config/axiosConfig", () => ({
   __esModule: true,
@@ -16,8 +15,10 @@ jest.mock("@/config/axiosConfig", () => ({
     delete: jest.fn(),
   },
   getErrorMessage: jest.fn(() => "error"),
+  axiosGraphQL: { post: jest.fn() },
 }));
-jest.mock("@/modules/api/apiWrapper", () => ({ apiPost: jest.fn() }));
+
+const answerGraphQL = (body: { data: unknown }) => jest.mocked(axiosGraphQL.post).mockResolvedValue({ data: body });
 
 // ChannelPicker renders clickable cards (role="radio"), not an antd Select -
 // clicking the card's visible label text bubbles up to its onClick handler.
@@ -28,6 +29,7 @@ const selectChannel = (label: string) => {
 describe("EditNotificationConfiguration", () => {
   beforeEach(() => {
     jest.mocked(axiosInstance.post).mockReset();
+    jest.mocked(axiosGraphQL.post).mockReset();
   });
 
   it("creates a workspace-scoped configuration with selected triggers", async () => {
@@ -136,7 +138,7 @@ describe("EditNotificationConfiguration", () => {
     // workspace's merged list view. The banner must reflect the config's actual scope, not the
     // prop, or editing an org default from a workspace page looks exactly like a
     // workspace-only edit and silently changes behavior for every other workspace too.
-    (apiPost as jest.Mock).mockResolvedValue({
+    answerGraphQL({
       data: {
         notification_configuration: {
           edges: [
@@ -170,7 +172,7 @@ describe("EditNotificationConfiguration", () => {
   });
 
   it("shows the workspace-only banner when editing a config that does have a workspace", async () => {
-    (apiPost as jest.Mock).mockResolvedValue({
+    answerGraphQL({
       data: {
         notification_configuration: {
           edges: [
@@ -216,7 +218,7 @@ describe("EditNotificationConfiguration", () => {
   });
 
   it("deletes an existing configuration from the danger zone after confirmation", async () => {
-    (apiPost as jest.Mock).mockResolvedValue({
+    answerGraphQL({
       data: {
         notification_configuration: {
           edges: [{ node: { name: "Prod", channelType: "SLACK", active: true, workspace: { edges: [] } } }],
@@ -243,7 +245,7 @@ describe("EditNotificationConfiguration", () => {
   });
 
   const editing = (workspace: { edges: { node: { id: string } }[] }) =>
-    (apiPost as jest.Mock).mockResolvedValue({
+    answerGraphQL({
       data: {
         notification_configuration: {
           edges: [{ node: { name: "Prod", channelType: "SLACK", active: true, workspace } }],
@@ -290,9 +292,38 @@ describe("EditNotificationConfiguration", () => {
     expect(screen.queryByRole("button", { name: "Delete this notification" })).not.toBeInTheDocument();
   });
 
+  it("loads the configuration by id variable, not interpolated into the query", async () => {
+    answerGraphQL({
+      data: {
+        notification_configuration: {
+          edges: [
+            {
+              node: {
+                name: "Prod",
+                channelType: "SLACK",
+                active: true,
+                workspace: { edges: [] },
+                triggers: { edges: [{ node: { id: "t1", jobStatus: "failed" } }] },
+                templates: { edges: [] },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    render(<EditNotificationConfiguration orgId="org-1" mode="edit" configId="config-1" onDone={jest.fn()} />);
+
+    expect(await screen.findByDisplayValue("Prod")).toBeInTheDocument();
+    const body = recordOf(jest.mocked(axiosGraphQL.post).mock.calls[0][1]);
+    expect(body.variables).toEqual({ configIds: ["config-1"] });
+    expect(body.query).not.toContain("config-1");
+    expect(screen.getByRole("checkbox", { name: "Failed" })).toBeChecked();
+  });
+
   it("leaves the stored signing secret alone when the field is cleared before updating", async () => {
     jest.mocked(axiosInstance.patch).mockReset().mockResolvedValue({ data: {} });
-    (apiPost as jest.Mock).mockResolvedValue({
+    answerGraphQL({
       data: {
         notification_configuration: {
           edges: [
