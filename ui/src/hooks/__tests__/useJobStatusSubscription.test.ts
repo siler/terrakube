@@ -1,17 +1,17 @@
 import { renderHook } from "@testing-library/react";
 import { useJobStatusSubscription } from "../useJobStatusSubscription";
-import { getSubscriptionClient } from "../../modules/api/subscriptionClient";
+import { print } from "graphql";
+import { subscribe as subscribeDocument } from "../../modules/api/subscriptionClient";
 
 jest.mock("../../modules/api/subscriptionClient");
 
 describe("useJobStatusSubscription", () => {
-  const unsubscribe = jest.fn();
-  const subscribe = jest.fn().mockReturnValue(unsubscribe);
+  const unsubscribe = jest.fn<void, []>();
+  const subscribe = jest.mocked(subscribeDocument);
 
   beforeEach(() => {
     jest.resetAllMocks();
     subscribe.mockReturnValue(unsubscribe);
-    (getSubscriptionClient as jest.Mock).mockReturnValue({ subscribe });
   });
 
   it("subscribes with the workspaceId variable and forwards each event", () => {
@@ -20,10 +20,11 @@ describe("useJobStatusSubscription", () => {
     renderHook(() => useJobStatusSubscription({ workspaceId: "workspace-1", enabled: true, onEvent }));
 
     expect(subscribe).toHaveBeenCalledTimes(1);
-    const [payload, sink] = subscribe.mock.calls[0];
-    expect(payload.variables).toEqual({ workspaceId: "workspace-1" });
+    const [document, variables, onData] = subscribe.mock.calls[0];
+    expect(print(document)).toContain("$workspaceId: ID!");
+    expect(variables).toEqual({ workspaceId: "workspace-1" });
 
-    sink.next({ data: { jobStatusChanged: { jobId: 1, workspaceId: "workspace-1", status: "running" } } });
+    onData({ jobStatusChanged: { jobId: 1, workspaceId: "workspace-1", status: "running" } });
 
     expect(onEvent).toHaveBeenCalledWith({ jobId: 1, workspaceId: "workspace-1", status: "running" });
   });
@@ -74,8 +75,8 @@ describe("useJobStatusSubscription", () => {
 
     rerender({ onEvent: secondOnEvent });
 
-    const [, sink] = subscribe.mock.calls[0];
-    sink.next({ data: { jobStatusChanged: { jobId: 1, workspaceId: "workspace-1", status: "running" } } });
+    const [, , onData] = subscribe.mock.calls[0];
+    onData({ jobStatusChanged: { jobId: 1, workspaceId: "workspace-1", status: "running" } });
 
     expect(secondOnEvent).toHaveBeenCalledWith({ jobId: 1, workspaceId: "workspace-1", status: "running" });
     expect(firstOnEvent).not.toHaveBeenCalled();
