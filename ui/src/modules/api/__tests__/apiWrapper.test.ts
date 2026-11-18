@@ -1,5 +1,6 @@
 import { mgr } from "@/config/authConfig";
-import { apiDelete, apiGet, apiPost } from "../apiWrapper";
+import { apiDelete, apiGet, apiGraphQL, apiPost } from "../apiWrapper";
+import { GraphQLRequestError } from "../graphqlRequest";
 import { ResponseShapeError } from "../responseShapeError";
 import { failure } from "@/testUtils/apiResponse";
 
@@ -162,5 +163,29 @@ describe("apiWrapper 401 handling", () => {
     expect(mockRemoveUser).not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
     expect(result.responseCode).toBe(403);
+  });
+});
+
+describe("apiGraphQL", () => {
+  it("wraps a resolved read", async () => {
+    expect(await apiGraphQL(() => Promise.resolve(["project-1"]))).toEqual({
+      isError: false,
+      responseCode: 200,
+      data: ["project-1"],
+    });
+  });
+
+  it("reports GraphQL errors the way apiPost does", async () => {
+    const result = await apiGraphQL(() => Promise.reject(new GraphQLRequestError(["Forbidden field"])));
+
+    expect(result.isError).toBe(true);
+    expect(failure(result).error).toEqual({ status: "GraphQL request failed", message: "Forbidden field" });
+  });
+
+  it("reports HTTP failures the way apiPost does", async () => {
+    const result = await apiGraphQL(() => Promise.reject({ response: { status: 403, data: {} } }));
+
+    expect(result).toEqual(expect.objectContaining({ isError: true, responseCode: 403 }));
+    expect(failure(result).error?.status).toBe("Forbidden");
   });
 });

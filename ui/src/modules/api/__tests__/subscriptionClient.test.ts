@@ -1,11 +1,25 @@
-import { createClient } from "graphql-ws";
-import { getSubscriptionClient } from "../subscriptionClient";
+import { parse } from "graphql";
+import { type Client, createClient, type FormattedExecutionResult, type Sink, type SubscribePayload } from "graphql-ws";
+import type { TypedDocumentNode } from "@graphql-typed-document-node/core";
+import { getSubscriptionClient, subscribe } from "../subscriptionClient";
 
 jest.mock("graphql-ws");
 
+const clientSubscribe = jest.fn<() => void, [SubscribePayload, Sink<FormattedExecutionResult<unknown, unknown>>]>();
+
+const fakeClient: Client = {
+  on: () => () => {},
+  subscribe: clientSubscribe,
+  iterate: () => {
+    throw new Error("not implemented");
+  },
+  dispose: () => {},
+  terminate: () => {},
+};
+
 describe("getSubscriptionClient", () => {
   beforeAll(() => {
-    (createClient as jest.Mock).mockReturnValue({ subscribe: jest.fn() });
+    jest.mocked(createClient).mockReturnValue(fakeClient);
   });
 
   // getSubscriptionClient() caches a module-level singleton, so both behaviors are asserted from the
@@ -19,10 +33,47 @@ describe("getSubscriptionClient", () => {
     expect(createClient).toHaveBeenCalledTimes(1);
     expect(second).toBe(first);
 
-    const options = (createClient as jest.Mock).mock.calls[0][0];
-    const params = await options.connectionParams();
+    const [{ connectionParams }] = jest.mocked(createClient).mock.calls[0];
+    const params = typeof connectionParams === "function" ? await connectionParams() : connectionParams;
 
     expect(params).toHaveProperty("Authorization");
-    expect(params.Authorization).toMatch(/^Bearer /);
+    expect(params?.Authorization).toMatch(/^Bearer /);
+  });
+});
+
+describe("subscribe", () => {
+  type Data = { changed: { id: string } };
+  const document: TypedDocumentNode<Data, { id: string }> = parse(
+    "subscription OnChanged($id: ID!) { changed(id: $id) { id } }"
+  );
+  const unsubscribe = jest.fn();
+
+  beforeEach(() => {
+    clientSubscribe.mockReset().mockReturnValue(unsubscribe);
+  });
+
+  it("sends the printed document with variables, not interpolated ids", () => {
+    subscribe(document, { id: "abc" }, jest.fn());
+
+    const [payload] = clientSubscribe.mock.calls[0];
+    expect(payload.variables).toEqual({ id: "abc" });
+    expect(payload.query).toContain("changed(id: $id)");
+    expect(payload.query).not.toContain("abc");
+  });
+
+  it("forwards each result's data and skips results without data", () => {
+    const onData = jest.fn();
+    subscribe(document, { id: "abc" }, onData);
+
+    const [, sink] = clientSubscribe.mock.calls[0];
+    sink.next({ errors: [{ message: "Not authorized" }] });
+    sink.next({ data: { changed: { id: "abc" } } });
+
+    expect(onData).toHaveBeenCalledTimes(1);
+    expect(onData).toHaveBeenCalledWith({ changed: { id: "abc" } });
+  });
+
+  it("returns the client's unsubscribe", () => {
+    expect(subscribe(document, { id: "abc" }, jest.fn())).toBe(unsubscribe);
   });
 });
