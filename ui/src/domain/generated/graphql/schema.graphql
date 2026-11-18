@@ -1,0 +1,2950 @@
+"""This directive allows results to be deferred during execution"""
+directive @defer(
+  """Deferred behaviour is controlled by this argument"""
+  if: Boolean! = true
+
+  """A unique label that represents the fragment being deferred"""
+  label: String
+) on FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+"""
+This directive disables error propagation when a non nullable field returns null for the given operation.
+"""
+directive @experimental_disableErrorPropagation on QUERY | MUTATION | SUBSCRIPTION
+
+type Access {
+  id: DeferredID
+  approveJob: Boolean
+  destroyJob: Boolean
+  manageJob: Boolean
+  manageState: Boolean
+  manageWorkspace: Boolean
+  name: String
+  planJob: Boolean
+  role: String
+  workspace(op: ElideRelationshipOpAccessWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type AccessConnection {
+  edges: [AccessEdge]
+  pageInfo: PageInfo
+}
+
+type AccessEdge {
+  node: Access
+}
+
+input AccessInput {
+  id: ID
+  approveJob: Boolean
+  destroyJob: Boolean
+  manageJob: Boolean
+  manageState: Boolean
+  manageWorkspace: Boolean
+  name: String
+  planJob: Boolean
+  role: String
+  workspace: WorkspaceInput
+}
+
+type Action {
+  id: DeferredID
+  action: String
+  active: Boolean
+  category: String
+  createdBy: String
+  createdDate: Date
+  description: String
+  displayCriteria: String
+  label: String
+  name: String
+  type: String
+  updatedBy: String
+  updatedDate: Date
+  version: String
+}
+
+type ActionConnection {
+  edges: [ActionEdge]
+  pageInfo: PageInfo
+}
+
+type ActionEdge {
+  node: Action
+}
+
+input ActionInput {
+  id: ID
+  action: String
+  active: Boolean
+  category: String
+  createdBy: String
+  createdDate: Date
+  description: String
+  displayCriteria: String
+  label: String
+  name: String
+  type: String
+  updatedBy: String
+  updatedDate: Date
+  version: String
+}
+
+type Address {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  name: String
+  updatedBy: String
+  updatedDate: Date
+  job(op: ElideRelationshipOpAddressJob = FETCH, data: JobInput): JobConnection
+}
+
+type AddressConnection {
+  edges: [AddressEdge]
+  pageInfo: PageInfo
+}
+
+type AddressEdge {
+  node: Address
+}
+
+input AddressInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  name: String
+  updatedBy: String
+  updatedDate: Date
+  job: JobInput
+}
+
+type Agent {
+  id: DeferredID
+  description: String
+  name: String
+  url: String
+  organization(op: ElideRelationshipOpAgentOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+}
+
+type AgentConnection {
+  edges: [AgentEdge]
+  pageInfo: PageInfo
+}
+
+type AgentEdge {
+  node: Agent
+}
+
+input AgentInput {
+  id: ID
+  description: String
+  name: String
+  url: String
+  organization: OrganizationInput
+}
+
+"""An arbitrary precision signed integer"""
+scalar BigInteger
+
+enum Category {
+  TERRAFORM
+  ENV
+}
+
+type Collection {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  priority: Int
+  updatedBy: String
+  updatedDate: Date
+  item(op: ElideRelationshipOpCollectionItem = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ItemInput]): ItemConnection
+  organization(op: ElideRelationshipOpCollectionOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  reference(op: ElideRelationshipOpCollectionReference = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ReferenceInput]): ReferenceConnection
+}
+
+type CollectionConnection {
+  edges: [CollectionEdge]
+  pageInfo: PageInfo
+}
+
+type CollectionEdge {
+  node: Collection
+}
+
+input CollectionInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  priority: Int
+  updatedBy: String
+  updatedDate: Date
+  item: [ItemInput]
+  organization: OrganizationInput
+  reference: [ReferenceInput]
+}
+
+"""Date"""
+scalar Date
+
+"""The DeferredID scalar type represents a unique identifier."""
+scalar DeferredID
+
+enum DeliveryState {
+  ACKED
+  SPOOLED
+  RECOVERED
+  EXPIRED
+  NOT_DURABLE
+}
+
+enum ElideRelationshipOpAccessWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpAction {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpAddress {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpAddressJob {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpAgentOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpCollectionItem {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpCollectionOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpCollectionReference {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpFederated {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpFederatedClaims {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpFederated_claimFederated {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpGithub_app_token {
+  FETCH
+}
+
+enum ElideRelationshipOpGlobalvarOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpHistoryWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpImplementation {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpImplementationVersion {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpItemCollection {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpJobAddress {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpJobOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpJobPolicyEvaluation {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpJobStep {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpJobWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpModuleOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpModuleSsh {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpModuleVcs {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpModuleVersion {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpModule_versionModule {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_configuration {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_configurationOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_configurationPolicySet {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_configurationTemplates {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_configurationTriggers {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_configurationWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_trigger {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpNotification_triggerConfiguration {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationAgent {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationCollection {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationGlobalvar {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationJob {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationModule {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationNotificationConfiguration {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationPolicyExemption {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationPolicySet {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationProject {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationProvider {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationSsh {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationTag {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationTeam {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationTemplate {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationVcs {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpOrganizationWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_attachmentPolicySet {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_attachmentProject {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_attachmentTag {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_attachmentWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_evaluationJob {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_evaluationOverride {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_evaluationStep {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_exemption {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_exemptionOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_exemptionPolicySet {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_exemptionProject {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_exemptionWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_overrideEvaluation {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_set {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_setAttachments {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_setExemptions {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_setNotificationConfiguration {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_setOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_setParameters {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_setVcs {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpPolicy_set_parameterPolicySet {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpProject {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpProjectOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpProjectProjectAccess {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpProject_accessProject {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpProviderOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpProviderVersion {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpReference {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpReferenceCollection {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpReferenceWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpRunTrigger {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpRunTriggerDestinationWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpRunTriggerSourceWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpRunTriggerTemplate {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpScheduleWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpSshOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpStepJob {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpStepPolicyEvaluation {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpTagOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpTeamOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpTemplate {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpTemplateOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpVariableWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpVcsOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpVcsWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpVersionImplementation {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpVersionProvider {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWebhook {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWebhookEvents {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWebhookWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWebhook_event {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWebhook_eventWebhook {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceAccess {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceAgent {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceHistory {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceJob {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceNotificationConfiguration {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceOrganization {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceProject {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceReference {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceRunTriggers {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceSchedule {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceSourceRunTriggers {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceSsh {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceVariable {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceVcs {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceWebhook {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspaceWorkspaceTag {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ElideRelationshipOpWorkspacetagWorkspace {
+  FETCH
+  DELETE
+  UPSERT
+  REPLACE
+  REMOVE
+  UPDATE
+}
+
+enum ExecutionMode {
+  local
+  remote
+}
+
+type Federated {
+  id: DeferredID
+  audience: String
+  issuerUrl: String
+  name: String
+  claims(op: ElideRelationshipOpFederatedClaims = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Federated_claimInput]): Federated_claimConnection
+}
+
+type FederatedConnection {
+  edges: [FederatedEdge]
+  pageInfo: PageInfo
+}
+
+type FederatedEdge {
+  node: Federated
+}
+
+input FederatedInput {
+  id: ID
+  audience: String
+  issuerUrl: String
+  name: String
+  claims: [Federated_claimInput]
+}
+
+type Federated_claim {
+  id: DeferredID
+  claimKey: String
+  claimValue: String
+  federated(op: ElideRelationshipOpFederated_claimFederated = FETCH, data: FederatedInput): FederatedConnection
+}
+
+type Federated_claimConnection {
+  edges: [Federated_claimEdge]
+  pageInfo: PageInfo
+}
+
+type Federated_claimEdge {
+  node: Federated_claim
+}
+
+input Federated_claimInput {
+  id: ID
+  claimKey: String
+  claimValue: String
+  federated: FederatedInput
+}
+
+type Github_app_token {
+  id: DeferredID
+  appId: String
+  createdBy: String
+  createdDate: Date
+  expiresAt: Instant
+  installationId: String
+  owner: String
+  token: String
+  updatedBy: String
+  updatedDate: Date
+}
+
+type Github_app_tokenConnection {
+  edges: [Github_app_tokenEdge]
+  pageInfo: PageInfo
+}
+
+type Github_app_tokenEdge {
+  node: Github_app_token
+}
+
+input Github_app_tokenInput {
+  id: ID
+  appId: String
+  createdBy: String
+  createdDate: Date
+  expiresAt: Instant
+  installationId: String
+  owner: String
+  token: String
+  updatedBy: String
+  updatedDate: Date
+}
+
+type Globalvar {
+  id: DeferredID
+  category: Category
+  description: String
+  hcl: Boolean
+  key: String
+  sensitive: Boolean
+  value: String
+  organization(op: ElideRelationshipOpGlobalvarOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+}
+
+type GlobalvarConnection {
+  edges: [GlobalvarEdge]
+  pageInfo: PageInfo
+}
+
+type GlobalvarEdge {
+  node: Globalvar
+}
+
+input GlobalvarInput {
+  id: ID
+  category: Category
+  description: String
+  hcl: Boolean
+  key: String
+  sensitive: Boolean
+  value: String
+  organization: OrganizationInput
+}
+
+type History {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  jobReference: String
+  lineage: String
+  md5: String
+  output: String
+  serial: Int
+  updatedBy: String
+  updatedDate: Date
+  workspace(op: ElideRelationshipOpHistoryWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type HistoryConnection {
+  edges: [HistoryEdge]
+  pageInfo: PageInfo
+}
+
+type HistoryEdge {
+  node: History
+}
+
+input HistoryInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  jobReference: String
+  lineage: String
+  md5: String
+  output: String
+  serial: Int
+  updatedBy: String
+  updatedDate: Date
+  workspace: WorkspaceInput
+}
+
+type Implementation {
+  id: DeferredID
+  arch: String
+  asciiArmor: String
+  downloadUrl: String
+  filename: String
+  keyId: String
+  os: String
+  shasum: String
+  shasumsSignatureUrl: String
+  shasumsUrl: String
+  source: String
+  sourceUrl: String
+  trustSignature: String
+  version(op: ElideRelationshipOpImplementationVersion = FETCH, data: VersionInput): VersionConnection
+}
+
+type ImplementationConnection {
+  edges: [ImplementationEdge]
+  pageInfo: PageInfo
+}
+
+type ImplementationEdge {
+  node: Implementation
+}
+
+input ImplementationInput {
+  id: ID
+  arch: String
+  asciiArmor: String
+  downloadUrl: String
+  filename: String
+  keyId: String
+  os: String
+  shasum: String
+  shasumsSignatureUrl: String
+  shasumsUrl: String
+  source: String
+  sourceUrl: String
+  trustSignature: String
+  version: VersionInput
+}
+
+"""Instant"""
+scalar Instant
+
+type Item {
+  id: DeferredID
+  category: Category
+  description: String
+  hcl: Boolean
+  key: String
+  sensitive: Boolean
+  value: String
+  collection(op: ElideRelationshipOpItemCollection = FETCH, data: CollectionInput): CollectionConnection
+}
+
+type ItemConnection {
+  edges: [ItemEdge]
+  pageInfo: PageInfo
+}
+
+type ItemEdge {
+  node: Item
+}
+
+input ItemInput {
+  id: ID
+  category: Category
+  description: String
+  hcl: Boolean
+  key: String
+  sensitive: Boolean
+  value: String
+  collection: CollectionInput
+}
+
+type Job {
+  id: DeferredID
+  approvalTeam: String
+  approvedAt: Date
+  approvedBy: String
+  cascadeDepth: Int
+  comments: String
+  commitId: String
+  createdBy: String
+  createdDate: Date
+  dispatchFailureCount: Int
+  dispatchFirstFailureAt: Date
+  dispatchLastAttemptAt: Date
+  dispatchLastError: String
+  dispatchNextRetryAt: Date
+  encryptedVariables: String
+  output: String
+  overrideBranch: String
+  overrideSource: String
+  planChanges: Boolean
+  prCommentError: String
+  prNumber: Int
+  refresh: Boolean
+  refreshOnly: Boolean
+  replaceAddrs: [String]
+  resolvedTerraformVersion: String
+  status: JobStatus
+  targetAddrs: [String]
+  templateReference: String
+  terraformPlan: String
+  terraformPlanArtifacts: String
+  terraformPlanArtifactsChecksum: String
+  triggeredByJobId: Int
+  updatedBy: String
+  updatedDate: Date
+  variableNames: [String]
+  variables: [StringStringMap]
+  variablesAsArguments: Boolean
+  via: String
+  address(op: ElideRelationshipOpJobAddress = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [AddressInput]): AddressConnection
+  organization(op: ElideRelationshipOpJobOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  policyEvaluation(op: ElideRelationshipOpJobPolicyEvaluation = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_evaluationInput]): Policy_evaluationConnection
+  step(op: ElideRelationshipOpJobStep = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [StepInput]): StepConnection
+  workspace(op: ElideRelationshipOpJobWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type JobConnection {
+  edges: [JobEdge]
+  pageInfo: PageInfo
+}
+
+type JobEdge {
+  node: Job
+}
+
+input JobInput {
+  id: ID
+  approvalTeam: String
+  approvedAt: Date
+  approvedBy: String
+  cascadeDepth: Int
+  comments: String
+  commitId: String
+  createdBy: String
+  createdDate: Date
+  dispatchFailureCount: Int
+  dispatchFirstFailureAt: Date
+  dispatchLastAttemptAt: Date
+  dispatchLastError: String
+  dispatchNextRetryAt: Date
+  encryptedVariables: String
+  output: String
+  overrideBranch: String
+  overrideSource: String
+  planChanges: Boolean
+  prCommentError: String
+  prNumber: Int
+  refresh: Boolean
+  refreshOnly: Boolean
+  replaceAddrs: [String]
+  resolvedTerraformVersion: String
+  status: JobStatus
+  targetAddrs: [String]
+  templateReference: String
+  terraformPlan: String
+  terraformPlanArtifacts: String
+  terraformPlanArtifactsChecksum: String
+  triggeredByJobId: Int
+  updatedBy: String
+  updatedDate: Date
+  variableNames: [String]
+  variables: [StringStringMapInput]
+  variablesAsArguments: Boolean
+  via: String
+  address: [AddressInput]
+  organization: OrganizationInput
+  policyEvaluation: [Policy_evaluationInput]
+  step: [StepInput]
+  workspace: WorkspaceInput
+}
+
+enum JobStatus {
+  pending
+  waitingApproval
+  approved
+  queue
+  running
+  completed
+  noChanges
+  notExecuted
+  rejected
+  cancelled
+  failed
+  unknown
+  NeverExecuted
+}
+
+type Module {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  description: String
+  downloadQuantity: Int
+  folder: String
+  lastRefresh: Date
+  lastRefreshError: String
+  lastTagDetectedAt: Date
+  latestVersion: String
+  name: String
+  nextRefresh: Date
+  provider: String
+  registryPath: String
+  source: String
+  tagPrefix: String
+  updatedBy: String
+  updatedDate: Date
+  organization(op: ElideRelationshipOpModuleOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  ssh(op: ElideRelationshipOpModuleSsh = FETCH, data: SshInput): SshConnection
+  vcs(op: ElideRelationshipOpModuleVcs = FETCH, data: VcsInput): VcsConnection
+  version(op: ElideRelationshipOpModuleVersion = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Module_versionInput]): Module_versionConnection
+}
+
+type ModuleConnection {
+  edges: [ModuleEdge]
+  pageInfo: PageInfo
+}
+
+type ModuleEdge {
+  node: Module
+}
+
+input ModuleInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  description: String
+  downloadQuantity: Int
+  folder: String
+  lastRefresh: Date
+  lastRefreshError: String
+  lastTagDetectedAt: Date
+  latestVersion: String
+  name: String
+  nextRefresh: Date
+  provider: String
+  registryPath: String
+  source: String
+  tagPrefix: String
+  updatedBy: String
+  updatedDate: Date
+  organization: OrganizationInput
+  ssh: SshInput
+  vcs: VcsInput
+  version: [Module_versionInput]
+}
+
+type Module_version {
+  id: DeferredID
+  commit: String
+  deprecationMessage: String
+  gitTag: String
+  status: VersionStatus
+  version: String
+  module(op: ElideRelationshipOpModule_versionModule = FETCH, data: ModuleInput): ModuleConnection
+}
+
+type Module_versionConnection {
+  edges: [Module_versionEdge]
+  pageInfo: PageInfo
+}
+
+type Module_versionEdge {
+  node: Module_version
+}
+
+input Module_versionInput {
+  id: ID
+  commit: String
+  deprecationMessage: String
+  gitTag: String
+  status: VersionStatus
+  version: String
+  module: ModuleInput
+}
+
+type Mutation {
+  address(op: ElideRelationshipOpAddress = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [AddressInput]): AddressConnection
+  template(op: ElideRelationshipOpTemplate = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [TemplateInput]): TemplateConnection
+  notification_configuration(op: ElideRelationshipOpNotification_configuration = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Notification_configurationInput]): Notification_configurationConnection
+  workspace(op: ElideRelationshipOpWorkspace = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [WorkspaceInput]): WorkspaceConnection
+  project(op: ElideRelationshipOpProject = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ProjectInput]): ProjectConnection
+  runTrigger(op: ElideRelationshipOpRunTrigger = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [RunTriggerInput]): RunTriggerConnection
+  federated(op: ElideRelationshipOpFederated = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [FederatedInput]): FederatedConnection
+  webhook(op: ElideRelationshipOpWebhook = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [WebhookInput]): WebhookConnection
+  notification_trigger(op: ElideRelationshipOpNotification_trigger = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Notification_triggerInput]): Notification_triggerConnection
+  implementation(op: ElideRelationshipOpImplementation = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ImplementationInput]): ImplementationConnection
+  organization(op: ElideRelationshipOpOrganization = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [OrganizationInput]): OrganizationConnection
+  webhook_event(op: ElideRelationshipOpWebhook_event = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Webhook_eventInput]): Webhook_eventConnection
+  github_app_token(op: ElideRelationshipOpGithub_app_token = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Github_app_tokenInput]): Github_app_tokenConnection
+  policy_set(op: ElideRelationshipOpPolicy_set = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Policy_setInput]): Policy_setConnection
+  action(op: ElideRelationshipOpAction = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ActionInput]): ActionConnection
+  policy_exemption(op: ElideRelationshipOpPolicy_exemption = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Policy_exemptionInput]): Policy_exemptionConnection
+  reference(op: ElideRelationshipOpReference = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ReferenceInput]): ReferenceConnection
+}
+
+enum NotificationChannelType {
+  SLACK
+  TEAMS
+  WEBHOOK
+}
+
+enum NotificationMessageStyle {
+  DETAILED
+  SIMPLE
+}
+
+type Notification_configuration {
+  id: DeferredID
+  active: Boolean
+  channelType: NotificationChannelType
+  createdBy: String
+  createdDate: Date
+  description: String
+  destinationUrl: String
+  messageStyle: NotificationMessageStyle
+  name: String
+  signingSecret: String
+  updatedBy: String
+  updatedDate: Date
+  organization(op: ElideRelationshipOpNotification_configurationOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  policySet(op: ElideRelationshipOpNotification_configurationPolicySet = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_setInput]): Policy_setConnection
+  templates(op: ElideRelationshipOpNotification_configurationTemplates = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [TemplateInput]): TemplateConnection
+  triggers(op: ElideRelationshipOpNotification_configurationTriggers = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Notification_triggerInput]): Notification_triggerConnection
+  workspace(op: ElideRelationshipOpNotification_configurationWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type Notification_configurationConnection {
+  edges: [Notification_configurationEdge]
+  pageInfo: PageInfo
+}
+
+type Notification_configurationEdge {
+  node: Notification_configuration
+}
+
+input Notification_configurationInput {
+  id: ID
+  active: Boolean
+  channelType: NotificationChannelType
+  createdBy: String
+  createdDate: Date
+  description: String
+  destinationUrl: String
+  messageStyle: NotificationMessageStyle
+  name: String
+  signingSecret: String
+  updatedBy: String
+  updatedDate: Date
+  organization: OrganizationInput
+  policySet: [Policy_setInput]
+  templates: [TemplateInput]
+  triggers: [Notification_triggerInput]
+  workspace: WorkspaceInput
+}
+
+type Notification_trigger {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  jobStatus: JobStatus
+  updatedBy: String
+  updatedDate: Date
+  configuration(op: ElideRelationshipOpNotification_triggerConfiguration = FETCH, data: Notification_configurationInput): Notification_configurationConnection
+}
+
+type Notification_triggerConnection {
+  edges: [Notification_triggerEdge]
+  pageInfo: PageInfo
+}
+
+type Notification_triggerEdge {
+  node: Notification_trigger
+}
+
+input Notification_triggerInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  jobStatus: JobStatus
+  updatedBy: String
+  updatedDate: Date
+  configuration: Notification_configurationInput
+}
+
+type Organization {
+  id: DeferredID
+  description: String
+  disabled: Boolean
+  executionMode: ExecutionMode
+  icon: String
+  name: String
+  agent(op: ElideRelationshipOpOrganizationAgent = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [AgentInput]): AgentConnection
+  collection(op: ElideRelationshipOpOrganizationCollection = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [CollectionInput]): CollectionConnection
+  globalvar(op: ElideRelationshipOpOrganizationGlobalvar = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [GlobalvarInput]): GlobalvarConnection
+  job(op: ElideRelationshipOpOrganizationJob = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [JobInput]): JobConnection
+  module(op: ElideRelationshipOpOrganizationModule = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ModuleInput]): ModuleConnection
+  notificationConfiguration(op: ElideRelationshipOpOrganizationNotificationConfiguration = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Notification_configurationInput]): Notification_configurationConnection
+  policyExemption(op: ElideRelationshipOpOrganizationPolicyExemption = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_exemptionInput]): Policy_exemptionConnection
+  policySet(op: ElideRelationshipOpOrganizationPolicySet = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_setInput]): Policy_setConnection
+  project(op: ElideRelationshipOpOrganizationProject = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ProjectInput]): ProjectConnection
+  provider(op: ElideRelationshipOpOrganizationProvider = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ProviderInput]): ProviderConnection
+  ssh(op: ElideRelationshipOpOrganizationSsh = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [SshInput]): SshConnection
+  tag(op: ElideRelationshipOpOrganizationTag = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [TagInput]): TagConnection
+  team(op: ElideRelationshipOpOrganizationTeam = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [TeamInput]): TeamConnection
+  template(op: ElideRelationshipOpOrganizationTemplate = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [TemplateInput]): TemplateConnection
+  vcs(op: ElideRelationshipOpOrganizationVcs = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [VcsInput]): VcsConnection
+  workspace(op: ElideRelationshipOpOrganizationWorkspace = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [WorkspaceInput]): WorkspaceConnection
+}
+
+type OrganizationConnection {
+  edges: [OrganizationEdge]
+  pageInfo: PageInfo
+}
+
+type OrganizationEdge {
+  node: Organization
+}
+
+input OrganizationInput {
+  id: ID
+  description: String
+  disabled: Boolean
+  executionMode: ExecutionMode
+  icon: String
+  name: String
+  agent: [AgentInput]
+  collection: [CollectionInput]
+  globalvar: [GlobalvarInput]
+  job: [JobInput]
+  module: [ModuleInput]
+  notificationConfiguration: [Notification_configurationInput]
+  policyExemption: [Policy_exemptionInput]
+  policySet: [Policy_setInput]
+  project: [ProjectInput]
+  provider: [ProviderInput]
+  ssh: [SshInput]
+  tag: [TagInput]
+  team: [TeamInput]
+  template: [TemplateInput]
+  vcs: [VcsInput]
+  workspace: [WorkspaceInput]
+}
+
+type PageInfo {
+  hasPreviousPage: Boolean
+  hasNextPage: Boolean
+  startCursor: String
+  endCursor: String
+  totalRecords: Int
+}
+
+enum PolicyComplianceStatus {
+  COMPLIANT
+  NON_COMPLIANT
+  EXEMPTED
+  UNKNOWN
+}
+
+enum PolicyEnforcementLevel {
+  ADVISORY
+  SOFT_MANDATORY
+  HARD_MANDATORY
+}
+
+enum PolicyEvaluationStatus {
+  PASSED
+  FAILED
+  WARNING
+  EXEMPTED
+  OVERRIDDEN
+}
+
+type Policy_attachment {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  updatedBy: String
+  updatedDate: Date
+  policySet(op: ElideRelationshipOpPolicy_attachmentPolicySet = FETCH, data: Policy_setInput): Policy_setConnection
+  project(op: ElideRelationshipOpPolicy_attachmentProject = FETCH, data: ProjectInput): ProjectConnection
+  tag(op: ElideRelationshipOpPolicy_attachmentTag = FETCH, data: TagInput): TagConnection
+  workspace(op: ElideRelationshipOpPolicy_attachmentWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type Policy_attachmentConnection {
+  edges: [Policy_attachmentEdge]
+  pageInfo: PageInfo
+}
+
+type Policy_attachmentEdge {
+  node: Policy_attachment
+}
+
+input Policy_attachmentInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  updatedBy: String
+  updatedDate: Date
+  policySet: Policy_setInput
+  project: ProjectInput
+  tag: TagInput
+  workspace: WorkspaceInput
+}
+
+type Policy_evaluation {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  hardMandatoryViolations: Int
+  passedRules: Int
+  shadowHardViolations: Int
+  shadowSoftViolations: Int
+  softMandatoryViolations: Int
+  status: PolicyEvaluationStatus
+  storageUri: String
+  updatedBy: String
+  updatedDate: Date
+  warningRules: Int
+  job(op: ElideRelationshipOpPolicy_evaluationJob = FETCH, data: JobInput): JobConnection
+  override(op: ElideRelationshipOpPolicy_evaluationOverride = FETCH, data: Policy_overrideInput): Policy_overrideConnection
+  step(op: ElideRelationshipOpPolicy_evaluationStep = FETCH, data: StepInput): StepConnection
+}
+
+type Policy_evaluationConnection {
+  edges: [Policy_evaluationEdge]
+  pageInfo: PageInfo
+}
+
+type Policy_evaluationEdge {
+  node: Policy_evaluation
+}
+
+input Policy_evaluationInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  hardMandatoryViolations: Int
+  passedRules: Int
+  shadowHardViolations: Int
+  shadowSoftViolations: Int
+  softMandatoryViolations: Int
+  status: PolicyEvaluationStatus
+  storageUri: String
+  updatedBy: String
+  updatedDate: Date
+  warningRules: Int
+  job: JobInput
+  override: Policy_overrideInput
+  step: StepInput
+}
+
+type Policy_exemption {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  expiresAt: Date
+  justification: String
+  ruleId: String
+  ticketReference: String
+  updatedBy: String
+  updatedDate: Date
+  organization(op: ElideRelationshipOpPolicy_exemptionOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  policySet(op: ElideRelationshipOpPolicy_exemptionPolicySet = FETCH, data: Policy_setInput): Policy_setConnection
+  project(op: ElideRelationshipOpPolicy_exemptionProject = FETCH, data: ProjectInput): ProjectConnection
+  workspace(op: ElideRelationshipOpPolicy_exemptionWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type Policy_exemptionConnection {
+  edges: [Policy_exemptionEdge]
+  pageInfo: PageInfo
+}
+
+type Policy_exemptionEdge {
+  node: Policy_exemption
+}
+
+input Policy_exemptionInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  expiresAt: Date
+  justification: String
+  ruleId: String
+  ticketReference: String
+  updatedBy: String
+  updatedDate: Date
+  organization: OrganizationInput
+  policySet: Policy_setInput
+  project: ProjectInput
+  workspace: WorkspaceInput
+}
+
+type Policy_override {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  justification: String
+  overriddenAt: Date
+  overriddenBy: String
+  updatedBy: String
+  updatedDate: Date
+  evaluation(op: ElideRelationshipOpPolicy_overrideEvaluation = FETCH, data: Policy_evaluationInput): Policy_evaluationConnection
+}
+
+type Policy_overrideConnection {
+  edges: [Policy_overrideEdge]
+  pageInfo: PageInfo
+}
+
+type Policy_overrideEdge {
+  node: Policy_override
+}
+
+input Policy_overrideInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  justification: String
+  overriddenAt: Date
+  overriddenBy: String
+  updatedBy: String
+  updatedDate: Date
+  evaluation: Policy_evaluationInput
+}
+
+type Policy_set {
+  id: DeferredID
+  branch: String
+  createdBy: String
+  createdDate: Date
+  description: String
+  enforcementLevel: PolicyEnforcementLevel
+  folder: String
+  global: Boolean
+  name: String
+  opaVersion: String
+  overrideTeam: String
+  repository: String
+  shadowEnforcementLevel: PolicyEnforcementLevel
+  updatedBy: String
+  updatedDate: Date
+  attachments(op: ElideRelationshipOpPolicy_setAttachments = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_attachmentInput]): Policy_attachmentConnection
+  exemptions(op: ElideRelationshipOpPolicy_setExemptions = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_exemptionInput]): Policy_exemptionConnection
+  notificationConfiguration(op: ElideRelationshipOpPolicy_setNotificationConfiguration = FETCH, data: Notification_configurationInput): Notification_configurationConnection
+  organization(op: ElideRelationshipOpPolicy_setOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  parameters(op: ElideRelationshipOpPolicy_setParameters = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_set_parameterInput]): Policy_set_parameterConnection
+  vcs(op: ElideRelationshipOpPolicy_setVcs = FETCH, data: VcsInput): VcsConnection
+}
+
+type Policy_setConnection {
+  edges: [Policy_setEdge]
+  pageInfo: PageInfo
+}
+
+type Policy_setEdge {
+  node: Policy_set
+}
+
+input Policy_setInput {
+  id: ID
+  branch: String
+  createdBy: String
+  createdDate: Date
+  description: String
+  enforcementLevel: PolicyEnforcementLevel
+  folder: String
+  global: Boolean
+  name: String
+  opaVersion: String
+  overrideTeam: String
+  repository: String
+  shadowEnforcementLevel: PolicyEnforcementLevel
+  updatedBy: String
+  updatedDate: Date
+  attachments: [Policy_attachmentInput]
+  exemptions: [Policy_exemptionInput]
+  notificationConfiguration: Notification_configurationInput
+  organization: OrganizationInput
+  parameters: [Policy_set_parameterInput]
+  vcs: VcsInput
+}
+
+type Policy_set_parameter {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  description: String
+  key: String
+  updatedBy: String
+  updatedDate: Date
+  value: String
+  policySet(op: ElideRelationshipOpPolicy_set_parameterPolicySet = FETCH, data: Policy_setInput): Policy_setConnection
+}
+
+type Policy_set_parameterConnection {
+  edges: [Policy_set_parameterEdge]
+  pageInfo: PageInfo
+}
+
+type Policy_set_parameterEdge {
+  node: Policy_set_parameter
+}
+
+input Policy_set_parameterInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  description: String
+  key: String
+  updatedBy: String
+  updatedDate: Date
+  value: String
+  policySet: Policy_setInput
+}
+
+type Project {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  updatedBy: String
+  updatedDate: Date
+  organization(op: ElideRelationshipOpProjectOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  projectAccess(op: ElideRelationshipOpProjectProjectAccess = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Project_accessInput]): Project_accessConnection
+}
+
+type ProjectConnection {
+  edges: [ProjectEdge]
+  pageInfo: PageInfo
+}
+
+type ProjectEdge {
+  node: Project
+}
+
+input ProjectInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  updatedBy: String
+  updatedDate: Date
+  organization: OrganizationInput
+  projectAccess: [Project_accessInput]
+}
+
+type Project_access {
+  id: DeferredID
+  approveJob: Boolean
+  destroyJob: Boolean
+  manageJob: Boolean
+  manageState: Boolean
+  manageWorkspace: Boolean
+  name: String
+  planJob: Boolean
+  role: String
+  project(op: ElideRelationshipOpProject_accessProject = FETCH, data: ProjectInput): ProjectConnection
+}
+
+type Project_accessConnection {
+  edges: [Project_accessEdge]
+  pageInfo: PageInfo
+}
+
+type Project_accessEdge {
+  node: Project_access
+}
+
+input Project_accessInput {
+  id: ID
+  approveJob: Boolean
+  destroyJob: Boolean
+  manageJob: Boolean
+  manageState: Boolean
+  manageWorkspace: Boolean
+  name: String
+  planJob: Boolean
+  role: String
+  project: ProjectInput
+}
+
+type Provider {
+  id: DeferredID
+  description: String
+  imported: Boolean
+  name: String
+  registryNamespace: String
+  organization(op: ElideRelationshipOpProviderOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  version(op: ElideRelationshipOpProviderVersion = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [VersionInput]): VersionConnection
+}
+
+type ProviderConnection {
+  edges: [ProviderEdge]
+  pageInfo: PageInfo
+}
+
+type ProviderEdge {
+  node: Provider
+}
+
+input ProviderInput {
+  id: ID
+  description: String
+  imported: Boolean
+  name: String
+  registryNamespace: String
+  organization: OrganizationInput
+  version: [VersionInput]
+}
+
+type Query {
+  address(op: ElideRelationshipOpAddress = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [AddressInput]): AddressConnection
+  template(op: ElideRelationshipOpTemplate = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [TemplateInput]): TemplateConnection
+  notification_configuration(op: ElideRelationshipOpNotification_configuration = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Notification_configurationInput]): Notification_configurationConnection
+  workspace(op: ElideRelationshipOpWorkspace = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [WorkspaceInput]): WorkspaceConnection
+  project(op: ElideRelationshipOpProject = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ProjectInput]): ProjectConnection
+  runTrigger(op: ElideRelationshipOpRunTrigger = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [RunTriggerInput]): RunTriggerConnection
+  federated(op: ElideRelationshipOpFederated = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [FederatedInput]): FederatedConnection
+  webhook(op: ElideRelationshipOpWebhook = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [WebhookInput]): WebhookConnection
+  notification_trigger(op: ElideRelationshipOpNotification_trigger = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Notification_triggerInput]): Notification_triggerConnection
+  implementation(op: ElideRelationshipOpImplementation = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ImplementationInput]): ImplementationConnection
+  organization(op: ElideRelationshipOpOrganization = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [OrganizationInput]): OrganizationConnection
+  webhook_event(op: ElideRelationshipOpWebhook_event = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Webhook_eventInput]): Webhook_eventConnection
+  github_app_token(op: ElideRelationshipOpGithub_app_token = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Github_app_tokenInput]): Github_app_tokenConnection
+  policy_set(op: ElideRelationshipOpPolicy_set = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Policy_setInput]): Policy_setConnection
+  action(op: ElideRelationshipOpAction = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ActionInput]): ActionConnection
+  policy_exemption(op: ElideRelationshipOpPolicy_exemption = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [Policy_exemptionInput]): Policy_exemptionConnection
+  reference(op: ElideRelationshipOpReference = FETCH, ids: [String], filter: String, sort: String, first: StringOrInt, after: StringOrInt, data: [ReferenceInput]): ReferenceConnection
+}
+
+type Reference {
+  id: DeferredID
+  description: String
+  collection(op: ElideRelationshipOpReferenceCollection = FETCH, data: CollectionInput): CollectionConnection
+  workspace(op: ElideRelationshipOpReferenceWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type ReferenceConnection {
+  edges: [ReferenceEdge]
+  pageInfo: PageInfo
+}
+
+type ReferenceEdge {
+  node: Reference
+}
+
+input ReferenceInput {
+  id: ID
+  description: String
+  collection: CollectionInput
+  workspace: WorkspaceInput
+}
+
+type RunTrigger {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  enabled: Boolean
+  updatedBy: String
+  updatedDate: Date
+  destinationWorkspace(op: ElideRelationshipOpRunTriggerDestinationWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+  sourceWorkspace(op: ElideRelationshipOpRunTriggerSourceWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+  template(op: ElideRelationshipOpRunTriggerTemplate = FETCH, data: TemplateInput): TemplateConnection
+}
+
+type RunTriggerConnection {
+  edges: [RunTriggerEdge]
+  pageInfo: PageInfo
+}
+
+type RunTriggerEdge {
+  node: RunTrigger
+}
+
+input RunTriggerInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  enabled: Boolean
+  updatedBy: String
+  updatedDate: Date
+  destinationWorkspace: WorkspaceInput
+  sourceWorkspace: WorkspaceInput
+  template: TemplateInput
+}
+
+type Schedule {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  cron: String
+  description: String
+  enabled: Boolean
+  templateReference: String
+  updatedBy: String
+  updatedDate: Date
+  workspace(op: ElideRelationshipOpScheduleWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type ScheduleConnection {
+  edges: [ScheduleEdge]
+  pageInfo: PageInfo
+}
+
+type ScheduleEdge {
+  node: Schedule
+}
+
+input ScheduleInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  cron: String
+  description: String
+  enabled: Boolean
+  templateReference: String
+  updatedBy: String
+  updatedDate: Date
+  workspace: WorkspaceInput
+}
+
+type Ssh {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  privateKey: String
+  sshType: SshType
+  updatedBy: String
+  updatedDate: Date
+  organization(op: ElideRelationshipOpSshOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+}
+
+type SshConnection {
+  edges: [SshEdge]
+  pageInfo: PageInfo
+}
+
+type SshEdge {
+  node: Ssh
+}
+
+input SshInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  privateKey: String
+  sshType: SshType
+  updatedBy: String
+  updatedDate: Date
+  organization: OrganizationInput
+}
+
+enum SshType {
+  rsa
+  ed25519
+}
+
+type Step {
+  id: DeferredID
+  deliveryRevision: BigInteger
+  deliveryState: DeliveryState
+  deliveryTimestamp: BigInteger
+  name: String
+  output: String
+  status: JobStatus
+  stepNumber: Int
+  job(op: ElideRelationshipOpStepJob = FETCH, data: JobInput): JobConnection
+  policyEvaluation(op: ElideRelationshipOpStepPolicyEvaluation = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Policy_evaluationInput]): Policy_evaluationConnection
+}
+
+type StepConnection {
+  edges: [StepEdge]
+  pageInfo: PageInfo
+}
+
+type StepEdge {
+  node: Step
+}
+
+input StepInput {
+  id: ID
+  deliveryRevision: BigInteger
+  deliveryState: DeliveryState
+  deliveryTimestamp: BigInteger
+  name: String
+  output: String
+  status: JobStatus
+  stepNumber: Int
+  job: JobInput
+  policyEvaluation: [Policy_evaluationInput]
+}
+
+"""
+The `StringOrInt` scalar type represents a type that can accept either a `String` textual value or `Int` non-fractional signed whole numeric values.
+"""
+scalar StringOrInt
+
+type StringStringMap {
+  key: String
+  value: String
+}
+
+input StringStringMapInput {
+  key: String
+  value: String
+}
+
+type Tag {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  name: String
+  updatedBy: String
+  updatedDate: Date
+  organization(op: ElideRelationshipOpTagOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+}
+
+type TagConnection {
+  edges: [TagEdge]
+  pageInfo: PageInfo
+}
+
+type TagEdge {
+  node: Tag
+}
+
+input TagInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  name: String
+  updatedBy: String
+  updatedDate: Date
+  organization: OrganizationInput
+}
+
+type Team {
+  id: DeferredID
+  approveJob: Boolean
+  destroyJob: Boolean
+  manageCollection: Boolean
+  manageJob: Boolean
+  manageModule: Boolean
+  managePolicies: Boolean
+  manageProvider: Boolean
+  manageState: Boolean
+  manageTemplate: Boolean
+  manageVcs: Boolean
+  manageWorkspace: Boolean
+  name: String
+  planJob: Boolean
+  role: String
+  organization(op: ElideRelationshipOpTeamOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+}
+
+type TeamConnection {
+  edges: [TeamEdge]
+  pageInfo: PageInfo
+}
+
+type TeamEdge {
+  node: Team
+}
+
+input TeamInput {
+  id: ID
+  approveJob: Boolean
+  destroyJob: Boolean
+  manageCollection: Boolean
+  manageJob: Boolean
+  manageModule: Boolean
+  managePolicies: Boolean
+  manageProvider: Boolean
+  manageState: Boolean
+  manageTemplate: Boolean
+  manageVcs: Boolean
+  manageWorkspace: Boolean
+  name: String
+  planJob: Boolean
+  role: String
+  organization: OrganizationInput
+}
+
+type Template {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  tcl: String
+  updatedBy: String
+  updatedDate: Date
+  version: String
+  organization(op: ElideRelationshipOpTemplateOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+}
+
+type TemplateConnection {
+  edges: [TemplateEdge]
+  pageInfo: PageInfo
+}
+
+type TemplateEdge {
+  node: Template
+}
+
+input TemplateInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  description: String
+  name: String
+  tcl: String
+  updatedBy: String
+  updatedDate: Date
+  version: String
+  organization: OrganizationInput
+}
+
+type Variable {
+  id: DeferredID
+  category: Category
+  description: String
+  hcl: Boolean
+  incomplete: Boolean
+  key: String
+  sensitive: Boolean
+  value: String
+  workspace(op: ElideRelationshipOpVariableWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type VariableConnection {
+  edges: [VariableEdge]
+  pageInfo: PageInfo
+}
+
+type VariableEdge {
+  node: Variable
+}
+
+input VariableInput {
+  id: ID
+  category: Category
+  description: String
+  hcl: Boolean
+  incomplete: Boolean
+  key: String
+  sensitive: Boolean
+  value: String
+  workspace: WorkspaceInput
+}
+
+type Vcs {
+  id: DeferredID
+  accessToken: String
+  apiUrl: String
+  callback: String
+  clientId: String
+  clientSecret: String
+  connectionType: VcsConnectionType
+  createdBy: String
+  createdDate: Date
+  description: String
+  endpoint: String
+  name: String
+  privateKey: String
+  redirectUrl: String
+  status: VcsStatus
+  updatedBy: String
+  updatedDate: Date
+  vcsType: VcsType
+  organization(op: ElideRelationshipOpVcsOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  workspace(op: ElideRelationshipOpVcsWorkspace = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [WorkspaceInput]): WorkspaceConnection
+}
+
+type VcsConnection {
+  edges: [VcsEdge]
+  pageInfo: PageInfo
+}
+
+enum VcsConnectionType {
+  OAUTH
+  STANDALONE
+}
+
+type VcsEdge {
+  node: Vcs
+}
+
+input VcsInput {
+  id: ID
+  accessToken: String
+  apiUrl: String
+  callback: String
+  clientId: String
+  clientSecret: String
+  connectionType: VcsConnectionType
+  createdBy: String
+  createdDate: Date
+  description: String
+  endpoint: String
+  name: String
+  privateKey: String
+  redirectUrl: String
+  status: VcsStatus
+  updatedBy: String
+  updatedDate: Date
+  vcsType: VcsType
+  organization: OrganizationInput
+  workspace: [WorkspaceInput]
+}
+
+enum VcsStatus {
+  PENDING
+  COMPLETED
+  ERROR
+}
+
+enum VcsType {
+  GITHUB
+  GITLAB
+  BITBUCKET
+  AZURE_DEVOPS
+  AZURE_SP_MI
+  PUBLIC
+}
+
+type Version {
+  id: DeferredID
+  deprecationMessage: String
+  protocols: String
+  status: VersionStatus
+  versionNumber: String
+  implementation(op: ElideRelationshipOpVersionImplementation = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ImplementationInput]): ImplementationConnection
+  provider(op: ElideRelationshipOpVersionProvider = FETCH, data: ProviderInput): ProviderConnection
+}
+
+type VersionConnection {
+  edges: [VersionEdge]
+  pageInfo: PageInfo
+}
+
+type VersionEdge {
+  node: Version
+}
+
+input VersionInput {
+  id: ID
+  deprecationMessage: String
+  protocols: String
+  status: VersionStatus
+  versionNumber: String
+  implementation: [ImplementationInput]
+  provider: ProviderInput
+}
+
+enum VersionStatus {
+  active
+  deprecated
+  removed
+}
+
+type Webhook {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  migratedV2: Boolean
+  remoteHookId: String
+  syncError: String
+  updatedBy: String
+  updatedDate: Date
+  events(op: ElideRelationshipOpWebhookEvents = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Webhook_eventInput]): Webhook_eventConnection
+  workspace(op: ElideRelationshipOpWebhookWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type WebhookConnection {
+  edges: [WebhookEdge]
+  pageInfo: PageInfo
+}
+
+type WebhookEdge {
+  node: Webhook
+}
+
+enum WebhookEventPathType {
+  PATTERN
+  REGEX
+}
+
+enum WebhookEventType {
+  PUSH
+  PULL_REQUEST
+  PR_COMMENT
+  PING
+  RELEASE
+  UNKNOWN
+}
+
+input WebhookInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  migratedV2: Boolean
+  remoteHookId: String
+  syncError: String
+  updatedBy: String
+  updatedDate: Date
+  events: [Webhook_eventInput]
+  workspace: WorkspaceInput
+}
+
+type Webhook_event {
+  id: DeferredID
+  branch: String
+  createdBy: String
+  createdDate: Date
+  event: WebhookEventType
+  path: String
+  pathType: WebhookEventPathType
+  prApplyEnabled: Boolean
+  priority: Int
+  prWorkflowEnabled: Boolean
+  templateId: String
+  updatedBy: String
+  updatedDate: Date
+  webhook(op: ElideRelationshipOpWebhook_eventWebhook = FETCH, data: WebhookInput): WebhookConnection
+}
+
+type Webhook_eventConnection {
+  edges: [Webhook_eventEdge]
+  pageInfo: PageInfo
+}
+
+type Webhook_eventEdge {
+  node: Webhook_event
+}
+
+input Webhook_eventInput {
+  id: ID
+  branch: String
+  createdBy: String
+  createdDate: Date
+  event: WebhookEventType
+  path: String
+  pathType: WebhookEventPathType
+  prApplyEnabled: Boolean
+  priority: Int
+  prWorkflowEnabled: Boolean
+  templateId: String
+  updatedBy: String
+  updatedDate: Date
+  webhook: WebhookInput
+}
+
+type Workspace {
+  id: DeferredID
+  allowRemoteApply: Boolean
+  branch: String
+  createdBy: String
+  createdDate: Date
+  defaultTemplate: String
+  deleted: Boolean
+  description: String
+  executionMode: ExecutionMode
+  folder: String
+  globalRemoteState: Boolean
+  iacType: String
+  lastJobDate: Date
+  lastJobStatus: JobStatus
+  lockDescription: String
+  locked: Boolean
+  moduleSshKey: String
+  name: String
+  policyComplianceStatus: PolicyComplianceStatus
+  requireApproveToApply: Boolean
+  restrictApplyToConfiguredBranch: Boolean
+  sharedIds: String
+  source: String
+  terraformVersion: String
+  updatedBy: String
+  updatedDate: Date
+  access(op: ElideRelationshipOpWorkspaceAccess = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [AccessInput]): AccessConnection
+  agent(op: ElideRelationshipOpWorkspaceAgent = FETCH, data: AgentInput): AgentConnection
+  history(op: ElideRelationshipOpWorkspaceHistory = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [HistoryInput]): HistoryConnection
+  job(op: ElideRelationshipOpWorkspaceJob = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [JobInput]): JobConnection
+  notificationConfiguration(op: ElideRelationshipOpWorkspaceNotificationConfiguration = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [Notification_configurationInput]): Notification_configurationConnection
+  organization(op: ElideRelationshipOpWorkspaceOrganization = FETCH, data: OrganizationInput): OrganizationConnection
+  project(op: ElideRelationshipOpWorkspaceProject = FETCH, data: ProjectInput): ProjectConnection
+  reference(op: ElideRelationshipOpWorkspaceReference = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ReferenceInput]): ReferenceConnection
+  runTriggers(op: ElideRelationshipOpWorkspaceRunTriggers = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [RunTriggerInput]): RunTriggerConnection
+  schedule(op: ElideRelationshipOpWorkspaceSchedule = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [ScheduleInput]): ScheduleConnection
+  sourceRunTriggers(op: ElideRelationshipOpWorkspaceSourceRunTriggers = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [RunTriggerInput]): RunTriggerConnection
+  ssh(op: ElideRelationshipOpWorkspaceSsh = FETCH, data: SshInput): SshConnection
+  variable(op: ElideRelationshipOpWorkspaceVariable = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [VariableInput]): VariableConnection
+  vcs(op: ElideRelationshipOpWorkspaceVcs = FETCH, data: VcsInput): VcsConnection
+  webhook(op: ElideRelationshipOpWorkspaceWebhook = FETCH, data: WebhookInput): WebhookConnection
+  workspaceTag(op: ElideRelationshipOpWorkspaceWorkspaceTag = FETCH, filter: String, sort: String, after: StringOrInt, first: StringOrInt, ids: [String], data: [WorkspacetagInput]): WorkspacetagConnection
+}
+
+type WorkspaceConnection {
+  edges: [WorkspaceEdge]
+  pageInfo: PageInfo
+}
+
+type WorkspaceEdge {
+  node: Workspace
+}
+
+input WorkspaceInput {
+  id: ID
+  allowRemoteApply: Boolean
+  branch: String
+  createdBy: String
+  createdDate: Date
+  defaultTemplate: String
+  deleted: Boolean
+  description: String
+  executionMode: ExecutionMode
+  folder: String
+  globalRemoteState: Boolean
+  iacType: String
+  lastJobDate: Date
+  lastJobStatus: JobStatus
+  lockDescription: String
+  locked: Boolean
+  moduleSshKey: String
+  name: String
+  policyComplianceStatus: PolicyComplianceStatus
+  requireApproveToApply: Boolean
+  restrictApplyToConfiguredBranch: Boolean
+  sharedIds: String
+  source: String
+  terraformVersion: String
+  updatedBy: String
+  updatedDate: Date
+  access: [AccessInput]
+  agent: AgentInput
+  history: [HistoryInput]
+  job: [JobInput]
+  notificationConfiguration: [Notification_configurationInput]
+  organization: OrganizationInput
+  project: ProjectInput
+  reference: [ReferenceInput]
+  runTriggers: [RunTriggerInput]
+  schedule: [ScheduleInput]
+  sourceRunTriggers: [RunTriggerInput]
+  ssh: SshInput
+  variable: [VariableInput]
+  vcs: VcsInput
+  webhook: WebhookInput
+  workspaceTag: [WorkspacetagInput]
+}
+
+type Workspacetag {
+  id: DeferredID
+  createdBy: String
+  createdDate: Date
+  tagId: String
+  updatedBy: String
+  updatedDate: Date
+  value: String
+  workspace(op: ElideRelationshipOpWorkspacetagWorkspace = FETCH, data: WorkspaceInput): WorkspaceConnection
+}
+
+type WorkspacetagConnection {
+  edges: [WorkspacetagEdge]
+  pageInfo: PageInfo
+}
+
+type WorkspacetagEdge {
+  node: Workspacetag
+}
+
+input WorkspacetagInput {
+  id: ID
+  createdBy: String
+  createdDate: Date
+  tagId: String
+  updatedBy: String
+  updatedDate: Date
+  value: String
+  workspace: WorkspaceInput
+}
