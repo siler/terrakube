@@ -139,7 +139,6 @@ const withTimeout = (parent: AbortSignal, ms: number) => {
 };
 
 type Params = {
-  orgid: string;
   runid: string;
 };
 
@@ -150,9 +149,8 @@ export const WorkspaceDetails = ({
   settingsSection,
 }: Props) => {
   const id = useRequiredParam("id");
-  const { orgid, runid } = useParams<Params>();
-  // Links without an organization (`/workspaces/:id/...`) use the organization this tab last visited.
-  const organizationId = orgid || sessionStorage.getItem(ORGANIZATION_ARCHIVE) || "";
+  const organizationId = useRequiredParam("orgid");
+  const { runid } = useParams<Params>();
   sessionStorage.setItem(ORGANIZATION_ARCHIVE, organizationId);
   sessionStorage.setItem(WORKSPACE_ARCHIVE, id);
   const [workspace, setWorkspace] = useState<WorkspacePageRow>();
