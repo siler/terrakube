@@ -59,6 +59,9 @@ const WorkspaceDetails = lazy(() =>
 const RunRedirectRoute = lazy(() =>
   import("../Workspaces/RunRedirectRoute").then((module) => ({ default: module.RunRedirectRoute }))
 );
+const WorkspaceOrgRedirect = lazy(() =>
+  import("../Workspaces/WorkspaceOrgRedirect").then((module) => ({ default: module.WorkspaceOrgRedirect }))
+);
 
 // Modules and registry
 const CreateModule = lazy(() => import("../Modules/Create").then((module) => ({ default: module.CreateModule })));
@@ -340,9 +343,8 @@ const router = createBrowserRouter(
           element: <ImportWorkspace />,
         },
         {
-          path: "/workspaces/:id",
-          element: <WorkspaceDetailsRoute />,
-          handle: workspacePage,
+          path: "/workspaces/:id/*",
+          element: <WorkspaceOrgRedirect />,
         },
         {
           path: "/organizations/:orgid/workspaces/:id",
@@ -350,17 +352,7 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/runs",
-          element: <WorkspaceDetailsRoute selectedTab="2" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/runs",
-          element: <WorkspaceDetailsRoute selectedTab="2" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/runs/:runid",
           element: <WorkspaceDetailsRoute selectedTab="2" />,
           handle: workspacePage,
         },
@@ -374,18 +366,8 @@ const router = createBrowserRouter(
           element: <RunRedirectRoute />,
         },
         {
-          path: "/workspaces/:id/states",
-          element: <WorkspaceDetailsRoute selectedTab="3" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/states",
           element: <WorkspaceDetailsRoute selectedTab="3" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/variables",
-          element: <WorkspaceDetailsRoute selectedTab="4" />,
           handle: workspacePage,
         },
         {
@@ -394,18 +376,8 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/schedules",
-          element: <WorkspaceDetailsRoute selectedTab="5" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/schedules",
           element: <WorkspaceDetailsRoute selectedTab="5" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/run-triggers",
-          element: <WorkspaceDetailsRoute selectedTab="7" />,
           handle: workspacePage,
         },
         {
@@ -414,18 +386,8 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/settings",
-          element: <WorkspaceDetailsRoute selectedTab="6" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/settings",
           element: <WorkspaceDetailsRoute selectedTab="6" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/settings/general",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="general" />,
           handle: workspacePage,
         },
         {
@@ -434,18 +396,8 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/settings/policies",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="policies" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/settings/policies",
           element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="policies" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/settings/locking",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="locking" />,
           handle: workspacePage,
         },
         {
@@ -454,18 +406,8 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/settings/sshkey",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="sshkey" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/settings/sshkey",
           element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="sshkey" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/settings/webhook",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="webhook" />,
           handle: workspacePage,
         },
         {
@@ -474,18 +416,8 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/settings/notifications",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="notifications" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/settings/notifications",
           element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="notifications" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/settings/state-shared",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="state-shared" />,
           handle: workspacePage,
         },
         {
@@ -494,18 +426,8 @@ const router = createBrowserRouter(
           handle: workspacePage,
         },
         {
-          path: "/workspaces/:id/settings/team-access",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="team-access" />,
-          handle: workspacePage,
-        },
-        {
           path: "/organizations/:orgid/workspaces/:id/settings/team-access",
           element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="team-access" />,
-          handle: workspacePage,
-        },
-        {
-          path: "/workspaces/:id/settings/advanced",
-          element: <WorkspaceDetailsRoute selectedTab="6" settingsSection="advanced" />,
           handle: workspacePage,
         },
         {

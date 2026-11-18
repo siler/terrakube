@@ -1,8 +1,36 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { axiosGraphQL } from "@/config/axiosConfig";
+import { filterFor } from "@/domain/generated/apiPaths";
+import { graphql } from "@/domain/generated/graphql";
+import { connectionNodes, graphqlRequest } from "@/modules/api/graphqlRequest";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
 import { ErrorState } from "@/components/feedback/ErrorState";
+
+const ResolveRun = graphql(`
+  query ResolveRun($orgFilter: String!, $wsFilter: String!, $jobFilter: String!) {
+    organization(filter: $orgFilter) {
+      edges {
+        node {
+          id
+          workspace(filter: $wsFilter) {
+            edges {
+              node {
+                id
+                job(filter: $jobFilter) {
+                  edges {
+                    node {
+                      id
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
 
 const UNAUTHORIZED_MESSAGE = "You are not authorized to view this run or the workspace does not exist.";
 
@@ -23,60 +51,20 @@ export const RunRedirectRoute = () => {
       const cleanRunId = runid.replace(/^run-/, "");
 
       try {
-        const body = {
-          query: `query ResolveRun($orgFilter: String, $wsFilter: String, $jobFilter: String) {
-            organization(filter: $orgFilter) {
-              edges {
-                node {
-                  id
-                  name
-                  workspace(filter: $wsFilter) {
-                    edges {
-                      node {
-                        id
-                        name
-                        job(filter: $jobFilter) {
-                          edges {
-                            node {
-                              id
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }`,
-          variables: {
-            orgFilter: `name=="${orgName}"`,
-            wsFilter: `name=="${wsName}"`,
-            jobFilter: `id=="${cleanRunId}"`,
-          },
-        };
-
-        const response = await axiosGraphQL.post("", body, {
-          headers: { "Content-Type": "application/json" },
+        const data = await graphqlRequest(ResolveRun, {
+          orgFilter: filterFor("organization", (o) => o.name.eq(orgName)),
+          wsFilter: filterFor("workspace", (w) => w.name.eq(wsName)),
+          jobFilter: filterFor("job", (j) => j.id.eq(cleanRunId)),
         });
 
         if (!isMounted) return;
 
-        if (response.data?.errors?.length) {
-          setError(UNAUTHORIZED_MESSAGE);
-          return;
-        }
+        const orgNode = connectionNodes(data.organization)[0];
+        const wsNode = connectionNodes(orgNode?.workspace)[0];
+        const jobNode = connectionNodes(wsNode?.job)[0];
 
-        const orgNode = response.data?.data?.organization?.edges?.[0]?.node;
-        const wsNode = orgNode?.workspace?.edges?.[0]?.node;
-        const jobNode = wsNode?.job?.edges?.[0]?.node;
-
-        const orgId = orgNode?.id;
-        const wsId = wsNode?.id;
-        const jobId = jobNode?.id;
-
-        if (orgId && wsId && jobId) {
-          navigate(`/organizations/${orgId}/workspaces/${wsId}/runs/${cleanRunId}`, { replace: true });
+        if (orgNode?.id && wsNode?.id && jobNode?.id) {
+          navigate(`/organizations/${orgNode.id}/workspaces/${wsNode.id}/runs/${cleanRunId}`, { replace: true });
         } else {
           setError(UNAUTHORIZED_MESSAGE);
         }
