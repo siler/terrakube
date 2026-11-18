@@ -1,4 +1,4 @@
-# graphql-codegen writes these unformatted on every run
+# generated: graphql-codegen output and the API's exported SDL
 src/domain/generated/graphql/
 src/domain/generated/graphql-subscriptions/
 # exported by the API's ResourceModelExportTest
