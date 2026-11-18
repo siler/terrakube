@@ -1,11 +1,9 @@
 import { useEffect, useRef } from "react";
-import { getSubscriptionClient } from "../modules/api/subscriptionClient";
+import { graphql } from "../domain/generated/graphql-subscriptions";
+import type { OnJobStatusChangedSubscription } from "../domain/generated/graphql-subscriptions/graphql";
+import { subscribe } from "../modules/api/subscriptionClient";
 
-export type JobStatusEvent = {
-  jobId: number;
-  workspaceId: string;
-  status: string;
-};
+export type JobStatusEvent = OnJobStatusChangedSubscription["jobStatusChanged"];
 
 type UseJobStatusSubscriptionOptions = {
   workspaceId: string;
@@ -13,7 +11,7 @@ type UseJobStatusSubscriptionOptions = {
   onEvent: (event: JobStatusEvent) => void;
 };
 
-const SUBSCRIPTION_QUERY = `
+const OnJobStatusChanged = graphql(`
   subscription OnJobStatusChanged($workspaceId: ID!) {
     jobStatusChanged(workspaceId: $workspaceId) {
       jobId
@@ -21,7 +19,7 @@ const SUBSCRIPTION_QUERY = `
       status
     }
   }
-`;
+`);
 
 export function useJobStatusSubscription({ workspaceId, enabled, onEvent }: UseJobStatusSubscriptionOptions): void {
   // Callers commonly pass an inline callback that closes over component state (e.g. `() =>
@@ -36,22 +34,6 @@ export function useJobStatusSubscription({ workspaceId, enabled, onEvent }: UseJ
       return;
     }
 
-    const unsubscribe = getSubscriptionClient().subscribe(
-      { query: SUBSCRIPTION_QUERY, variables: { workspaceId } },
-      {
-        next: (result) => {
-          const event = (result.data as { jobStatusChanged?: JobStatusEvent } | null | undefined)?.jobStatusChanged;
-          if (event != null) {
-            onEventRef.current(event);
-          }
-        },
-        error: () => {
-          // graphql-ws retries the underlying connection and resubscribes automatically; nothing to do here.
-        },
-        complete: () => {},
-      }
-    );
-
-    return () => unsubscribe();
+    return subscribe(OnJobStatusChanged, { workspaceId }, (data) => onEventRef.current(data.jobStatusChanged));
   }, [workspaceId, enabled]);
 }

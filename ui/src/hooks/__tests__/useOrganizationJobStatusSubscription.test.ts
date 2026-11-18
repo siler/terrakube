@@ -1,17 +1,17 @@
 import { renderHook } from "@testing-library/react";
 import { useOrganizationJobStatusSubscription } from "../useOrganizationJobStatusSubscription";
-import { getSubscriptionClient } from "../../modules/api/subscriptionClient";
+import { print } from "graphql";
+import { subscribe as subscribeDocument } from "../../modules/api/subscriptionClient";
 
 jest.mock("../../modules/api/subscriptionClient");
 
 describe("useOrganizationJobStatusSubscription", () => {
-  const unsubscribe = jest.fn();
-  const subscribe = jest.fn().mockReturnValue(unsubscribe);
+  const unsubscribe = jest.fn<void, []>();
+  const subscribe = jest.mocked(subscribeDocument);
 
   beforeEach(() => {
     jest.resetAllMocks();
     subscribe.mockReturnValue(unsubscribe);
-    (getSubscriptionClient as jest.Mock).mockReturnValue({ subscribe });
   });
 
   it("subscribes with the organizationId variable and forwards each event", () => {
@@ -20,10 +20,11 @@ describe("useOrganizationJobStatusSubscription", () => {
     renderHook(() => useOrganizationJobStatusSubscription({ organizationId: "org-1", enabled: true, onEvent }));
 
     expect(subscribe).toHaveBeenCalledTimes(1);
-    const [payload, sink] = subscribe.mock.calls[0];
-    expect(payload.variables).toEqual({ organizationId: "org-1" });
+    const [document, variables, onData] = subscribe.mock.calls[0];
+    expect(print(document)).toContain("$organizationId: ID!");
+    expect(variables).toEqual({ organizationId: "org-1" });
 
-    sink.next({ data: { organizationJobStatusChanged: { jobId: 1, workspaceId: "workspace-1", status: "running" } } });
+    onData({ organizationJobStatusChanged: { jobId: 1, workspaceId: "workspace-1", status: "running" } });
 
     expect(onEvent).toHaveBeenCalledWith({ jobId: 1, workspaceId: "workspace-1", status: "running" });
   });

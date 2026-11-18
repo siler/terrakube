@@ -1,143 +1,135 @@
-import { axiosGraphQL } from "@/config/axiosConfig";
-import { FlatOrganization } from "../../domain/types";
-import { TagModel } from "./types";
+import { graphql } from "@/domain/generated/graphql";
+import type { OrganizationSummariesQuery } from "@/domain/generated/graphql/graphql";
+import { ConnectionNode, connectionNodes, graphqlRequest } from "@/modules/api/graphqlRequest";
 import { WorkspaceStatusFilter } from "@/modules/workspaces/utils/workspaceFilter";
 import { isOrgId } from "@/config/orgId";
 
-function computeWorkspaceStatusCounts(edges: { node: { lastJobStatus?: string } }[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const edge of edges) {
-    const status = edge.node.lastJobStatus || WorkspaceStatusFilter.NeverExecuted;
-    counts[status] = (counts[status] || 0) + 1;
+const OrganizationSummaries = graphql(`
+  query OrganizationSummaries {
+    organization {
+      edges {
+        node {
+          id
+          name
+          description
+          executionMode
+          icon
+        }
+      }
+    }
   }
-  return counts;
-}
+`);
 
-async function listOrganizationSummaries(): Promise<FlatOrganization[]> {
-  const body = {
-    query: `{
-      organization {
-        edges {
-          node {
-            id
-            name
-            description
-            executionMode
-            icon
-            workspace {
-              edges {
-                node {
-                  id
-                  lastJobStatus
-                }
+const OrganizationWorkspaceCounts = graphql(`
+  query OrganizationWorkspaceCounts {
+    organization {
+      edges {
+        node {
+          id
+          workspace {
+            edges {
+              node {
+                id
+                lastJobStatus
               }
             }
           }
         }
       }
-    }`,
-  };
-
-  const response = await axiosGraphQL.post("", body, {
-    headers: { "Content-Type": "application/json" },
-  });
-
-  if (response.data?.errors?.length) {
-    throw new Error(response.data.errors[0].message || "Failed to load organizations");
+    }
   }
+`);
 
-  const data = response.data?.data;
-  if (!data?.organization?.edges) {
-    return [];
+const OrganizationName = graphql(`
+  query OrganizationName($ids: [String]) {
+    organization(ids: $ids) {
+      edges {
+        node {
+          id
+          name
+        }
+      }
+    }
   }
+`);
 
-  return data.organization.edges.map((edge: any) => ({
-    id: edge.node.id,
-    name: edge.node.name,
-    description: edge.node.description,
-    executionMode: edge.node.executionMode,
-    icon: edge.node.icon,
-    workspaceCount: edge.node.workspace?.edges?.length,
-    workspaceStatusCounts: computeWorkspaceStatusCounts(edge.node.workspace?.edges ?? []),
-  }));
+const OrganizationTags = graphql(`
+  query OrganizationTags($ids: [String]) {
+    organization(ids: $ids) {
+      edges {
+        node {
+          tag {
+            edges {
+              node {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
+
+const toOrganizationSummary = (node: ConnectionNode<OrganizationSummariesQuery["organization"]>) => ({
+  id: node.id ?? "",
+  name: node.name ?? "",
+  description: node.description ?? undefined,
+  executionMode: node.executionMode ?? undefined,
+  icon: node.icon ?? undefined,
+});
+
+/** An organization as the picker and sidebar list it. */
+export type OrganizationSummary = ReturnType<typeof toOrganizationSummary>;
+
+const countByStatus = (workspaces: { lastJobStatus?: string | null }[]) => {
+  const counts: Record<string, number> = {};
+  for (const { lastJobStatus } of workspaces) {
+    const status = lastJobStatus || WorkspaceStatusFilter.NeverExecuted;
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return { workspaceCount: workspaces.length, workspaceStatusCounts: counts };
+};
+
+/** Workspace totals of an organization, keyed by its id in {@link listOrganizationWorkspaceCounts}. */
+export type OrganizationWorkspaceCounts = ReturnType<typeof countByStatus>;
+
+async function listOrganizationSummaries(): Promise<OrganizationSummary[]> {
+  const data = await graphqlRequest(OrganizationSummaries, {});
+  return connectionNodes(data.organization).map(toOrganizationSummary);
+}
+
+// Listing every workspace is what makes this slow, so only the picker, which shows the totals, asks for it.
+async function listOrganizationWorkspaceCounts(): Promise<Record<string, OrganizationWorkspaceCounts>> {
+  const data = await graphqlRequest(OrganizationWorkspaceCounts, {});
+  return Object.fromEntries(
+    connectionNodes(data.organization).map((node) => [node.id ?? "", countByStatus(connectionNodes(node.workspace))])
+  );
 }
 
 async function getOrganizationNameGraphQL(orgId: string): Promise<string | null> {
   if (!isOrgId(orgId)) {
     return null;
   }
-  const body = {
-    query: `{
-      organization(ids: ["${orgId}"]) {
-        edges {
-          node {
-            id
-            name
-          }
-        }
-      }
-    }`,
-  };
-
-  const response = await axiosGraphQL.post("", body, {
-    headers: { "Content-Type": "application/json" },
-  });
-
-  if (response.data?.errors?.length) {
-    throw new Error(response.data.errors[0].message || "Failed to load organization");
-  }
-
-  const data = response.data?.data;
-  if (!data?.organization?.edges?.length) {
-    return null;
-  }
-
-  return data.organization.edges[0].node.name;
+  const data = await graphqlRequest(OrganizationName, { ids: [orgId] });
+  return connectionNodes(data.organization)[0]?.name ?? null;
 }
 
-async function listOrganizationTags(organizationId: string): Promise<TagModel[]> {
-  const body = {
-    query: `{
-      organization(ids: ["${organizationId}"]) {
-        edges {
-          node {
-            tag {
-              edges {
-                node {
-                  id
-                  name
-                }
-              }
-            }
-          }
-        }
-      }
-    }`,
-  };
-
-  const response = await axiosGraphQL.post("", body, {
-    headers: { "Content-Type": "application/json" },
-  });
-
-  if (response.data?.errors?.length) {
-    throw new Error(response.data.errors[0].message || "Failed to load organization tags");
-  }
-
-  const tagEdges = response.data?.data?.organization?.edges?.[0]?.node?.tag?.edges;
-  if (!tagEdges) {
-    return [];
-  }
-
-  return tagEdges.map((edge: any) => ({
-    id: edge.node.id,
-    name: edge.node.name,
+async function listOrganizationTags(organizationId: string) {
+  const data = await graphqlRequest(OrganizationTags, { ids: [organizationId] });
+  return connectionNodes(connectionNodes(data.organization)[0]?.tag).map((tag) => ({
+    id: tag.id ?? "",
+    name: tag.name ?? "",
   }));
 }
 
-export type { TagModel };
+/** An organization tag as the workspace filter, cards, table and tag editor use it. */
+export type TagModel = Awaited<ReturnType<typeof listOrganizationTags>>[number];
 
 const methods = {
   listOrganizationSummaries,
+  listOrganizationWorkspaceCounts,
   getOrganizationNameGraphQL,
   listOrganizationTags,
 };

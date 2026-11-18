@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { getSubscriptionClient } from "../modules/api/subscriptionClient";
+import { graphql } from "../domain/generated/graphql-subscriptions";
+import { subscribe } from "../modules/api/subscriptionClient";
 import { JobStatusEvent } from "./useJobStatusSubscription";
 
 type UseOrganizationJobStatusSubscriptionOptions = {
@@ -8,7 +9,7 @@ type UseOrganizationJobStatusSubscriptionOptions = {
   onEvent: (event: JobStatusEvent) => void;
 };
 
-const SUBSCRIPTION_QUERY = `
+const OnOrganizationJobStatusChanged = graphql(`
   subscription OnOrganizationJobStatusChanged($organizationId: ID!) {
     organizationJobStatusChanged(organizationId: $organizationId) {
       jobId
@@ -16,7 +17,7 @@ const SUBSCRIPTION_QUERY = `
       status
     }
   }
-`;
+`);
 
 export function useOrganizationJobStatusSubscription({
   organizationId,
@@ -31,23 +32,8 @@ export function useOrganizationJobStatusSubscription({
       return;
     }
 
-    const unsubscribe = getSubscriptionClient().subscribe(
-      { query: SUBSCRIPTION_QUERY, variables: { organizationId } },
-      {
-        next: (result) => {
-          const event = (result.data as { organizationJobStatusChanged?: JobStatusEvent } | null | undefined)
-            ?.organizationJobStatusChanged;
-          if (event != null) {
-            onEventRef.current(event);
-          }
-        },
-        error: () => {
-          // graphql-ws retries the underlying connection and resubscribes automatically; nothing to do here.
-        },
-        complete: () => {},
-      }
+    return subscribe(OnOrganizationJobStatusChanged, { organizationId }, (data) =>
+      onEventRef.current(data.organizationJobStatusChanged)
     );
-
-    return () => unsubscribe();
   }, [organizationId, enabled]);
 }
