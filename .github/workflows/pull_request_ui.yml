@@ -54,6 +54,9 @@ jobs:
       - name: "Run unit tests"
         run: yarn test --ci
 
+      - name: "Check generated API types"
+        run: yarn api-types:test
+
       - name: "Build application"
         run: yarn build
         env:
