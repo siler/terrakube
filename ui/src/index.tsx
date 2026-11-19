@@ -11,11 +11,12 @@ import App from "./domain/Home/App";
 import { clearQueriesOnSignOut, queryClient } from "./modules/api/queryClient";
 import "./index.css";
 
-// Get the root element from the DOM
 const container = document.getElementById("root");
+if (!container) {
+  throw new Error("Missing #root element in index.html");
+}
 
-// Create a root
-const root = createRoot(container!);
+const root = createRoot(container);
 
 // By default react-oidc-context calls window.history.replaceState({}, "", "/")
 // after handling the auth callback, which strips any subpath prefix from the URL.
