@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { OrganizationSummaryProvider } from "../OrganizationSummaryContext";
 import { useOrganizationSummaries } from "../useOrganizationSummaries";
-import organizationService from "../organizationService";
+import organizationService, { type OrganizationSummary } from "../organizationService";
 
 jest.mock("../organizationService", () => ({
   __esModule: true,
@@ -11,7 +11,15 @@ jest.mock("../organizationService", () => ({
   },
 }));
 
-const listOrganizationSummaries = organizationService.listOrganizationSummaries as jest.Mock;
+const listOrganizationSummaries = jest.mocked(organizationService.listOrganizationSummaries);
+
+const acme: OrganizationSummary = {
+  id: "org-1",
+  name: "Acme",
+  description: undefined,
+  executionMode: undefined,
+  icon: undefined,
+};
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <OrganizationSummaryProvider>{children}</OrganizationSummaryProvider>
@@ -23,7 +31,7 @@ describe("OrganizationSummaryProvider", () => {
   });
 
   it("loads once and shares its cached organizations with consumers", async () => {
-    listOrganizationSummaries.mockResolvedValue([{ id: "org-1", name: "Acme", workspaceCount: 1 }]);
+    listOrganizationSummaries.mockResolvedValue([acme]);
 
     const { result, rerender } = renderHook(() => useOrganizationSummaries(), { wrapper });
 
@@ -31,11 +39,11 @@ describe("OrganizationSummaryProvider", () => {
     rerender();
 
     expect(listOrganizationSummaries).toHaveBeenCalledTimes(1);
-    expect(result.current.organizations).toEqual([{ id: "org-1", name: "Acme", workspaceCount: 1 }]);
+    expect(result.current.organizations).toEqual([acme]);
   });
 
   it("updates cached entries after organization mutations without another list request", async () => {
-    listOrganizationSummaries.mockResolvedValue([{ id: "org-1", name: "Acme", workspaceCount: 1 }]);
+    listOrganizationSummaries.mockResolvedValue([acme]);
     const { result } = renderHook(() => useOrganizationSummaries(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));

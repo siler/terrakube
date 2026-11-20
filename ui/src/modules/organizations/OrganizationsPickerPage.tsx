@@ -1,6 +1,6 @@
 import { Button, Flex, Space } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../config/actionTypes";
 import { ErrorInformation } from "@/modules/api/types";
@@ -11,6 +11,7 @@ import ListViewToggle from "@/components/display/ListViewToggle/ListViewToggle";
 import { getStoredListViewMode, ListViewMode } from "@/components/display/ListViewToggle/listViewPreference";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { useOrganizationSummaries } from "./useOrganizationSummaries";
+import organizationService, { OrganizationWorkspaceCounts } from "./organizationService";
 
 export default function OrganizationsPickerPage() {
   const { organizations, loading, error } = useOrganizationSummaries();
@@ -19,6 +20,35 @@ export default function OrganizationsPickerPage() {
   const orgId = sessionStorage.getItem(ORGANIZATION_ARCHIVE);
 
   const [listViewMode, setListViewMode] = useState<ListViewMode>(() => getStoredListViewMode());
+  const [workspaceCounts, setWorkspaceCounts] = useState<Record<string, OrganizationWorkspaceCounts>>();
+  const staysOnPicker =
+    location.pathname === "/organizations" || ((orgId === "" || orgId === null) && organizations.length !== 1);
+  // Only the compact list shows workspace totals.
+  const countsWanted = !loading && staysOnPicker && listViewMode === "compact";
+
+  useEffect(() => {
+    if (!countsWanted || workspaceCounts) {
+      return;
+    }
+    let current = true;
+    organizationService
+      .listOrganizationWorkspaceCounts()
+      .then((counts) => {
+        if (current) {
+          setWorkspaceCounts(counts);
+        }
+      })
+      // The totals are extra detail; without them the list simply shows none.
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [countsWanted, workspaceCounts]);
+
+  const organizationsWithCounts = useMemo(
+    () => organizations.map((organization) => ({ ...organization, ...workspaceCounts?.[organization.id] })),
+    [organizations, workspaceCounts]
+  );
 
   useEffect(() => {
     if (loading) {
@@ -76,10 +106,10 @@ export default function OrganizationsPickerPage() {
         </Flex>
       )}
       {!loading && organizations.length > 0 && listViewMode === "compact" && (
-        <OrganizationTable organizations={organizations} />
+        <OrganizationTable organizations={organizationsWithCounts} />
       )}
       {!loading && organizations.length > 0 && listViewMode === "cards" && (
-        <OrganizationGrid organizations={organizations} />
+        <OrganizationGrid organizations={organizationsWithCounts} />
       )}
     </PageWrapper>
   );

@@ -1,3 +1,4 @@
+import type { OrganizationSummary, OrganizationWorkspaceCounts } from "@/modules/organizations/organizationService";
 import { fields } from "./generated/apiPaths";
 import type { FormValues } from "./api/writeBodies";
 import type { Row } from "./api/fieldSelection";
@@ -88,9 +89,9 @@ export type ApiResponse<T> = {
 };
 
 /** An organization as the UI lists it, with the workspace counts it fetches separately. */
-export type FlatOrganization = {
-  id: string;
-} & OrganizationAttributes;
+export type FlatOrganization = Partial<Omit<OrganizationSummary, "id" | "name">> &
+  Pick<OrganizationSummary, "id" | "name"> &
+  Partial<OrganizationWorkspaceCounts>;
 
 // Templates
 

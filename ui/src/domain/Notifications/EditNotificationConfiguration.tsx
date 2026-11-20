@@ -27,7 +27,8 @@ import axiosInstance, { getErrorMessage } from "@/config/axiosConfig";
 import { api, fields } from "@/domain/generated/apiPaths";
 import type { CreateBody, FormValues, RelationshipBody, UpdateBody, WriteAttributes } from "@/domain/api/writeBodies";
 import type { Row } from "@/domain/api/fieldSelection";
-import { apiPost } from "@/modules/api/apiWrapper";
+import { graphql } from "@/domain/generated/graphql";
+import { connectionNodes, graphqlRequest } from "@/modules/api/graphqlRequest";
 import { JobStatus } from "@/domain/generated/apiResources";
 import { createdResourceId } from "@/domain/api/parseDocument";
 import { ChannelPicker } from "./ChannelPicker";
@@ -56,6 +57,46 @@ type ConfigurationForm = Pick<
   description?: FormValues<"notification_configuration">["description"];
   signingSecret?: FormValues<"notification_configuration">["signingSecret"];
 };
+
+// A root collection is named by the entity's @Entity(name=...): snake_case, like the REST root.
+const NotificationConfigurationById = graphql(`
+  query NotificationConfigurationById($configIds: [String]) {
+    notification_configuration(ids: $configIds) {
+      edges {
+        node {
+          name
+          description
+          channelType
+          destinationUrl
+          active
+          messageStyle
+          workspace {
+            edges {
+              node {
+                id
+              }
+            }
+          }
+          triggers {
+            edges {
+              node {
+                id
+                jobStatus
+              }
+            }
+          }
+          templates {
+            edges {
+              node {
+                id
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
 
 const JSONAPI_HEADERS = { "Content-Type": "application/vnd.api+json" };
 
@@ -112,49 +153,28 @@ export const EditNotificationConfiguration = ({
   useEffect(() => {
     if (mode === "edit" && configId) {
       setLoading(true);
-      const body = {
-        // Root-level GraphQL queries (unlike a nested relationship traversal
-        // through organization/workspace) use the entity's @Entity(name=...)
-        // directly - snake_case, same rule as the REST root collection name.
-        query: `{
-          notification_configuration(ids: ["${configId}"]) {
-            edges { node {
-              name description channelType destinationUrl active messageStyle
-              workspace { edges { node { id } } }
-              triggers { edges { node { id jobStatus } } }
-              templates { edges { node { id } } }
-            } }
-          }
-        }`,
-      };
-      apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
-        dataWrapped: true,
-        contentType: "application/json",
-      })
-        .then((response: any) => {
-          const node = response?.data?.notification_configuration?.edges?.[0]?.node;
+      graphqlRequest(NotificationConfigurationById, { configIds: [configId] })
+        .then((data) => {
+          const node = connectionNodes(data.notification_configuration)[0];
           if (!node) return;
           form.setFieldsValue({
-            name: node.name,
-            description: node.description,
-            channelType: node.channelType,
-            destinationUrl: node.destinationUrl,
-            active: node.active,
-            messageStyle: node.messageStyle || "DETAILED",
+            name: node.name ?? undefined,
+            description: node.description ?? undefined,
+            channelType: node.channelType ?? undefined,
+            destinationUrl: node.destinationUrl ?? undefined,
+            active: node.active ?? undefined,
+            messageStyle: node.messageStyle ?? "DETAILED",
           });
-          const triggerEdges = node.triggers?.edges || [];
-          const statuses: JobStatus[] = triggerEdges.map((e: any) => e.node.jobStatus);
-          const idsByStatus: Record<string, string> = {};
-          triggerEdges.forEach((e: any) => {
-            idsByStatus[e.node.jobStatus] = e.node.id;
-          });
-          setSelectedStatuses(statuses);
-          setTriggerIds(idsByStatus);
-          setSelectedTemplateIds((node.templates?.edges || []).map((e: any) => e.node.id));
+          const triggers = connectionNodes(node.triggers).flatMap(({ id, jobStatus }) =>
+            id && jobStatus ? [{ id, jobStatus }] : []
+          );
+          setSelectedStatuses(triggers.map((trigger) => trigger.jobStatus));
+          setTriggerIds(Object.fromEntries(triggers.map((trigger) => [trigger.jobStatus, trigger.id])));
+          setSelectedTemplateIds(connectionNodes(node.templates).flatMap(({ id }) => (id ? [id] : [])));
           // The config's actual scope, straight from the record being edited - not the
           // workspaceId prop, which just reflects whatever list view this was opened from and
           // is wrong whenever that's a workspace's merged view showing an org-wide default.
-          setConfigWorkspaceId(node.workspace?.edges?.[0]?.node?.id ?? null);
+          setConfigWorkspaceId(connectionNodes(node.workspace)[0]?.id ?? null);
         })
         .catch((err) => message.error(getErrorMessage(err) || "Failed to load notification configuration"))
         .finally(() => setLoading(false));

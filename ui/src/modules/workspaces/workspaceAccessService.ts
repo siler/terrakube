@@ -1,20 +1,53 @@
 import axiosInstance from "@/config/axiosConfig";
 import type { CreateBody, UpdateBody } from "@/domain/api/writeBodies";
 import type { ApiAttributes } from "@/domain/generated/apiResources";
-import { apiPost } from "@/modules/api/apiWrapper";
+import { graphql } from "@/domain/generated/graphql";
+import type { WorkspaceAccessListQuery } from "@/domain/generated/graphql/graphql";
+import { apiGraphQL } from "@/modules/api/apiWrapper";
+import { ConnectionNode, connectionNodes, graphqlRequest } from "@/modules/api/graphqlRequest";
 import { ApiResponse } from "@/modules/api/types";
 
+const WorkspaceAccessList = graphql(`
+  query WorkspaceAccessList($workspaceIds: [String]) {
+    workspace(ids: $workspaceIds) {
+      edges {
+        node {
+          access {
+            edges {
+              node {
+                id
+                name
+                role
+                manageWorkspace
+                manageState
+                planJob
+                approveJob
+                destroyJob
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
+
+type WorkspaceAccessNode = ConnectionNode<ConnectionNode<WorkspaceAccessListQuery["workspace"]>["access"]>;
+
+const toWorkspaceAccess = (node: WorkspaceAccessNode) => ({
+  id: node.id ?? "",
+  name: node.name ?? "",
+  role: node.role ?? "custom",
+  manageWorkspace: node.manageWorkspace ?? false,
+  manageState: node.manageState ?? false,
+  planJob: node.planJob ?? false,
+  approveJob: node.approveJob ?? false,
+  // Before this permission existed, a custom team could destroy.
+  destroyJob: node.destroyJob ?? true,
+});
+
 /** A team's access to a workspace, with the API's unset permissions read as their defaults. */
-export type WorkspaceAccessModel = {
-  id: string;
-  name: string;
-  role: string;
-  manageWorkspace: boolean;
-  manageState: boolean;
-  planJob: boolean;
-  approveJob: boolean;
-  destroyJob: boolean;
-};
+export type WorkspaceAccessModel = ReturnType<typeof toWorkspaceAccess>;
 
 /** The permissions a custom role grants, as written back to the API; `Pick` fails if one isn't an access attribute. */
 export type WorkspaceAccessPermissions = Pick<
@@ -26,57 +59,10 @@ async function listWorkspaceAccess(
   _organizationId: string,
   workspaceId: string
 ): Promise<ApiResponse<WorkspaceAccessModel[]>> {
-  const body = {
-    query: `{
-      workspace(ids: ["${workspaceId}"]) {
-        edges {
-          node {
-            access {
-              edges {
-                node {
-                  id
-                  name
-                  role
-                  manageWorkspace
-                  manageState
-                  planJob
-                  approveJob
-                  destroyJob
-                }
-              }
-            }
-          }
-        }
-      }
-    }`,
-  };
-
-  const tempData = await apiPost("/graphql/api/v1", body, (data): any => data, {
-    dataWrapped: true,
-    contentType: "application/json",
+  return apiGraphQL(async () => {
+    const data = await graphqlRequest(WorkspaceAccessList, { workspaceIds: [workspaceId] });
+    return connectionNodes(connectionNodes(data.workspace)[0]?.access).map(toWorkspaceAccess);
   });
-
-  if (tempData.isError) {
-    return tempData;
-  }
-
-  const edges = tempData.data?.workspace?.edges?.[0]?.node?.access?.edges ?? [];
-
-  return {
-    isError: false,
-    responseCode: tempData.responseCode,
-    data: edges.map((edge: any) => ({
-      id: edge.node.id,
-      name: edge.node.name,
-      role: edge.node.role ?? "custom",
-      manageWorkspace: edge.node.manageWorkspace ?? false,
-      manageState: edge.node.manageState ?? false,
-      planJob: edge.node.planJob ?? false,
-      approveJob: edge.node.approveJob ?? false,
-      // Before this permission existed, a custom team could destroy.
-      destroyJob: edge.node.destroyJob ?? true,
-    })),
-  };
 }
 
 async function addWorkspaceAccess(

@@ -1,74 +1,120 @@
 import axiosInstance from "@/config/axiosConfig";
 import type { CreateBody, UpdateBody } from "@/domain/api/writeBodies";
-import { apiPost } from "@/modules/api/apiWrapper";
+import { graphql } from "@/domain/generated/graphql";
+import type { ProjectAccessListQuery, ProjectListQuery } from "@/domain/generated/graphql/graphql";
+import { apiGraphQL } from "@/modules/api/apiWrapper";
+import { ConnectionNode, connectionNodes, graphqlRequest } from "@/modules/api/graphqlRequest";
 import { ApiResponse } from "@/modules/api/types";
-import { ProjectModel } from "@/domain/types";
 
-/** A project as the project pages and pickers show it. */
-export type Project = ProjectModel;
+graphql(`
+  fragment ProjectFields on Project {
+    id
+    name
+    description
+  }
+`);
 
-export type ProjectAccessModel = {
-  id: string;
-  name: string;
-  role: string;
-  manageWorkspace: boolean;
-  manageState: boolean;
-  manageJob: boolean;
-  planJob: boolean;
-  approveJob: boolean;
-  destroyJob: boolean;
-};
-
-// The individual permissions a team gets on every workspace of the project when its role is "custom".
-export type ProjectAccessPermissions = {
-  manageWorkspace: boolean;
-  manageState: boolean;
-  planJob: boolean;
-  approveJob: boolean;
-  destroyJob: boolean;
-};
-
-async function listProjects(organizationId: string): Promise<ApiResponse<ProjectModel[]>> {
-  const body = {
-    query: `{
-      organization(ids: ["${organizationId}"]) {
-        edges {
-          node {
-            project {
-              edges {
-                node {
-                  id
-                  name
-                  description
-                }
+const ProjectList = graphql(`
+  query ProjectList($organizationIds: [String]) {
+    organization(ids: $organizationIds) {
+      edges {
+        node {
+          project {
+            edges {
+              node {
+                ...ProjectFields
               }
             }
           }
         }
       }
-    }`,
-  };
-
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
-    dataWrapped: true,
-    contentType: "application/json",
-  });
-
-  if (tempData.isError) {
-    return tempData;
+    }
   }
+`);
 
-  const edges = tempData.data?.organization?.edges?.[0]?.node?.project?.edges ?? [];
+const ProjectById = graphql(`
+  query ProjectById($organizationIds: [String], $projectIds: [String]) {
+    organization(ids: $organizationIds) {
+      edges {
+        node {
+          project(ids: $projectIds) {
+            edges {
+              node {
+                ...ProjectFields
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
 
-  return {
-    isError: false,
-    responseCode: tempData.responseCode,
-    data: edges.map((edge: any) => ({
-      id: edge.node.id,
-      name: edge.node.name,
-      description: edge.node.description,
-    })),
-  };
+const ProjectAccessList = graphql(`
+  query ProjectAccessList($projectIds: [String]) {
+    project(ids: $projectIds) {
+      edges {
+        node {
+          projectAccess {
+            edges {
+              node {
+                id
+                name
+                role
+                manageWorkspace
+                manageState
+                manageJob
+                planJob
+                approveJob
+                destroyJob
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`);
+
+type ProjectNode = ConnectionNode<ConnectionNode<ProjectListQuery["organization"]>["project"]>;
+
+const toProject = (node: ProjectNode) => ({
+  id: node.id ?? "",
+  name: node.name ?? "",
+  description: node.description ?? undefined,
+});
+
+/** A project as the project pages and pickers show it. */
+export type Project = ReturnType<typeof toProject>;
+
+type ProjectAccessNode = ConnectionNode<ConnectionNode<ProjectAccessListQuery["project"]>["projectAccess"]>;
+
+const toProjectAccess = (node: ProjectAccessNode) => ({
+  id: node.id ?? "",
+  name: node.name ?? "",
+  role: node.role ?? "custom",
+  manageWorkspace: node.manageWorkspace ?? false,
+  manageState: node.manageState ?? false,
+  manageJob: node.manageJob ?? false,
+  planJob: node.planJob ?? false,
+  approveJob: node.approveJob ?? false,
+  destroyJob: node.destroyJob ?? true,
+});
+
+/** A team's access to a project, with the API's unset permissions read as their defaults. */
+export type ProjectAccessModel = ReturnType<typeof toProjectAccess>;
+
+/** The individual permissions a team gets on every workspace of the project when its role is "custom". */
+export type ProjectAccessPermissions = Pick<
+  ProjectAccessModel,
+  "manageWorkspace" | "manageState" | "planJob" | "approveJob" | "destroyJob"
+>;
+
+async function listProjects(organizationId: string): Promise<ApiResponse<Project[]>> {
+  return apiGraphQL(async () => {
+    const data = await graphqlRequest(ProjectList, { organizationIds: [organizationId] });
+    return connectionNodes(connectionNodes(data.organization)[0]?.project).map(toProject);
+  });
 }
 
 async function createProject(organizationId: string, data: { name: string; description?: string }): Promise<void> {
@@ -108,47 +154,12 @@ async function updateProject(
   });
 }
 
-async function getProject(organizationId: string, projectId: string): Promise<ApiResponse<ProjectModel>> {
-  const body = {
-    query: `{
-      organization(ids: ["${organizationId}"]) {
-        edges {
-          node {
-            project(ids: ["${projectId}"]) {
-              edges {
-                node {
-                  id
-                  name
-                  description
-                }
-              }
-            }
-          }
-        }
-      }
-    }`,
-  };
-
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
-    dataWrapped: true,
-    contentType: "application/json",
+async function getProject(organizationId: string, projectId: string): Promise<ApiResponse<Project>> {
+  return apiGraphQL(async () => {
+    const data = await graphqlRequest(ProjectById, { organizationIds: [organizationId], projectIds: [projectId] });
+    const node = connectionNodes(connectionNodes(data.organization)[0]?.project)[0];
+    return node ? toProject(node) : { id: "", name: "", description: undefined };
   });
-
-  if (tempData.isError) {
-    return tempData;
-  }
-
-  const node = tempData.data?.organization?.edges?.[0]?.node?.project?.edges?.[0]?.node;
-
-  return {
-    isError: false,
-    responseCode: tempData.responseCode,
-    data: {
-      id: node?.id ?? "",
-      name: node?.name ?? "",
-      description: node?.description,
-    },
-  };
 }
 
 async function deleteProject(organizationId: string, projectId: string): Promise<void> {
@@ -159,58 +170,10 @@ async function listProjectAccess(
   _organizationId: string,
   projectId: string
 ): Promise<ApiResponse<ProjectAccessModel[]>> {
-  const body = {
-    query: `{
-      project(ids: ["${projectId}"]) {
-        edges {
-          node {
-            projectAccess {
-              edges {
-                node {
-                  id
-                  name
-                  role
-                  manageWorkspace
-                  manageState
-                  manageJob
-                  planJob
-                  approveJob
-                  destroyJob
-                }
-              }
-            }
-          }
-        }
-      }
-    }`,
-  };
-
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, (data) => data, {
-    dataWrapped: true,
-    contentType: "application/json",
+  return apiGraphQL(async () => {
+    const data = await graphqlRequest(ProjectAccessList, { projectIds: [projectId] });
+    return connectionNodes(connectionNodes(data.project)[0]?.projectAccess).map(toProjectAccess);
   });
-
-  if (tempData.isError) {
-    return tempData;
-  }
-
-  const edges = tempData.data?.project?.edges?.[0]?.node?.projectAccess?.edges ?? [];
-
-  return {
-    isError: false,
-    responseCode: tempData.responseCode,
-    data: edges.map((edge: any) => ({
-      id: edge.node.id,
-      name: edge.node.name,
-      role: edge.node.role ?? "custom",
-      manageWorkspace: edge.node.manageWorkspace ?? false,
-      manageState: edge.node.manageState ?? false,
-      manageJob: edge.node.manageJob ?? false,
-      planJob: edge.node.planJob ?? false,
-      approveJob: edge.node.approveJob ?? false,
-      destroyJob: edge.node.destroyJob ?? true,
-    })),
-  };
 }
 
 async function addProjectAccess(

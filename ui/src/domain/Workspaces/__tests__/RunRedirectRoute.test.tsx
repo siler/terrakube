@@ -1,21 +1,22 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { recordOf } from "@/testUtils/readRequestBody";
 import { RunRedirectRoute } from "../RunRedirectRoute";
 
-const mockPost = jest.fn();
+const mockPost = jest.fn<Promise<unknown>, [url: string, body: unknown, config?: unknown]>();
 const mockNavigate = jest.fn();
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
   axiosGraphQL: {
-    post: (...args: unknown[]) => mockPost(...args),
+    post: (...args: Parameters<typeof mockPost>) => mockPost(...args),
   },
   default: {},
   getErrorMessage: () => "error",
 }));
 
 jest.mock("react-router-dom", () => {
-  const actual = jest.requireActual("react-router-dom");
+  const actual = jest.requireActual<typeof import("react-router-dom")>("react-router-dom");
   return {
     ...actual,
     useNavigate: () => mockNavigate,
@@ -82,9 +83,9 @@ describe("RunRedirectRoute", () => {
       "",
       expect.objectContaining({
         variables: {
-          orgFilter: 'name=="simple"',
-          wsFilter: 'name=="sensitive-value-leak"',
-          jobFilter: 'id=="5"',
+          orgFilter: "name=='simple'",
+          wsFilter: "name=='sensitive-value-leak'",
+          jobFilter: "id=='5'",
         },
       }),
       expect.anything()
@@ -146,9 +147,9 @@ describe("RunRedirectRoute", () => {
       "",
       expect.objectContaining({
         variables: {
-          orgFilter: 'name=="simple"',
-          wsFilter: 'name=="prod"',
-          jobFilter: 'id=="42"',
+          orgFilter: "name=='simple'",
+          wsFilter: "name=='prod'",
+          jobFilter: "id=='42'",
         },
       }),
       expect.anything()
@@ -287,5 +288,27 @@ describe("RunRedirectRoute", () => {
         screen.getByText("You are not authorized to view this run or the workspace does not exist.")
       ).toBeInTheDocument();
     });
+  });
+
+  it("sends route names as quoted filter variables, never in the query text", async () => {
+    mockPost.mockResolvedValueOnce({ data: { data: { organization: { edges: [] } } } });
+
+    render(
+      <MemoryRouter initialEntries={["/app/o'brien/ws%22x/runs/run-7"]}>
+        <Routes>
+          <Route path="/app/:orgName/:wsName/runs/:runid" element={<RunRedirectRoute />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    const body = recordOf(mockPost.mock.calls[0][1]);
+    expect(body.variables).toEqual({
+      orgFilter: "name=='o\\'brien'",
+      wsFilter: "name=='ws\"x'",
+      jobFilter: "id=='7'",
+    });
+    expect(body.query).toContain("filter: $orgFilter");
+    expect(body.query).not.toContain("brien");
   });
 });
