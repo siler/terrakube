@@ -1,7 +1,8 @@
 import { CopyOutlined, DeleteOutlined, DownOutlined, SettingOutlined } from "@ant-design/icons";
 import { Alert, Button, Dropdown, message, Select, Spin, Table, Tabs, Tooltip, Typography } from "antd";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
@@ -9,9 +10,13 @@ import { copyValue } from "@/components/settings/IdField/IdField";
 import { ORGANIZATION_ARCHIVE } from "../../config/actionTypes";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
 import { apiUrl } from "../../config/apiUrls";
-import { ModuleModel, ModuleVersionAttributes, VcsType } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { Row } from "../api/fieldSelection";
+import type { UpdateBody } from "../api/writeBodies";
+import { VcsType } from "../generated/apiResources";
 import { compareVersions } from "../Workspaces/Workspaces";
 import { providerIcon, registryHostname } from "./registryHelpers";
+import { type ModuleDetails as ModuleDetailsData, parseModuleDetails } from "./moduleDetails";
 import "./Module.css";
 import VcsLogo from "@/components/display/VcsLogo";
 import { relativeTime } from "@/modules/utils/dates";
@@ -24,14 +29,6 @@ import VersionStatusModal, {
   versionStatusSuffix,
 } from "@/components/modals/VersionStatusModal";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
-
-type ModuleDetails = {
-  submodules: string[];
-  variables: { name: string; type: string | null; description: string | null; defaultValue: string | null }[];
-  outputs: { name: string; description: string | null }[];
-  resources: { type: string; name: string }[];
-  readme: string | null;
-};
 
 const Markdown = lazy(async () => {
   const [{ default: ReactMarkdown }, { default: remarkGfm }, { default: rehypeRaw }, { default: rehypeSanitize }] =
@@ -58,16 +55,31 @@ type Props = {
   organizationName: string;
 };
 
-type Params = {
-  orgid: string;
-  id: string;
-};
+// The page shows every module attribute it loads, its VCS logo and the versions' status details.
+const MODULE_DETAILS_FIELDS = fields.module(
+  "name",
+  "description",
+  "provider",
+  "latestVersion",
+  "downloadQuantity",
+  "createdDate",
+  "updatedDate",
+  "registryPath",
+  "source",
+  "folder",
+  "tagPrefix",
+  "lastRefresh",
+  "lastRefreshError",
+  { vcs: ["vcsType"], version: ["version", "status", "gitTag", "commit", "deprecationMessage"] }
+);
+type ModuleRow = Row<typeof MODULE_DETAILS_FIELDS>;
+type ModuleVersionRow = ModuleRow["version"][number];
 
-type ModuleVersionItem = ModuleVersionAttributes & { id: string };
+type UnavailableState = "loading" | "failed" | "removed";
 
-type DetailsState = "loading" | "ready" | "failed" | "removed";
+type DetailsLoad = { state: UnavailableState } | { state: "ready"; details: ModuleDetailsData };
 
-const UNAVAILABLE: Record<Exclude<DetailsState, "ready">, React.ReactNode> = {
+const UNAVAILABLE: Record<UnavailableState, React.ReactNode> = {
   loading: <Spin />,
   failed: "The module details could not be loaded.",
   removed: "Not available because this version was removed from the registry.",
@@ -77,18 +89,18 @@ const machineValue = (value: string | null) =>
   value ? <code className="registry-mono registry-pre">{value}</code> : <span aria-label="none">—</span>;
 
 export const ModuleDetails = ({ organizationName }: Props) => {
-  const { orgid, id } = useParams<Params>();
-  const [module, setModule] = useState<ModuleModel>();
+  const orgid = useRequiredParam("orgid");
+  const id = useRequiredParam("id");
+  const [module, setModule] = useState<ModuleRow>();
   const [moduleName, setModuleName] = useState("...");
   const [version, setVersion] = useState("...");
-  const [allVersions, setAllVersions] = useState<ModuleVersionItem[]>([]);
+  const [allVersions, setAllVersions] = useState<ModuleVersionRow[]>([]);
   const [versionStatusOpen, setVersionStatusOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [vcsProvider, setVCSProvider] = useState<VcsType>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [details, setDetails] = useState<ModuleDetails | null>(null);
-  const [detailsState, setDetailsState] = useState<DetailsState>("loading");
+  const [detailsLoad, setDetailsLoad] = useState<DetailsLoad>({ state: "loading" });
   const [submodules, setSubmodules] = useState<string[]>([]);
   const [submodule, setSubmodule] = useState("");
   const navigate = useNavigate();
@@ -105,12 +117,13 @@ export const ModuleDetails = ({ organizationName }: Props) => {
 
   const saveVersionStatus = async (status: Required<VersionStatus>) => {
     if (!selectedVersion) return;
+    const body: UpdateBody<"module_version"> = {
+      data: { type: "module_version", id: selectedVersion.id, attributes: status },
+    };
     try {
-      await axiosInstance.patch(
-        `organization/${orgid}/module/${id}/version/${selectedVersion.id}`,
-        { data: { type: "module_version", id: selectedVersion.id, attributes: status } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      );
+      await axiosInstance.patch(`organization/${orgid}/module/${id}/version/${selectedVersion.id}`, body, {
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
       setAllVersions((versions) => versions.map((v) => (v.id === selectedVersion.id ? { ...v, ...status } : v)));
       setVersionStatusOpen(false);
       message.success(versionStatusChangeMessage(selectedVersion.version, status, "module"));
@@ -120,21 +133,23 @@ export const ModuleDetails = ({ organizationName }: Props) => {
   };
 
   // Removed versions are no longer served by the registry, so there is nothing to load for them.
-  const showVersion = (path: string, selected: string, versions: ModuleVersionItem[]) => {
+  const showVersion = (path: string, selected: string, versions: ModuleVersionRow[]) => {
     setVersion(selected);
     setSubmodule("");
     if (versions.find((v) => v.version === selected)?.status === "removed") {
-      setDetails(null);
       setSubmodules([]);
-      setDetailsState("removed");
+      setDetailsLoad({ state: "removed" });
       return;
     }
     loadModuleDetails(path, selected);
   };
 
   const onSelectSubmodule = (name: string) => {
+    if (!module) {
+      return;
+    }
     setSubmodule(name);
-    loadModuleDetails(module!.attributes.registryPath, version, name);
+    loadModuleDetails(module.registryPath ?? "", version, name);
   };
 
   // The API only marks the module due; the refresh poller reads its tags within a minute.
@@ -160,50 +175,49 @@ export const ModuleDetails = ({ organizationName }: Props) => {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    sessionStorage.setItem(ORGANIZATION_ARCHIVE, orgid!);
-    axiosInstance
-      .get(`organization/${orgid}/module/${id}?include=vcs,version`)
-      .then((response) => {
-        setModule(response.data.data);
-        setModuleName(response.data.data.attributes.name);
-        const versions = setModuleInclude(response.data.included, setVCSProvider, setAllVersions);
-        showVersion(
-          response.data.data.attributes.registryPath,
-          defaultVersion(response.data.data.attributes.latestVersion, versions),
-          versions
-        );
-      })
-      .catch((err) => {
+    sessionStorage.setItem(ORGANIZATION_ARCHIVE, orgid);
+    (async () => {
+      try {
+        const module = await api.organization(orgid).module(id).select(MODULE_DETAILS_FIELDS);
+        setModule(module);
+        setModuleName(module.name);
+        setVCSProvider(module.vcs?.vcsType);
+        const versions = module.version ?? [];
+        setAllVersions(versions);
+        showVersion(module.registryPath ?? "", defaultVersion(module.latestVersion, versions), versions);
+      } catch (err) {
         setError(getErrorMessage(err));
-      })
-      .finally(() => {
+      } finally {
         setLoading(false);
-      });
+      }
+    })();
   }, [orgid, id]);
 
   // The registry unpacks the module archive and parses the HCL; the browser only renders the result.
   const loadModuleDetails = (path: string, version: string, submodule = "") => {
-    setDetails(null);
-    setDetailsState("loading");
+    setDetailsLoad({ state: "loading" });
     axiosInstance
-      .get<ModuleDetails>(`${window._env_.REACT_APP_REGISTRY_URI}/terraform/modules/v1/${path}/${version}/details`, {
+      .get<unknown>(`${window._env_.REACT_APP_REGISTRY_URI}/terraform/modules/v1/${path}/${version}/details`, {
         params: submodule ? { submodule } : undefined,
       })
       .then((resp) => {
-        setDetails(resp.data);
-        setDetailsState("ready");
-        if (submodule === "") setSubmodules(resp.data.submodules);
+        const details = parseModuleDetails(resp.data);
+        if (!details) {
+          setDetailsLoad({ state: "failed" });
+          return;
+        }
+        setDetailsLoad({ state: "ready", details });
+        if (submodule === "") setSubmodules(details.submodules);
       })
       .catch((err) => {
         console.error("Error loading module details:", err);
-        setDetailsState("failed");
+        setDetailsLoad({ state: "failed" });
       });
   };
 
   const registryHost = registryHostname();
-  const attributes = module?.attributes;
-  const address = attributes
-    ? `${registryHost}/${attributes.registryPath}${submodule ? `//modules/${submodule}` : ""}`
+  const address = module
+    ? `${registryHost}/${module.registryPath ?? ""}${submodule ? `//modules/${submodule}` : ""}`
     : "";
   const snippet = `module "${submodule || moduleName}" {
   source  = "${address}"
@@ -214,7 +228,7 @@ export const ModuleDetails = ({ organizationName }: Props) => {
   const credentialsSnippet = `credentials "${registryHost}" {
   token = "<your API token>"
 }`;
-  const sourceUrl = fixSshURL(attributes?.source);
+  const sourceUrl = fixSshURL(module?.source);
   const sourcePath = repositoryPath(sourceUrl);
 
   const copy = (text: string, what: string) =>
@@ -223,12 +237,14 @@ export const ModuleDetails = ({ organizationName }: Props) => {
       () => message.error(`Could not copy the ${what.toLowerCase()}`)
     );
 
-  const tabContent = (render: (d: ModuleDetails) => React.ReactNode) =>
-    detailsState === "ready" && details ? (
-      render(details)
+  const tabContent = (render: (d: ModuleDetailsData) => React.ReactNode) =>
+    detailsLoad.state === "ready" ? (
+      render(detailsLoad.details)
     ) : (
-      <span className="registry-tab-empty">{UNAVAILABLE[detailsState as Exclude<DetailsState, "ready">]}</span>
+      <span className="registry-tab-empty">{UNAVAILABLE[detailsLoad.state]}</span>
     );
+
+  const details = detailsLoad.state === "ready" ? detailsLoad.details : undefined;
 
   const count = (label: string, items?: unknown[]) => (items?.length ? `${label} (${items.length})` : label);
 
@@ -246,11 +262,11 @@ export const ModuleDetails = ({ organizationName }: Props) => {
       ]}
       width="reading"
     >
-      {module && attributes && (
+      {module && (
         <div className="registry-detail">
           <header className="registry-detail-header">
             <span className="registry-detail-logo" aria-hidden="true">
-              {providerIcon(attributes.provider)}
+              {providerIcon(module.provider)}
             </span>
             <div className="registry-detail-title">
               <Typography.Title level={2}>{moduleName}</Typography.Title>
@@ -270,7 +286,7 @@ export const ModuleDetails = ({ organizationName }: Props) => {
                 aria-label="Version"
                 className="registry-detail-version"
                 value={version}
-                onChange={(v) => showVersion(attributes.registryPath, v, allVersions)}
+                onChange={(v) => showVersion(module.registryPath ?? "", v, allVersions)}
                 options={versionOptions}
                 showSearch
               />
@@ -312,19 +328,19 @@ export const ModuleDetails = ({ organizationName }: Props) => {
             </div>
           </header>
 
-          {attributes.description && (
+          {module.description && (
             <Typography.Paragraph type="secondary" className="registry-detail-description">
-              {attributes.description}
+              {module.description}
             </Typography.Paragraph>
           )}
 
-          {attributes.lastRefreshError && (
+          {module.lastRefreshError && (
             <div className="registry-detail-alert">
               <Alert
                 type="warning"
                 showIcon
                 title="Could not read versions from the repository"
-                description={attributes.lastRefreshError}
+                description={module.lastRefreshError}
               />
             </div>
           )}
@@ -525,9 +541,9 @@ export const ModuleDetails = ({ organizationName }: Props) => {
                 )}
                 <li>
                   <span className="registry-rail-label">Provider</span>
-                  <code>{attributes.provider}</code>
+                  <code>{module.provider}</code>
                 </li>
-                {attributes.source && (
+                {module.source && (
                   <li>
                     <span className="registry-rail-label">Source</span>
                     <span className="registry-rail-source">
@@ -537,26 +553,26 @@ export const ModuleDetails = ({ organizationName }: Props) => {
                           {sourcePath}
                         </a>
                       ) : (
-                        <code>{attributes.source}</code>
+                        <code>{module.source}</code>
                       )}
                     </span>
                   </li>
                 )}
-                {attributes.folder && (
+                {module.folder && (
                   <li>
                     <span className="registry-rail-label">Folder</span>
-                    <code>{attributes.folder}</code>
+                    <code>{module.folder}</code>
                   </li>
                 )}
-                {attributes.tagPrefix && (
+                {module.tagPrefix && (
                   <li>
                     <span className="registry-rail-label">Tag prefix</span>
-                    <code>{attributes.tagPrefix}</code>
+                    <code>{module.tagPrefix}</code>
                   </li>
                 )}
                 <li>
                   <span className="registry-rail-label">Downloads</span>
-                  <span>{formatCount(attributes.downloadQuantity ?? 0)}</span>
+                  <span>{formatCount(module.downloadQuantity ?? 0)}</span>
                 </li>
                 <li>
                   <span className="registry-rail-label">Versions</span>
@@ -564,8 +580,8 @@ export const ModuleDetails = ({ organizationName }: Props) => {
                 </li>
                 <li>
                   <span className="registry-rail-label">Last checked</span>
-                  <span title={attributes.lastRefresh ?? undefined}>
-                    {attributes.lastRefresh ? relativeTime(attributes.lastRefresh) : "Not yet"}
+                  <span title={module.lastRefresh ?? undefined}>
+                    {module.lastRefresh ? relativeTime(module.lastRefresh) : "Not yet"}
                   </span>
                   {permissions.manageModule && (
                     <Button type="link" size="small" className="registry-rail-action" onClick={checkForNewVersions}>
@@ -573,11 +589,11 @@ export const ModuleDetails = ({ organizationName }: Props) => {
                     </Button>
                   )}
                 </li>
-                {(attributes.updatedDate || attributes.createdDate) && (
+                {(module.updatedDate || module.createdDate) && (
                   <li>
-                    <span className="registry-rail-label">{attributes.updatedDate ? "Updated" : "Published"}</span>
-                    <span title={attributes.updatedDate ?? attributes.createdDate}>
-                      {relativeTime(attributes.updatedDate ?? attributes.createdDate)}
+                    <span className="registry-rail-label">{module.updatedDate ? "Updated" : "Published"}</span>
+                    <span title={module.updatedDate ?? module.createdDate ?? undefined}>
+                      {relativeTime(module.updatedDate ?? module.createdDate)}
                     </span>
                   </li>
                 )}
@@ -636,28 +652,10 @@ function repositoryPath(url: string): string {
   }
 }
 
-function setModuleInclude(
-  includes: any[],
-  setVCSProvider: React.Dispatch<React.SetStateAction<VcsType | undefined>>,
-  setAllVersions: React.Dispatch<React.SetStateAction<ModuleVersionItem[]>>
-): ModuleVersionItem[] {
-  const versions: ModuleVersionItem[] = [];
-  (includes ?? []).forEach((element: any) => {
-    if (element.type === "vcs") {
-      setVCSProvider(element.attributes.vcsType);
-    }
-    if (element.type === "module_version") {
-      versions.push({ id: element.id, ...element.attributes });
-    }
-  });
-  setAllVersions(versions);
-  return versions;
-}
-
 // latestVersion is only recalculated by the module refresh job, so it can still point at a version
 // that was removed since then. Show the recommended version that is still served instead.
-function defaultVersion(latestVersion: string, versions: ModuleVersionItem[]): string {
-  if (versions.find((v) => v.version === latestVersion)?.status !== "removed") return latestVersion;
+function defaultVersion(latestVersion: string | null, versions: ModuleVersionRow[]): string {
+  if (versions.find((v) => v.version === latestVersion)?.status !== "removed") return latestVersion ?? "";
   const newestFirst = [...versions].sort((a, b) => compareVersions(b.version, a.version));
-  return recommendedVersion(newestFirst)?.version ?? latestVersion;
+  return recommendedVersion(newestFirst)?.version ?? latestVersion ?? "";
 }

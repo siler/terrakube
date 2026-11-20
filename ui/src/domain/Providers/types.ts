@@ -1,55 +1,3 @@
-import { AuditFieldBase } from "@/modules/types";
-import type { VersionStatusValue } from "@/components/modals/VersionStatusModal";
-
-export type ProviderModel = {
-  id: string;
-  type: string;
-  attributes: ProviderAttributes;
-};
-
-export type ProviderAttributes = {
-  name: string;
-  namespace: string;
-  description: string;
-  imported?: boolean;
-  registryNamespace?: string;
-  latestVersion?: string;
-} & AuditFieldBase;
-
-export type FlatProvider = {
-  id: string;
-} & ProviderAttributes;
-
-export type ProviderVersionModel = {
-  id: string;
-  type: string;
-  attributes: {
-    versionNumber: string;
-    protocols: string;
-    status?: VersionStatusValue;
-    deprecationMessage?: string | null;
-  };
-};
-
-export type ProviderImplementationModel = {
-  id: string;
-  type: string;
-  attributes: {
-    os: string;
-    arch: string;
-    filename: string;
-    downloadUrl: string;
-    shasumsUrl: string;
-    shasumsSignatureUrl: string;
-    shasum: string;
-    keyId: string;
-    asciiArmor: string;
-    trustSignature: string;
-    source: string;
-    sourceUrl: string;
-  };
-};
-
 // Terraform Registry API response types
 export type TerraformRegistryProvider = {
   id: string;
@@ -63,6 +11,19 @@ export type TerraformRegistryProvider = {
   downloads: number;
   tier: string;
   logo_url: string;
+};
+
+export type TerraformRegistryModule = {
+  id: string;
+  namespace: string;
+  name: string;
+  provider: string;
+  version: string;
+  description: string;
+  source: string;
+  published_at: string;
+  downloads: number;
+  verified: boolean;
 };
 
 // GET /v1/providers/{namespace}/{name}[/{version}] (proxied by the API).
@@ -109,8 +70,4 @@ export type TerraformRegistryProviderDownload = {
       source_url: string;
     }[];
   };
-};
-
-export type TerraformRegistrySearchResult = {
-  providers: TerraformRegistryProvider[];
 };

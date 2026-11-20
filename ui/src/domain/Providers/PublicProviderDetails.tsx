@@ -6,11 +6,18 @@ import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import { LinkButton } from "@/components/navigation/LinkButton";
 import { copyValue } from "@/components/settings/IdField/IdField";
 import { relativeTime } from "@/modules/utils/dates";
+import { isRecord } from "@/modules/utils/typeGuards";
 import { formatCount } from "@/modules/utils/formatCount";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
 import { compareVersions } from "../Workspaces/Workspaces";
-import { getProviderVersions, getPublicProvider, importProvider, listProviders } from "./providerService";
-import { ProviderModel, TerraformRegistryProviderDetails, TerraformRegistryProviderVersions } from "./types";
+import {
+  getProviderVersions,
+  getPublicProvider,
+  importProvider,
+  listProviders,
+  type ProviderNameRow,
+} from "./providerService";
+import { TerraformRegistryProviderDetails, TerraformRegistryProviderVersions } from "./types";
 import "./PublicProviderDetails.css";
 
 type Props = {
@@ -48,7 +55,7 @@ export const PublicProviderDetails = ({ organizationName }: Props) => {
       getPublicProvider(namespace, name),
       getProviderVersions(namespace, name),
       // The page still works for users who cannot list the organization's providers.
-      listProviders(orgid).catch(() => ({ data: [] as ProviderModel[] })),
+      listProviders(orgid).catch((): ProviderNameRow[] => []),
     ])
       .then(([provider, versionData, existing]) => {
         if (stale) return;
@@ -58,7 +65,7 @@ export const PublicProviderDetails = ({ organizationName }: Props) => {
         // The registry reports its latest stable release; fall back to the highest listed version.
         const sorted = (versionData.versions ?? []).map((v) => v.version).sort((a, b) => compareVersions(b, a));
         setSelectedVersion(provider.version || sorted[0]);
-        setExistingProviderId(existing.data.find((p) => p.attributes.name.toLowerCase() === name.toLowerCase())?.id);
+        setExistingProviderId(existing.find((p) => p.name.toLowerCase() === name.toLowerCase())?.id);
       })
       .catch(() => !stale && setError(`Could not load ${namespace}/${name} from the public registry.`))
       .finally(() => !stale && setLoading(false));
@@ -123,14 +130,16 @@ export const PublicProviderDetails = ({ organizationName }: Props) => {
       setImportFailed(true);
       message.error(e instanceof Error ? e.message : "Failed to add provider");
       // A partial import may have created the provider; offer it instead of a duplicate Add.
-      const existing = await listProviders(orgid).catch(() => ({ data: [] as ProviderModel[] }));
-      setExistingProviderId(existing.data.find((p) => p.attributes.name.toLowerCase() === name.toLowerCase())?.id);
+      const existing = await listProviders(orgid).catch((): ProviderNameRow[] => []);
+      setExistingProviderId(existing.find((p) => p.name.toLowerCase() === name.toLowerCase())?.id);
       setImporting(false);
     }
   };
 
   // The search page passes its query string so the breadcrumb returns to the same results.
-  const searchQuery = (location.state as { search?: string } | null)?.search ?? "?tab=providers";
+  const routeState: unknown = location.state;
+  const searchQuery =
+    isRecord(routeState) && typeof routeState.search === "string" ? routeState.search : "?tab=providers";
   const searchPath = `/organizations/${orgid}/registry/search${searchQuery}`;
 
   return (

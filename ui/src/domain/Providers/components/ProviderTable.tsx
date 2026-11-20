@@ -1,7 +1,7 @@
 import { Table } from "antd";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { parseProviderDescription } from "../../Modules/registryHelpers";
-import { FlatProvider } from "../types";
+import { FlatProvider } from "../providerFields";
 
 type Params = {
   orgid: string;
@@ -22,7 +22,7 @@ export default function ProviderTable({ providers }: Props) {
       key: "name",
       sorter: (a: FlatProvider, b: FlatProvider) => a.name.localeCompare(b.name),
       render: (name: string, record: FlatProvider) => {
-        const { text } = parseProviderDescription(record.description);
+        const { text } = parseProviderDescription(record.description ?? "");
         return (
           <>
             <Link to={`/organizations/${orgid}/registry/providers/${record.id}`} className="registry-table-name">
@@ -59,7 +59,9 @@ export default function ProviderTable({ providers }: Props) {
       rowClassName="registry-table-row"
       onRow={(record) => ({
         onClick: (event) => {
-          if ((event.target as HTMLElement).closest("a")) return;
+          if (event.target instanceof Element && event.target.closest("a")) {
+            return;
+          }
           navigate(`/organizations/${orgid}/registry/providers/${record.id}`);
         },
       })}
