@@ -1,5 +1,7 @@
 export default {
   testEnvironment: "jsdom",
+  // The scripts/ tests run under `node --test` (api-types:test), not Jest.
+  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/scripts/"],
   transform: {
     "^.+\\.ts?$": ["ts-jest", { tsconfig: "tsconfig.test.json" }],
     "^.+\\.tsx?$": ["ts-jest", { tsconfig: "tsconfig.test.json" }],
