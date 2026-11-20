@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import RunList from "../RunList";
-import { FlatJob, JobStatus } from "@/domain/types";
+import { FlatJob, JobStatus, Template } from "@/domain/types";
 import { ORGANIZATION_ARCHIVE } from "@/config/actionTypes";
+import axiosInstance from "@/config/axiosConfig";
 
 jest.mock("@/config/axiosConfig", () => ({
   __esModule: true,
@@ -72,5 +73,24 @@ describe("RunList", () => {
     expect(screen.getByRole("heading", { name: "Runs (0)" })).toBeInTheDocument();
     expect(screen.getByText(/No runs yet/)).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Filter by status" })).not.toBeInTheDocument();
+  });
+
+  it("names templates from the list it is given without fetching them", () => {
+    sessionStorage.setItem(ORGANIZATION_ARCHIVE, "org-1");
+    jest.mocked(axiosInstance.get).mockClear();
+    const templates = [{ id: "tpl-1", attributes: { name: "Given template" } }] as Template[];
+    render(
+      <MemoryRouter>
+        <RunList
+          jobs={[job("1", JobStatus.Completed)]}
+          templates={templates}
+          onRunClick={jest.fn()}
+          runLink={(id) => `/runs/${id}`}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("Given template")).toBeInTheDocument();
+    expect(axiosInstance.get).not.toHaveBeenCalled();
   });
 });

@@ -17,6 +17,8 @@ const validateMessages = { required: "${label} is required" };
 
 const isDestroyTemplate = (template: Template) => template.attributes.name.includes("Destroy");
 
+const CLI_TEMPLATE_NAMES = ["Terraform-Plan/Apply-Cli", "Terraform-Plan/Destroy-Cli"];
+
 const templateLabel = (template: Template) =>
   isDestroyTemplate(template) ? (
     <span className="run-template--destroy">
@@ -35,6 +37,10 @@ type Props = {
   // The workspace's current state resources, offered as selectable options for
   // Target/Replace resources below (in addition to freely typing an address).
   resources?: Resource[];
+  // Organization templates from the parent, null while it loads them. When omitted, the component fetches them.
+  templates?: Template[] | null;
+  // Called as the dialog opens, so the parent can refresh templates someone else may have changed.
+  onOpen?: () => void;
 };
 
 type CreateJobForm = {
@@ -44,18 +50,31 @@ type CreateJobForm = {
   replaceAddrs?: string[];
 };
 
-export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources }: Props) => {
+export const CreateJob = ({
+  changeJob,
+  planJob = true,
+  disabledReason,
+  resources,
+  templates: providedTemplates,
+  onOpen,
+}: Props) => {
   const navigate = useNavigate();
   const workspaceId = sessionStorage.getItem(WORKSPACE_ARCHIVE);
   const organizationId = sessionStorage.getItem(ORGANIZATION_ARCHIVE);
   const [visible, setVisible] = useState(false);
   const [form] = Form.useForm<CreateJobForm>();
   const [defaultTemplate, setDefaultTemplate] = useState();
-  const [templates, setTemplates] = useState<Template[]>([]);
+  const [fetchedTemplates, setFetchedTemplates] = useState<Template[] | null>(null);
   const [branchName, setBranchName] = useState("");
   const [restrictApply, setRestrictApply] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const templatesProvided = providedTemplates !== undefined;
+  const sourceTemplates = templatesProvided ? providedTemplates : fetchedTemplates;
+  const loading = sourceTemplates === null;
+  const templates = useMemo(
+    () => (sourceTemplates ?? []).filter((item) => !CLI_TEMPLATE_NAMES.includes(item.attributes.name)),
+    [sourceTemplates]
+  );
   const resourceOptions = useMemo(() => buildResourceOptions(resources ?? []), [resources]);
   const selectedBranch = Form.useWatch("branchName", form);
   // A workspace that restricts apply to its configured branch only runs plan-only templates on another branch.
@@ -68,21 +87,33 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
   );
   const selectedTemplate = Form.useWatch("templateId", form);
 
+  // Also covers a selected template that a refresh shows was deleted.
   useEffect(() => {
-    if (onOtherBranch && !availableTemplates.some((item) => item.id === selectedTemplate)) {
+    if (loading || (!onOtherBranch && !selectedTemplate)) {
+      return;
+    }
+    if (!availableTemplates.some((item) => item.id === selectedTemplate)) {
       form.setFieldsValue({ templateId: availableTemplates[0]?.id });
     }
-  }, [onOtherBranch, availableTemplates, selectedTemplate, form]);
+  }, [loading, onOtherBranch, availableTemplates, selectedTemplate, form]);
 
   const onCancel = () => {
     setVisible(false);
   };
 
   useEffect(() => {
-    setLoading(true);
-    loadTemplates();
     loadBranch();
   }, [organizationId]);
+
+  useEffect(() => {
+    if (templatesProvided) {
+      return;
+    }
+    axiosInstance
+      .get(`organization/${organizationId}/template`)
+      .then((response) => setFetchedTemplates(response.data.data))
+      .catch(() => setFetchedTemplates([]));
+  }, [organizationId, templatesProvided]);
 
   const loadBranch = () => {
     axiosInstance.get(`organization/${organizationId}/workspace/${workspaceId}`).then((response) => {
@@ -93,19 +124,6 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
       setBranchName(firstBranch);
       setRestrictApply(Boolean(restrictApplyToConfiguredBranch));
       form.setFieldsValue({ templateId: defaultTemplate, branchName: firstBranch });
-    });
-  };
-
-  const loadTemplates = () => {
-    axiosInstance.get(`organization/${organizationId}/template`).then((response) => {
-      const templatesList = response.data.data.filter(function (obj: Template) {
-        //exclude CLI based templates
-        return (
-          obj.attributes.name !== "Terraform-Plan/Apply-Cli" && obj.attributes.name !== "Terraform-Plan/Destroy-Cli"
-        );
-      });
-      setTemplates(templatesList);
-      setLoading(false);
     });
   };
 
@@ -164,6 +182,7 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
           htmlType="button"
           onClick={() => {
             loadBranch();
+            onOpen?.();
             setVisible(true);
           }}
           icon={<PlayCircleOutlined />}
@@ -197,7 +216,7 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
           />
         )}
         <Form.Item name="templateId" label="Template" rules={[{ required: true }]} initialValue={defaultTemplate}>
-          {loading || !templates ? (
+          {loading ? (
             <LoadingFallback />
           ) : availableTemplates.length <= 3 ? (
             <RadioChoices
