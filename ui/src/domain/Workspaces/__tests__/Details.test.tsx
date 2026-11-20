@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, NavigateFunction, Route, Routes, useNavigate } from "react-router-dom";
 import { WorkspaceDetails } from "../Details";
+import { LOAD_DEADLINE_MS } from "../../../hooks/useCoalescedReload";
 
 window._env_ = {
   REACT_APP_AUTHORITY: "http://localhost/authority",
@@ -34,9 +35,15 @@ jest.mock("../../Jobs/Details", () => ({
   DetailsJob: ({ jobId }: { jobId: string }) => <p>{`run ${jobId}`}</p>,
 }));
 
+const mockSubscriptions: { poll?: () => void; jobEvent?: () => void } = {};
 jest.mock("../../../hooks", () => ({
-  usePolling: jest.fn(),
-  useJobStatusSubscription: jest.fn(),
+  usePolling: (callback: () => void) => {
+    mockSubscriptions.poll = callback;
+  },
+  useJobStatusSubscription: ({ onEvent }: { onEvent: () => void }) => {
+    mockSubscriptions.jobEvent = onEvent;
+  },
+  useCoalescedReload: jest.requireActual("../../../hooks/useCoalescedReload").useCoalescedReload,
 }));
 
 describe("WorkspaceDetails", () => {
@@ -329,6 +336,117 @@ describe("WorkspaceDetails", () => {
       await waitFor(() => expect(actionLoads()).toBe(3));
       expect(permissionLoads()).toBe(3);
       expect(templateLoads()).toBe(3);
+    });
+  });
+
+  describe("reloading the workspace", () => {
+    const workspaceResponse = {
+      data: {
+        data: {
+          id: "ws-1",
+          type: "workspace",
+          attributes: { name: "sample-workspace", source: "https://github.com/example/repo.git", branch: "main" },
+          relationships: { organization: { data: { id: "org-1" } } },
+        },
+        included: [{ id: "org-1", type: "organization", attributes: { name: "test-org" } }],
+      },
+    };
+    const workspaceRequests: Array<{ resolve: (value: unknown) => void; signal?: AbortSignal }> = [];
+    const timeoutMessage = `timeout of ${LOAD_DEADLINE_MS}ms exceeded`;
+
+    const renderPage = () => {
+      workspaceRequests.length = 0;
+      getMock.mockImplementation((url: string, config?: { signal?: AbortSignal }) => {
+        if (url.startsWith("organization/org-1/workspace/ws-1?")) {
+          return new Promise((resolve) => workspaceRequests.push({ resolve, signal: config?.signal }));
+        }
+        if (url.includes("/workspace/ws-1")) return Promise.resolve(workspaceResponse);
+        return Promise.resolve({ data: { data: [] } });
+      });
+      render(
+        <MemoryRouter initialEntries={["/organizations/org-1/workspaces/ws-1"]}>
+          <Routes>
+            <Route
+              path="/organizations/:orgid/workspaces/:id"
+              element={<WorkspaceDetails setOrganizationName={jest.fn()} setWorkspaceManageState={jest.fn()} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      );
+    };
+
+    afterEach(() => jest.useRealTimers());
+
+    it("keeps one workspace request in flight and folds the polls that overlap it into one more", async () => {
+      renderPage();
+      await waitFor(() => expect(workspaceRequests).toHaveLength(1));
+      expect(workspaceRequests[0].signal).toBeInstanceOf(AbortSignal);
+
+      act(() => {
+        mockSubscriptions.poll?.();
+        mockSubscriptions.poll?.();
+        mockSubscriptions.poll?.();
+      });
+      expect(workspaceRequests).toHaveLength(1);
+
+      await act(async () => workspaceRequests[0].resolve(workspaceResponse));
+      await waitFor(() => expect(workspaceRequests).toHaveLength(2));
+      await act(async () => workspaceRequests[1].resolve(workspaceResponse));
+      expect(workspaceRequests).toHaveLength(2);
+    });
+
+    it("reloads right away on a job status event and folds the rest of a burst into one more load", async () => {
+      renderPage();
+      await waitFor(() => expect(workspaceRequests).toHaveLength(1));
+      await act(async () => workspaceRequests[0].resolve(workspaceResponse));
+      await screen.findByText("Run now");
+
+      await act(async () => mockSubscriptions.jobEvent?.());
+      expect(workspaceRequests).toHaveLength(2);
+      await act(async () => {
+        mockSubscriptions.jobEvent?.();
+        mockSubscriptions.jobEvent?.();
+      });
+      expect(workspaceRequests).toHaveLength(2);
+
+      await act(async () => workspaceRequests[1].resolve(workspaceResponse));
+      await waitFor(() => expect(workspaceRequests).toHaveLength(3));
+      await act(async () => workspaceRequests[2].resolve(workspaceResponse));
+      expect(workspaceRequests).toHaveLength(3);
+    });
+
+    it("shows a timeout error when the first load passes the deadline, and clears it once a load succeeds", async () => {
+      jest.useFakeTimers();
+      renderPage();
+      await waitFor(() => expect(workspaceRequests).toHaveLength(1));
+
+      await act(async () => jest.advanceTimersByTime(LOAD_DEADLINE_MS));
+
+      expect(await screen.findByText(timeoutMessage)).toBeInTheDocument();
+      expect(workspaceRequests[0].signal?.aborted).toBe(true);
+
+      await act(async () => mockSubscriptions.poll?.());
+      expect(workspaceRequests).toHaveLength(2);
+      await act(async () => workspaceRequests[1].resolve(workspaceResponse));
+
+      expect(await screen.findByText("Run now")).toBeInTheDocument();
+      expect(screen.queryByText(timeoutMessage)).not.toBeInTheDocument();
+    });
+
+    it("keeps the page on screen when a background reload passes the deadline", async () => {
+      jest.useFakeTimers();
+      renderPage();
+      await waitFor(() => expect(workspaceRequests).toHaveLength(1));
+      await act(async () => workspaceRequests[0].resolve(workspaceResponse));
+      expect(await screen.findByText("Run now")).toBeInTheDocument();
+
+      await act(async () => mockSubscriptions.poll?.());
+      expect(workspaceRequests).toHaveLength(2);
+      await act(async () => jest.advanceTimersByTime(LOAD_DEADLINE_MS));
+
+      expect(workspaceRequests[1].signal?.aborted).toBe(true);
+      expect(screen.queryByText(timeoutMessage)).not.toBeInTheDocument();
+      expect(screen.getByText("Run now")).toBeInTheDocument();
     });
   });
 });

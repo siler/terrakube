@@ -318,3 +318,49 @@ describe("setupWorkspaceIncludes state preview", () => {
     expect(get).not.toHaveBeenCalled();
   });
 });
+
+describe("setupWorkspaceIncludes for a load the page has moved past", () => {
+  it("passes the load's signal on and sets nothing once the load is no longer current", async () => {
+    const signal = new AbortController().signal;
+    const get = jest.fn(() => Promise.resolve({ data: { data: [] } }));
+    const setJobs = jest.fn();
+    const setGlobalVariables = jest.fn();
+    const noop = () => {};
+
+    await setupWorkspaceIncludes(
+      {
+        data: { attributes: {} },
+        included: [
+          { id: "org-1", type: "organization", attributes: {} },
+          { id: "job-1", type: "job", attributes: { createdDate: "2026-09-08T12:00:00Z" } },
+        ],
+      },
+      noop,
+      setJobs,
+      noop,
+      noop,
+      noop,
+      Promise.resolve(false),
+      noop,
+      noop,
+      noop,
+      "",
+      { get },
+      noop,
+      noop,
+      noop,
+      false,
+      noop,
+      noop,
+      noop,
+      setGlobalVariables,
+      noop,
+      () => false,
+      signal
+    );
+
+    expect(get).toHaveBeenCalledWith("/organization/org-1/globalvar", { signal });
+    expect(setJobs).not.toHaveBeenCalled();
+    expect(setGlobalVariables).not.toHaveBeenCalled();
+  });
+});

@@ -15,7 +15,7 @@ import {
 import { Alert, Avatar, Button, Col, Empty, message, Row, Space, Table, Tabs, Typography, Modal } from "antd";
 
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useJobStatusSubscription, usePolling } from "../../hooks";
+import { CoalescedLoad, useCoalescedReload, useJobStatusSubscription, usePolling } from "../../hooks";
 import { BiTerminal } from "react-icons/bi";
 import { FiGitCommit } from "react-icons/fi";
 import { HiOutlineExternalLink } from "react-icons/hi";
@@ -148,13 +148,14 @@ export const WorkspaceDetails = ({
   const [vcsProvider, setVCSProvider] = useState<VcsType>(VcsType.UNKNOWN);
   const [resources, setResources] = useState<Resource[]>([]);
   const [outputs, setOutputs] = useState<StateOutputVariableWithName[]>([]);
-  const [currentStateId, setCurrentStateId] = useState("");
   const [actions, setActions] = useState<Action[]>([]);
   const [contextState, setContextState] = useState({});
   const [projectName, setProjectName] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const manageStateRequest = useRef<Promise<boolean>>(Promise.resolve(false));
   const firstLoadPending = useRef(true);
+  // A queued reload can run before React re-renders, so it must see the state id the previous load set.
+  const currentStateId = useRef("");
 
   const runLink = (jobid: string) => `/organizations/${organizationId}/workspaces/${id}/runs/${jobid}`;
 
@@ -327,7 +328,7 @@ export const WorkspaceDetails = ({
     firstLoadPending.current = true;
     manageStateRequest.current = loadPermissionSet();
     loadTemplates();
-    loadWorkspace(true);
+    workspaceReload.reload();
     // Polling is now handled by usePolling hook below
   }, [id]);
 
@@ -362,7 +363,7 @@ export const WorkspaceDetails = ({
   // Polling for workspace updates
   usePolling(
     () => {
-      loadWorkspace(false);
+      workspaceReload.reload();
     },
     { interval: 10000, enabled: Boolean(id), immediate: false }
   );
@@ -372,7 +373,7 @@ export const WorkspaceDetails = ({
   useJobStatusSubscription({
     workspaceId: id ?? "",
     enabled: Boolean(id),
-    onEvent: () => loadWorkspace(false),
+    onEvent: () => workspaceReload.reload(),
   });
 
   const changeJob = (id: string) => {
@@ -402,12 +403,14 @@ export const WorkspaceDetails = ({
       });
   };
 
-  const loadWorkspace = (_loadVersions: boolean) => {
+  const loadWorkspace: CoalescedLoad = (isCurrent, signal) =>
     axiosInstance
       .get(
-        `organization/${organizationId}/workspace/${id}?include=job,variable,history,schedule,vcs,agent,organization,webhook,reference,project`
+        `organization/${organizationId}/workspace/${id}?include=job,variable,history,schedule,vcs,agent,organization,webhook,reference,project`,
+        { signal }
       )
       .then(async (response) => {
+        if (!isCurrent()) return;
         setWorkspace(response.data.data);
 
         if (response.data.included) {
@@ -421,8 +424,10 @@ export const WorkspaceDetails = ({
             manageStateRequest.current,
             setLastRun,
             setVCSProvider,
-            setCurrentStateId,
-            currentStateId,
+            (stateId) => {
+              currentStateId.current = stateId;
+            },
+            currentStateId.current,
             axiosInstance,
             setResources,
             setOutputs,
@@ -432,8 +437,11 @@ export const WorkspaceDetails = ({
             setCollectionVariables,
             setCollectionEnvVariables,
             setGlobalVariables,
-            setGlobalEnvVariables
+            setGlobalEnvVariables,
+            isCurrent,
+            signal
           );
+          if (!isCurrent()) return;
         }
 
         const organization: Organization | undefined = response.data.included?.find(
@@ -456,18 +464,27 @@ export const WorkspaceDetails = ({
         setOrganizationNameLocal(sessionStorage.getItem(ORGANIZATION_NAME)!);
         setWorkspaceName(response.data.data.attributes.name);
         setExecutionMode(response.data.data.attributes.executionMode ?? "remote");
-        if (runid && _loadVersions) changeJob(runid); // if runid is provided, show the job details
-        if (_loadVersions) fetchActions();
+        if (runid && firstLoadPending.current) changeJob(runid); // if runid is provided, show the job details
+        if (firstLoadPending.current) fetchActions();
         setLoadError(null);
       })
       .catch((err) => {
-        setLoadError(getErrorMessage(err));
+        if (isCurrent()) setLoadError(getErrorMessage(err));
       })
       .finally(() => {
+        if (!isCurrent()) return;
         firstLoadPending.current = false;
         setLoading(false);
       });
-  };
+
+  const workspaceReload = useCoalescedReload(loadWorkspace, {
+    // Until a load lands there is nothing to show, so a timeout is an error; later ones keep the data on screen.
+    onDeadline: (error) => {
+      if (!firstLoadPending.current) return;
+      setLoadError(getErrorMessage(error));
+      setLoading(false);
+    },
+  });
 
   const workspaceSettingsPath = `/organizations/${organizationId}/workspaces/${id}/settings`;
 
@@ -505,7 +522,7 @@ export const WorkspaceDetails = ({
         },
       })
       .then(() => {
-        loadWorkspace(true);
+        workspaceReload.reload();
         const newstatus = locked ? "unlocked" : "locked";
         message.success("Workspace " + newstatus + " successfully");
       })
@@ -628,7 +645,7 @@ export const WorkspaceDetails = ({
                             canApprove={approveJob}
                             permissionsLoaded={permissionsLoaded}
                             approvalTeam={latestJob.approvalTeam}
-                            onChanged={() => loadWorkspace(false)}
+                            onChanged={workspaceReload.reload}
                           />
                         </div>
                       )}
@@ -792,7 +809,7 @@ export const WorkspaceDetails = ({
               setStateDetailsVisible={setStateDetailsVisible}
               stateDetailsVisible={stateDetailsVisible}
               workspace={workspace}
-              onRollback={loadWorkspace}
+              onRollback={workspaceReload.reload}
               manageState={manageState}
             />
           </Suspense>
@@ -807,12 +824,12 @@ export const WorkspaceDetails = ({
             collectionEnvVars={collectionEnvVariables}
             globalVariables={globalVariables}
             globalEnvVariables={globalEnvVariables}
-            reload={() => loadWorkspace(false)}
+            reload={workspaceReload.reload}
           />
         );
       case "5":
         return templates ? (
-          <Schedules schedules={namedSchedules} manageWorkspace={manageWorkspace} reload={() => loadWorkspace(false)} />
+          <Schedules schedules={namedSchedules} manageWorkspace={manageWorkspace} reload={workspaceReload.reload} />
         ) : (
           <p>Loading...</p>
         );
@@ -834,7 +851,7 @@ export const WorkspaceDetails = ({
               orgTemplates={templates ?? []}
               manageWorkspace={manageWorkspace}
               planJob={planJob}
-              onWorkspaceUpdate={() => loadWorkspace(false)}
+              onWorkspaceUpdate={workspaceReload.reload}
               activeSection={settingsSection || "general"}
             />
           </Suspense>

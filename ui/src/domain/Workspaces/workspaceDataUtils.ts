@@ -85,7 +85,10 @@ export async function setupWorkspaceIncludes(
   setCollectionVariables: (val: any[]) => void,
   setCollectionEnvVariables: (val: any[]) => void,
   setGlobalVariables: (val: FlatVariable[]) => void,
-  setGlobalEnvVariables: (val: FlatVariable[]) => void
+  setGlobalEnvVariables: (val: FlatVariable[]) => void,
+  // False once the page has moved on to a newer load, so this one must not land.
+  isCurrent: () => boolean = () => true,
+  signal?: AbortSignal
 ): Promise<void> {
   const variables: FlatVariable[] = [];
   const jobs: FlatJob[] = [];
@@ -104,7 +107,7 @@ export async function setupWorkspaceIncludes(
     switch (element.type) {
       case include.ORGANIZATION:
         asyncPromises.push(
-          axiosInstance.get(`/organization/${element.id}/globalvar`).then((response: any) => {
+          axiosInstance.get(`/organization/${element.id}/globalvar`, { signal }).then((response: any) => {
             const globalVar = response.data.data;
             if (globalVar != null) {
               globalVar.forEach((variableItem: any) => {
@@ -193,7 +196,7 @@ export async function setupWorkspaceIncludes(
         break;
       case include.REFERENCE:
         asyncPromises.push(
-          axiosInstance.get(`/reference/${element.id}/collection?include=item`).then((response: any) => {
+          axiosInstance.get(`/reference/${element.id}/collection?include=item`, { signal }).then((response: any) => {
             const collectionInfo = response.data.data;
             if (response.data.included != null) {
               const items = response.data.included;
@@ -222,8 +225,9 @@ export async function setupWorkspaceIncludes(
   });
 
   await Promise.all(asyncPromises).catch((err) => {
-    console.error("Error loading workspace includes:", err);
+    if (!signal?.aborted) console.error("Error loading workspace includes:", err);
   });
+  if (!isCurrent()) return;
 
   const byKey = (a: { key?: string }, b: { key?: string }) =>
     (a.key ?? "").localeCompare(b.key ?? "", undefined, { sensitivity: "base" });
