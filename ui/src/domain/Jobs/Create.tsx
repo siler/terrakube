@@ -163,7 +163,9 @@ export const CreateJob = ({ changeJob, planJob = true, disabledReason, resources
           type="primary"
           htmlType="button"
           onClick={() => {
+            // The workspace page stays mounted across runs, so the templates loaded on mount can be stale.
             loadBranch();
+            loadTemplates();
             setVisible(true);
           }}
           icon={<PlayCircleOutlined />}

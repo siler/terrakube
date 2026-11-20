@@ -174,3 +174,24 @@ describe("CreateJob on a workspace that restricts apply to its branch", () => {
     expect(await screen.findByText("No plan-only templates available in this organization")).toBeInTheDocument();
   });
 });
+
+describe("CreateJob template refresh", () => {
+  it("fetches the templates again each time Run now opens", async () => {
+    let templates = [{ id: "t-old", attributes: { name: "Old template", description: "Old", tcl: "" } }];
+    getMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        typeof url === "string" && url.includes("/template")
+          ? { data: { data: templates } }
+          : { data: { data: { attributes: { branch: "main", defaultTemplate: undefined } } } }
+      )
+    );
+    render(<CreateJob changeJob={jest.fn()} planJob={true} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /run now/i })).toBeEnabled());
+
+    templates = [{ id: "t-new", attributes: { name: "New template", description: "New", tcl: "" } }];
+    fireEvent.click(screen.getByRole("button", { name: /run now/i }));
+
+    expect(await screen.findByRole("radio", { name: /^New template/ })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /^Old template/ })).not.toBeInTheDocument();
+  });
+});
