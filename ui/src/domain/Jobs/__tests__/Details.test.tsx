@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { message } from "antd";
+import { MemoryRouter } from "react-router-dom";
 import { DetailsJob } from "../Details";
 import { stepLogCache } from "../stepLogCache";
+import { linkIncluded } from "@/testUtils/fixtureLinkage";
+import type { useStructuredOutputStream } from "../../../hooks";
 
 // The step-log cache is module-level and would otherwise leak a fetched log from one test into the
 // next (they reuse step ids like "step-1").
@@ -19,24 +22,31 @@ window._env_ = {
   REACT_APP_REGISTRY_URI: "http://localhost:8080/registry",
 };
 
-const getMock = jest.fn();
-const patchMock = jest.fn();
+type AxiosLikeResponse = { data?: unknown };
+
+const getMock = jest.fn<Promise<AxiosLikeResponse>, [string, ...unknown[]]>();
+const patchMock = jest.fn<Promise<AxiosLikeResponse>, unknown[]>();
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
-  default: { get: (...args: unknown[]) => getMock(...args), patch: (...args: unknown[]) => patchMock(...args) },
-  axiosClient: { get: (...args: unknown[]) => getMock(...args) },
+  default: {
+    get: (url: string, ...rest: unknown[]) => getMock(url, ...rest).then((response) => linkIncluded(url, response)),
+    patch: (...args: unknown[]) => patchMock(...args),
+  },
+  axiosClient: { get: (url: string, ...rest: unknown[]) => getMock(url, ...rest) },
   axiosAuxiliary: {
-    get: (...args: unknown[]) => getMock(...args),
-    head: (...args: unknown[]) => getMock(...args),
+    get: (url: string, ...rest: unknown[]) => getMock(url, ...rest),
+    head: (url: string, ...rest: unknown[]) => getMock(url, ...rest),
   },
 }));
 
-const useStructuredOutputStreamMock = jest.fn();
+// The hook's value type is chosen by the caller, so the test sees it as unknown.
+const useStructuredOutputStreamMock = jest.fn<unknown, Parameters<typeof useStructuredOutputStream<unknown>>>();
 
 jest.mock("../../../hooks", () => ({
-  ...jest.requireActual("../../../hooks"),
-  useStructuredOutputStream: (...args: unknown[]) => useStructuredOutputStreamMock(...args),
+  ...jest.requireActual<typeof import("../../../hooks")>("../../../hooks"),
+  useStructuredOutputStream: (...args: Parameters<typeof useStructuredOutputStream<unknown>>) =>
+    useStructuredOutputStreamMock(...args),
 }));
 
 describe("DetailsJob apply structured output", () => {
@@ -214,6 +224,32 @@ describe("DetailsJob apply structured output", () => {
   });
 });
 
+describe("DetailsJob live structured-output validation", () => {
+  beforeEach(() => {
+    useStructuredOutputStreamMock.mockReset();
+    useStructuredOutputStreamMock.mockReturnValue(null);
+    getMock.mockImplementation(() => Promise.resolve({ data: {} }));
+  });
+
+  it("accepts only plan or apply pushes from the stream", async () => {
+    let parse: ((value: unknown) => unknown) | undefined;
+    useStructuredOutputStreamMock.mockImplementation((options: { parse: (value: unknown) => unknown }) => {
+      parse = options.parse;
+      return null;
+    });
+    render(<DetailsJob jobId="1" />);
+    await waitFor(() => expect(parse).toBeDefined());
+
+    expect(parse?.({ phase: "plan", changes: { "s-1": [] }, jobDiagnostics: {} })).toEqual({
+      phase: "plan",
+      changes: { "s-1": [] },
+      jobDiagnostics: {},
+    });
+    expect(parse?.({ phase: "destroy", changes: {} })).toBeUndefined();
+    expect(parse?.(null)).toBeUndefined();
+  });
+});
+
 describe("DetailsJob terminal-status context reconciliation", () => {
   beforeEach(() => {
     useStructuredOutputStreamMock.mockReturnValue(null);
@@ -279,7 +315,18 @@ describe("DetailsJob terminal-status context reconciliation", () => {
       }
       return Promise.resolve({
         data: {
-          data: { id: "1", attributes: { status: "completed" } },
+          data: {
+            id: "1",
+            attributes: { status: "completed" },
+            relationships: {
+              step: {
+                data: [
+                  { type: "step", id: "step-1" },
+                  { type: "step", id: "step-2" },
+                ],
+              },
+            },
+          },
           included: [
             {
               id: "step-1",
@@ -481,7 +528,7 @@ describe("DetailsJob progressive render", () => {
   });
 
   it("paints steps before the step-log fetch resolves and never blocks first paint on it", async () => {
-    const logPending = new Promise(() => {}); // stays pending for the whole test
+    const logPending = new Promise<AxiosLikeResponse>(() => {}); // stays pending for the whole test
 
     getMock.mockImplementation((url: string) => {
       if (url.includes("/context/v1/")) {
@@ -516,7 +563,18 @@ describe("DetailsJob no-change apply semantics", () => {
 
   const twoStepJob = (status: string) => ({
     data: {
-      data: { id: "1", attributes: { status } },
+      data: {
+        id: "1",
+        attributes: { status },
+        relationships: {
+          step: {
+            data: [
+              { type: "step", id: "plan-1" },
+              { type: "step", id: "apply-1" },
+            ],
+          },
+        },
+      },
       included: [
         { id: "plan-1", type: "step", attributes: { name: "Terraform Plan", status, stepNumber: "1" } },
         { id: "apply-1", type: "step", attributes: { name: "Terraform Apply", status, stepNumber: "2" } },
@@ -630,7 +688,18 @@ describe("DetailsJob no-change apply semantics", () => {
       if (url.includes("/step/")) return Promise.resolve({ data: "no changes", headers: {} });
       return Promise.resolve({
         data: {
-          data: { id: "1", attributes: { status: "failed" } },
+          data: {
+            id: "1",
+            attributes: { status: "failed" },
+            relationships: {
+              step: {
+                data: [
+                  { type: "step", id: "plan-1" },
+                  { type: "step", id: "apply-1" },
+                ],
+              },
+            },
+          },
           included: [
             {
               id: "plan-1",
@@ -782,14 +851,19 @@ describe("run actions", () => {
       })
     );
 
+  const isCallback = (handler: TimerHandler): handler is () => void => typeof handler === "function";
+
   const runPoll = async () => {
-    const poll = intervalSpy.mock.calls.find(([, delay]) => delay === 5000)?.[0] as () => void;
+    const poll = intervalSpy.mock.calls.find(([, delay]) => delay === 5000)?.[0];
+    if (poll === undefined || !isCallback(poll)) {
+      throw new Error("No 5s poll was scheduled");
+    }
     await act(async () => {
       poll();
     });
   };
 
-  let intervalSpy: jest.SpyInstance;
+  let intervalSpy: jest.SpiedFunction<typeof window.setInterval>;
   beforeEach(() => {
     useStructuredOutputStreamMock.mockReturnValue(null);
     sessionStorage.setItem("ORGANIZATION_ARCHIVE", "org-1");
@@ -870,11 +944,18 @@ describe("DetailsJob run diagnostics and output completeness (#3693)", () => {
     attributes: { name, status: "completed", stepNumber: number, ...extra },
   });
 
-  const jobResponse = (steps: unknown[]) => ({
-    data: { data: { id: "1", attributes: { status: "completed" } }, included: steps },
+  const jobResponse = (steps: { id: string }[]) => ({
+    data: {
+      data: {
+        id: "1",
+        attributes: { status: "completed" },
+        relationships: { step: { data: steps.map(({ id }) => ({ type: "step", id })) } },
+      },
+      included: steps,
+    },
   });
 
-  const mockRun = (context: Record<string, unknown>, steps: unknown[]) => {
+  const mockRun = (context: Record<string, unknown>, steps: { id: string }[]) => {
     getMock.mockImplementation((url: string) => {
       if (url.includes("/context/v1/")) return Promise.resolve({ data: context });
       if (url.includes("/step/")) return Promise.resolve({ data: "log line", headers: {} });
@@ -1311,5 +1392,155 @@ describe("DetailsJob job variables notice", () => {
     await waitFor(() => expect(getMock).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText(/Loading|loading/)).not.toBeInTheDocument());
     expect(screen.queryByText(/run variables?/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DetailsJob requests", () => {
+  const jobCalls = () => getMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/job/"));
+  const vcsCalls = () => getMock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes("/vcs/"));
+  const workspaceCalls = () =>
+    getMock.mock.calls.map(([url]) => String(url)).filter((url) => /\/workspace\/[^/?]+/.test(url));
+
+  const mockJob = (attributes: Record<string, unknown>, vcs: { data: { id: string } | null }) => {
+    getMock.mockImplementation((url: string) => {
+      if (url.includes("/context/v1/")) {
+        return Promise.resolve({ data: {} });
+      }
+      if (url.includes("/job/7?")) {
+        return Promise.resolve({
+          data: {
+            data: { id: "7", relationships: { workspace: { data: { type: "workspace", id: "ws-up" } } } },
+            included: [{ id: "ws-up", type: "workspace", attributes: { name: "upstream-ws" } }],
+          },
+        });
+      }
+      return Promise.resolve({
+        data: {
+          data: { id: "1", attributes },
+          included: [
+            {
+              id: "step-1",
+              type: "step",
+              attributes: { name: "Plan", status: attributes.status, stepNumber: 1 },
+            },
+            {
+              id: "ws-1",
+              type: "workspace",
+              attributes: { source: "https://github.com/o/r.git", branch: "main" },
+              relationships: { vcs },
+            },
+            ...(vcs.data ? [{ id: vcs.data.id, type: "vcs", attributes: { name: "GitHub Org" } }] : []),
+          ],
+        },
+      });
+    });
+  };
+
+  beforeEach(() => {
+    getMock.mockReset();
+    useStructuredOutputStreamMock.mockReturnValue(null);
+    sessionStorage.setItem("ORGANIZATION_ARCHIVE", "org-1");
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("asks for only the job, step, workspace and vcs fields the page reads", async () => {
+    mockJob({ status: "completed" }, { data: null });
+    render(<DetailsJob jobId="1" />);
+    await waitFor(() => expect(jobCalls().length).toBeGreaterThan(0));
+
+    const url = new URL(jobCalls()[0], "http://localhost/");
+    const listOf = (param: string) => url.searchParams.get(param)?.split(",").sort();
+    expect([...url.searchParams.keys()].sort()).toEqual(
+      ["include", "fields[job]", "fields[step]", "fields[workspace]", "fields[vcs]"].sort()
+    );
+    expect(listOf("include")).toEqual(["step", "workspace", "workspace.vcs"]);
+    expect(listOf("fields[job]")).toEqual(
+      [
+        "approvalTeam",
+        "approvedAt",
+        "approvedBy",
+        "cascadeDepth",
+        "commitId",
+        "createdBy",
+        "createdDate",
+        "organization",
+        "output",
+        "overrideBranch",
+        "prCommentError",
+        "prNumber",
+        "status",
+        "step",
+        "triggeredByJobId",
+        "variableNames",
+        "via",
+        "workspace",
+      ].sort()
+    );
+    expect(listOf("fields[step]")).toEqual(["deliveryState", "name", "output", "status", "stepNumber"]);
+    expect(listOf("fields[workspace]")).toEqual(["branch", "source", "vcs"]);
+    expect(listOf("fields[vcs]")).toEqual(["name"]);
+  });
+
+  it("polls with one request per tick and reads the VCS name from it", async () => {
+    jest.useFakeTimers();
+    mockJob({ status: "running" }, { data: { id: "vcs-1" } });
+    render(<DetailsJob jobId="1" />);
+
+    expect(await screen.findByText("GitHub Org")).toBeInTheDocument();
+    const jobCallsAfterMount = jobCalls().length;
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(5000);
+    });
+    expect(jobCalls()).toHaveLength(jobCallsAfterMount + 1);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(5000);
+    });
+    expect(jobCalls()).toHaveLength(jobCallsAfterMount + 2);
+
+    expect(workspaceCalls()).toHaveLength(0);
+    expect(vcsCalls()).toHaveLength(0);
+    expect(screen.getByText("GitHub Org")).toBeInTheDocument();
+  });
+
+  it("shows no VCS for a workspace without one", async () => {
+    mockJob({ status: "completed" }, { data: null });
+    render(<DetailsJob jobId="1" />);
+
+    expect(await screen.findByText("https://github.com/o/r.git")).toBeInTheDocument();
+    expect(screen.queryByText("GitHub Org")).not.toBeInTheDocument();
+    expect(vcsCalls()).toHaveLength(0);
+  });
+
+  it("re-checks step delivery with only the step status fields", async () => {
+    jest.useFakeTimers();
+    mockJob({ status: "completed" }, { data: null });
+    render(<DetailsJob jobId="1" />);
+    await screen.findByText("Plan");
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+    expect(jobCalls()).toContainEqual(
+      expect.stringMatching(/\/job\/1\?include=step&fields\[job\]=step&fields\[step\]=status,deliveryState$/)
+    );
+  });
+
+  it("asks for only the upstream run's workspace name", async () => {
+    mockJob({ status: "completed", triggeredByJobId: 7 }, { data: null });
+    render(
+      <MemoryRouter>
+        <DetailsJob jobId="1" />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/upstream-ws/)).toBeInTheDocument();
+    expect(jobCalls()).toContainEqual(
+      expect.stringMatching(/\/job\/7\?include=workspace&fields\[job\]=workspace&fields\[workspace\]=name$/)
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { StepDeliveryState } from "../types";
+import type { DeliveryState } from "../generated/apiResources";
 import { StructuredOutputMarker } from "./contextAvailability";
 import { isTerminalStatus } from "./stepStatus";
 
@@ -30,8 +30,8 @@ export type OutputCompleteness =
 
 export type OutputCompletenessInput = {
   stepId: string;
-  stepStatus: string;
-  deliveryState?: StepDeliveryState;
+  stepStatus: string | null;
+  deliveryState?: DeliveryState;
   /** What the executor last wrote; only counts for the step it names. */
   marker?: StructuredOutputMarker;
   contextAvailability: "persisted" | "pending" | "unavailable";
@@ -55,14 +55,14 @@ export const isStructuredOutputStep = (stepName: string): boolean => /\b(plan|ap
  * - the stored progress marker names it.
  */
 export const producesStructuredOutput = (
-  step: { id: string; name: string; deliveryState?: StepDeliveryState },
+  step: { id: string; name: string; deliveryState?: DeliveryState },
   marker?: StructuredOutputMarker
 ): boolean =>
   isStructuredOutputStep(step.name) ||
   (step.deliveryState != null && step.deliveryState !== "NOT_DURABLE") ||
   marker?.stepId === step.id;
 
-export const parseDeliveryState = (value: unknown): StepDeliveryState | undefined => {
+export const parseDeliveryState = (value: unknown): DeliveryState | undefined => {
   switch (value) {
     case "ACKED":
     case "SPOOLED":

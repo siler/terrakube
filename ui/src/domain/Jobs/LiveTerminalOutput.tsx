@@ -32,7 +32,10 @@ export const LiveTerminalOutput = ({ jobId, organizationId, item }: Props) => {
   usePolling(
     async () => {
       try {
-        const response = await axiosInstance.get(stepBaseUrl, { responseType: "text", transformResponse: (d) => d });
+        const response = await axiosInstance.get<unknown>(stepBaseUrl, {
+          responseType: "text",
+          transformResponse: (d: unknown) => d,
+        });
         setPolledText(typeof response.data === "string" ? response.data : String(response.data ?? ""));
       } catch {
         // keep whatever we last had

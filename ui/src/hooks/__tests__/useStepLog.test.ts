@@ -15,11 +15,13 @@ class StepLogFetchError extends Error {
   }
 }
 
-const mockFetch = jest.fn();
+type FetchStepLog = typeof import("../../domain/Jobs/fetchStepLog").fetchStepLog;
+
+const mockFetch = jest.fn<ReturnType<FetchStepLog>, Parameters<FetchStepLog>>();
 
 jest.mock("../../domain/Jobs/fetchStepLog", () => ({
   __esModule: true,
-  fetchStepLog: (...args: unknown[]) => mockFetch(...args),
+  fetchStepLog: (...args: Parameters<FetchStepLog>) => mockFetch(...args),
   StepLogNotFoundError,
   StepLogFetchError,
 }));
@@ -65,7 +67,7 @@ it("serves a cached terminal log immediately without fetching", () => {
 });
 
 it("loads, succeeds, and caches a terminal step's log", async () => {
-  mockFetch.mockResolvedValue({ text: "the log", truncated: false });
+  mockFetch.mockResolvedValue({ text: "the log", truncated: false, incomplete: false });
 
   const { result } = renderHook(() => useStepLog(params()));
 
@@ -75,7 +77,7 @@ it("loads, succeeds, and caches a terminal step's log", async () => {
 });
 
 it("does not cache a truncated (tailed) log", async () => {
-  mockFetch.mockResolvedValue({ text: "tail only", truncated: true });
+  mockFetch.mockResolvedValue({ text: "tail only", truncated: true, incomplete: false });
 
   const { result } = renderHook(() => useStepLog(params()));
 
@@ -84,7 +86,7 @@ it("does not cache a truncated (tailed) log", async () => {
 });
 
 it("reports an empty body as the empty state", async () => {
-  mockFetch.mockResolvedValue({ text: "", truncated: false });
+  mockFetch.mockResolvedValue({ text: "", truncated: false, incomplete: false });
 
   const { result } = renderHook(() => useStepLog(params()));
 
@@ -111,7 +113,7 @@ it("retries a transient fetch error with backoff then succeeds", async () => {
   jest.useFakeTimers();
   mockFetch
     .mockRejectedValueOnce(new StepLogFetchError(502))
-    .mockResolvedValueOnce({ text: "recovered", truncated: false });
+    .mockResolvedValueOnce({ text: "recovered", truncated: false, incomplete: false });
 
   const { result } = renderHook(() => useStepLog(params()));
 
@@ -160,7 +162,7 @@ it("retry() from the error state re-runs the fetch", async () => {
   const { result } = renderHook(() => useStepLog(params({ isTerminal: true })));
   await waitFor(() => expect(result.current.state).toBe("error"));
 
-  mockFetch.mockResolvedValueOnce({ text: "second try", truncated: false });
+  mockFetch.mockResolvedValueOnce({ text: "second try", truncated: false, incomplete: false });
   act(() => result.current.retry());
 
   await waitFor(() => expect(result.current.state).toBe("success"));

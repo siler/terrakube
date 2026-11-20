@@ -31,7 +31,7 @@ export const shouldStepBeCollapsible = (item: Pick<JobStep, "name" | "status">) 
     return true;
   }
 
-  return !CLOSED_BY_DEFAULT_STEP_STATUSES.has(item.status);
+  return !CLOSED_BY_DEFAULT_STEP_STATUSES.has(item.status ?? "");
 };
 
 export const shouldStepBeExpandedByDefault = (item: Pick<JobStep, "name" | "status">) => {
@@ -40,7 +40,7 @@ export const shouldStepBeExpandedByDefault = (item: Pick<JobStep, "name" | "stat
   }
 
   if (isApplyStep(item)) {
-    return !CLOSED_BY_DEFAULT_STEP_STATUSES.has(item.status);
+    return !CLOSED_BY_DEFAULT_STEP_STATUSES.has(item.status ?? "");
   }
 
   return true;

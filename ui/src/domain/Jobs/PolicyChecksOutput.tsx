@@ -20,7 +20,9 @@ import {
 import axiosInstance, { axiosRegistry, getErrorMessage } from "../../config/axiosConfig";
 import { ORGANIZATION_ARCHIVE } from "../../config/actionTypes";
 import { PolicyEvaluationContext } from "../types";
+import type { UpdateBody } from "@/domain/api/writeBodies";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
+import { isRecord } from "@/modules/utils/typeGuards";
 import { PolicyExemptionModal } from "../Settings/components";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import "@/modules/workspaces/components/WorkspaceFilter.css";
@@ -59,7 +61,7 @@ type PolicyFilter = "all" | FlattenedRule["severityType"];
 
 type Props = {
   policyEvaluation?: PolicyEvaluationContext;
-  jobId?: string;
+  jobId: string;
   organizationId?: string;
   workspaceId?: string;
   status?: string;
@@ -90,7 +92,7 @@ export const PolicyChecksOutput: React.FC<Props> = ({
   const [overrideSubmitting, setOverrideSubmitting] = useState(false);
   const [rejectSubmitting, setRejectSubmitting] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<{ justification: string }>();
 
   const toggleLogs = (key: string) => {
     setExpandedLogs((prev) => ({
@@ -217,8 +219,8 @@ export const PolicyChecksOutput: React.FC<Props> = ({
 
         let warningRulesCountInViolations = 0;
 
-        // Violations and Warnings
-        const rawViolations = [...(res.violations || []), ...((res as any).warnings || [])];
+        // Warnings arrive as violations with status WARNING
+        const rawViolations = res.violations || [];
         if (rawViolations.length > 0) {
           rawViolations.forEach((v, vIdx) => {
             let sevType: "hard" | "soft" | "warning" = "hard";
@@ -398,14 +400,15 @@ export const PolicyChecksOutput: React.FC<Props> = ({
     setOverrideSubmitting(true);
     try {
       const orgId = organizationId || sessionStorage.getItem(ORGANIZATION_ARCHIVE);
+      if (!orgId) throw new Error("No organization is selected, so the run cannot be approved.");
 
       // 1. Try to record policy check override in Remote TFE API if policy checks exist
       try {
-        const runChecksRes = await axiosRegistry.get(`/remote/tfe/v2/runs/${jobId}/policy-checks`);
-        const checks = runChecksRes?.data?.data;
+        const runChecksRes = await axiosRegistry.get<unknown>(`/remote/tfe/v2/runs/${jobId}/policy-checks`);
+        const checks = isRecord(runChecksRes.data) ? runChecksRes.data.data : undefined;
         if (Array.isArray(checks)) {
           for (const check of checks) {
-            if (check.id) {
+            if (isRecord(check) && typeof check.id === "string" && check.id) {
               await axiosRegistry
                 .post(`/remote/tfe/v2/policy-checks/${check.id}/actions/override`, {
                   justification: values.justification,
@@ -421,23 +424,21 @@ export const PolicyChecksOutput: React.FC<Props> = ({
       }
 
       // 2. Approve the job with Elide JSON:API headers so execution proceeds to Apply
-      if (orgId) {
-        const approveBody = {
-          data: {
-            type: "job",
-            id: jobId,
-            attributes: {
-              status: "approved",
-            },
+      const approveBody: UpdateBody<"job"> = {
+        data: {
+          type: "job",
+          id: jobId,
+          attributes: {
+            status: "approved",
           },
-        };
+        },
+      };
 
-        await axiosInstance.patch(`organization/${orgId}/job/${jobId}`, approveBody, {
-          headers: {
-            "Content-Type": "application/vnd.api+json",
-          },
-        });
-      }
+      await axiosInstance.patch(`organization/${orgId}/job/${jobId}`, approveBody, {
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+        },
+      });
 
       message.success("Policy override recorded and run approved");
       setOverrideDrawerOpen(false);
@@ -445,7 +446,7 @@ export const PolicyChecksOutput: React.FC<Props> = ({
       if (onOverrideSuccess) {
         onOverrideSuccess();
       }
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to submit override");
     } finally {
       setOverrideSubmitting(false);
@@ -456,29 +457,25 @@ export const PolicyChecksOutput: React.FC<Props> = ({
     setRejectSubmitting(true);
     try {
       const orgId = organizationId || sessionStorage.getItem(ORGANIZATION_ARCHIVE);
-      const justification = form.getFieldValue("justification");
+      if (!orgId) throw new Error("No organization is selected, so the run cannot be discarded.");
+      const justification: unknown = form.getFieldValue("justification");
 
-      if (orgId && jobId) {
-        const rejectBody: { data: { type: string; id: string; attributes: Record<string, any> } } = {
-          data: {
-            type: "job",
-            id: jobId,
-            attributes: {
-              status: "rejected",
-            },
-          },
-        };
+      const rejectBody: UpdateBody<"job"> = {
+        data: {
+          type: "job",
+          id: jobId,
+          attributes:
+            typeof justification === "string" && justification
+              ? { status: "rejected", comments: justification }
+              : { status: "rejected" },
+        },
+      };
 
-        if (justification) {
-          rejectBody.data.attributes.comments = justification;
-        }
-
-        await axiosInstance.patch(`organization/${orgId}/job/${jobId}`, rejectBody, {
-          headers: {
-            "Content-Type": "application/vnd.api+json",
-          },
-        });
-      }
+      await axiosInstance.patch(`organization/${orgId}/job/${jobId}`, rejectBody, {
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+        },
+      });
 
       message.success("Run discarded because of policy violations");
       setOverrideDrawerOpen(false);
@@ -489,7 +486,7 @@ export const PolicyChecksOutput: React.FC<Props> = ({
       if (onRejectSuccess) {
         onRejectSuccess();
       }
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to reject run");
     } finally {
       setRejectSubmitting(false);

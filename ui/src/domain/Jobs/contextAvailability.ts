@@ -1,3 +1,5 @@
+import { isRecord } from "@/modules/utils/typeGuards";
+
 /**
  * How the API's `/context/v1/{jobId}` response should be interpreted by the Job Details page.
  *
@@ -6,8 +8,6 @@
  * - `unavailable` — the store returned a controlled `503`/timeout; retry, never infer "No changes".
  */
 export type ContextAvailability = "persisted" | "pending" | "unavailable";
-
-const isRecord = (value: unknown): value is Record<string, unknown> => value != null && typeof value === "object";
 
 export const parseContextAvailability = (data: unknown, httpStatus?: number): ContextAvailability => {
   if (httpStatus != null && httpStatus >= 500) {

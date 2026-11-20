@@ -1,5 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { message } from "antd";
 import { PolicyChecksOutput } from "../PolicyChecksOutput";
+import { axiosRegistry } from "../../../config/axiosConfig";
 import { PolicyEvaluationContext } from "../../types";
 
 window._env_ = {
@@ -12,8 +14,15 @@ window._env_ = {
   REACT_APP_REGISTRY_URI: "http://localhost:8080/registry",
 };
 
-const postMock = jest.fn();
-const patchMock = jest.fn();
+const postMock = jest.fn<Promise<unknown>, unknown[]>();
+const patchMock = jest.fn<Promise<unknown>, unknown[]>();
+
+const required = <T,>(value: T | null | undefined, what: string): T => {
+  if (value == null) {
+    throw new Error(`Expected ${what}`);
+  }
+  return value;
+};
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
@@ -26,7 +35,10 @@ jest.mock("../../../config/axiosConfig", () => ({
     get: jest.fn().mockResolvedValue({ data: { data: [{ id: "polchk-1" }] } }),
     post: (...args: unknown[]) => postMock(...args),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) =>
+    typeof err === "object" && err !== null && "message" in err && typeof err.message === "string" && err.message
+      ? err.message
+      : "Error",
 }));
 
 describe("PolicyChecksOutput", () => {
@@ -193,6 +205,27 @@ describe("PolicyChecksOutput", () => {
     });
   });
 
+  it("overrides only well-formed policy checks and still approves the run", async () => {
+    jest
+      .mocked(axiosRegistry.get)
+      .mockResolvedValueOnce({ data: { data: [null, "polchk-x", { id: 7 }, { id: "polchk-2" }] } });
+    render(<PolicyChecksOutput policyEvaluation={sampleEvaluation} jobId="123" organizationId="org-123" canApprove />);
+
+    fireEvent.click(screen.getByTestId("override-button"));
+    fireEvent.change(screen.getByPlaceholderText(/Approved by SecOps for emergency mitigation/i), {
+      target: { value: "Approved hotfix exception" },
+    });
+    fireEvent.click(screen.getByTestId("submit-override-btn"));
+
+    await waitFor(() => {
+      expect(patchMock).toHaveBeenCalled();
+    });
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledWith("/remote/tfe/v2/policy-checks/polchk-2/actions/override", {
+      justification: "Approved hotfix exception",
+    });
+  });
+
   it("correctly identifies SOFT_MANDATORY with underscore as soft mandatory violation card", () => {
     const underscoreEvaluation: PolicyEvaluationContext = {
       jobId: "124",
@@ -232,7 +265,7 @@ describe("PolicyChecksOutput", () => {
     fireEvent.click(override);
     expect(screen.queryByText("Override soft-mandatory policy checks")).not.toBeInTheDocument();
 
-    fireEvent.mouseOver(override.parentElement!);
+    fireEvent.mouseOver(required(override.parentElement, "the override button's tooltip wrapper"));
     expect(
       (await screen.findAllByText("You do not have permission to approve runs on this workspace.")).length
     ).toBeGreaterThan(0);
@@ -292,7 +325,7 @@ describe("PolicyChecksOutput", () => {
     const confirm = screen
       .getAllByRole("button", { name: "Discard run" })
       .find((button) => button.classList.contains("ant-btn-primary"));
-    fireEvent.click(confirm!);
+    fireEvent.click(required(confirm, "the primary Discard run button"));
 
     await waitFor(() => {
       expect(patchMock).toHaveBeenCalledWith(
@@ -313,6 +346,58 @@ describe("PolicyChecksOutput", () => {
     });
   });
 
+  it("reports an override it could not send instead of claiming the run was approved", async () => {
+    const success = jest.spyOn(message, "success");
+    const error = jest.spyOn(message, "error");
+    const onOverrideSuccess = jest.fn();
+    render(
+      <PolicyChecksOutput
+        policyEvaluation={sampleEvaluation}
+        jobId="123"
+        canApprove
+        onOverrideSuccess={onOverrideSuccess}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("override-button"));
+    fireEvent.change(screen.getByPlaceholderText(/Approved by SecOps for emergency mitigation/i), {
+      target: { value: "Approved hotfix exception" },
+    });
+    fireEvent.click(screen.getByTestId("submit-override-btn"));
+
+    await waitFor(() => expect(error).toHaveBeenCalled());
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
+    expect(onOverrideSuccess).not.toHaveBeenCalled();
+  });
+
+  it("reports a discard it could not send instead of claiming the run was discarded", async () => {
+    const success = jest.spyOn(message, "success");
+    const error = jest.spyOn(message, "error");
+    const onRejectSuccess = jest.fn();
+    render(
+      <PolicyChecksOutput
+        policyEvaluation={sampleEvaluation}
+        jobId="123"
+        status="waitingApproval"
+        canApprove
+        onRejectSuccess={onRejectSuccess}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("override-button"));
+    fireEvent.click(screen.getByTestId("reject-override-btn"));
+    const confirm = screen
+      .getAllByRole("button", { name: "Discard run" })
+      .find((button) => button.classList.contains("ant-btn-primary"));
+    fireEvent.click(required(confirm, "the primary Discard run button"));
+
+    await waitFor(() => expect(error).toHaveBeenCalled());
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
+    expect(onRejectSuccess).not.toHaveBeenCalled();
+  });
+
   it("does not render a cancel button in the override drawer", () => {
     render(
       <PolicyChecksOutput
@@ -330,7 +415,7 @@ describe("PolicyChecksOutput", () => {
   });
 
   it("handles numeric timestamp expiresAt without throwing expiresAt.slice is not a function", () => {
-    const timestampEvaluation: any = {
+    const timestampEvaluation: PolicyEvaluationContext = {
       status: "passed",
       results: [
         {

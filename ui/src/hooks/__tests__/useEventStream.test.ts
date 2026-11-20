@@ -13,7 +13,7 @@ describe("useEventStream", () => {
   });
 
   it("folds incoming messages through the reduce function, starting from initial", async () => {
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       onMessage("a", "1");
       onMessage("b", "2");
     });
@@ -33,14 +33,14 @@ describe("useEventStream", () => {
   it("reconnects after a dropped connection and keeps folding messages", async () => {
     jest.useFakeTimers();
     let attempt = 0;
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       attempt += 1;
       if (attempt === 1) {
         onMessage("a", "1");
         throw new Error("connection dropped"); // not an AbortError
       }
       onMessage("b", "2");
-      return new Promise(() => {});
+      return new Promise<void>(() => {});
     });
 
     const { result } = renderHook(() =>
@@ -71,13 +71,13 @@ describe("useEventStream", () => {
     jest.useFakeTimers();
     const statuses: boolean[] = [];
     let attempt = 0;
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       attempt += 1;
       if (attempt <= 6) {
         throw new Error("still down");
       }
       onMessage("recovered", "9");
-      return new Promise(() => {});
+      return new Promise<void>(() => {});
     });
 
     renderHook(() =>
@@ -125,11 +125,11 @@ describe("useEventStream", () => {
 
     it("coalesces messages that arrive within the flush window into a single update", async () => {
       let renderCount = 0;
-      (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+      jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
         onMessage("a");
         onMessage("b");
         onMessage("c");
-        return new Promise(() => {}); // keep the stream "open" so .finally() doesn't flush early
+        return new Promise<void>(() => {}); // keep the stream "open" so .finally() doesn't flush early
       });
 
       const { result } = renderHook(() => {
@@ -157,7 +157,7 @@ describe("useEventStream", () => {
     });
 
     it("flushes a pending batch immediately once the connection settles, even before the flush window elapses", async () => {
-      (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+      jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
         onMessage("a");
       });
 
@@ -179,7 +179,7 @@ describe("useEventStream", () => {
     });
 
     it("behaves exactly like the unbatched path when flushIntervalMs is unset", async () => {
-      (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+      jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
         onMessage("a");
         onMessage("b");
       });
@@ -202,7 +202,7 @@ describe("useEventStream", () => {
   });
 
   it("ignores a record it has already seen, so a replayed and live copy are folded once", async () => {
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       onMessage("a", "10-0");
       onMessage("b", "11-0");
       onMessage("b-again", "11-0");
@@ -223,7 +223,7 @@ describe("useEventStream", () => {
   });
 
   it("hands a reported gap to onGap and never folds a control event as data", async () => {
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       onMessage(
         '{"reason":"trimmed","afterId":"1-0","firstAvailableId":"50-0","recovery":"step-log"}',
         undefined,
@@ -246,11 +246,34 @@ describe("useEventStream", () => {
     await waitFor(() => expect(result.current).toEqual(["gap:50-0", "a"]));
   });
 
+  it("does not hand a malformed gap notice to onGap", async () => {
+    const onGap = jest.fn((previous: string[]) => [...previous, "gap"]);
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
+      onMessage("not json", undefined, "gap");
+      onMessage('{"afterId":"1-0"}', undefined, "gap");
+      onMessage('{"reason":"trimmed","firstAvailableId":50}', undefined, "gap");
+      onMessage("a", "50-0");
+    });
+
+    const { result } = renderHook(() =>
+      useEventStream<string[]>({
+        url: "http://localhost/stream",
+        enabled: true,
+        initial: [],
+        reduce: (previous, data) => [...previous, data],
+        onGap,
+      })
+    );
+
+    await waitFor(() => expect(result.current).toEqual(["a"]));
+    expect(onGap).not.toHaveBeenCalled();
+  });
+
   it("resumes from the last event id when the server rotates the connection", async () => {
     jest.useFakeTimers();
     const seenLastEventIds: Array<string | undefined> = [];
     let attempt = 0;
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage, lastEventId }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage, lastEventId }) => {
       attempt += 1;
       seenLastEventIds.push(lastEventId);
       if (attempt === 1) {
@@ -259,7 +282,7 @@ describe("useEventStream", () => {
         return;
       }
       onMessage("b", "11-0");
-      return new Promise(() => {});
+      return new Promise<void>(() => {});
     });
 
     const { result } = renderHook(() =>
@@ -283,7 +306,7 @@ describe("useEventStream", () => {
   it("does not reconnect after the server reports the stream complete", async () => {
     jest.useFakeTimers();
     let attempt = 0;
-    (readEventStream as jest.Mock).mockImplementation(async (_url, { onMessage }) => {
+    jest.mocked(readEventStream).mockImplementation(async (_url, { onMessage }) => {
       attempt += 1;
       onMessage("a", "10-0");
       onMessage('{"reason":"complete"}', undefined, "end");
