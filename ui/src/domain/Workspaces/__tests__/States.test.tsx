@@ -2,20 +2,25 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { States, stateRequestUrl } from "../States";
-import { FlatJobHistory, Workspace } from "../../types";
+import { workspacePageRow } from "@/testUtils/workspacePageRow";
+import type { WorkspaceHistoryRow } from "../workspaceDataUtils";
 
-const apiGet = jest.fn();
-const clientGet = jest.fn();
+const apiGet = jest.fn<Promise<unknown>, [url: string, config?: unknown]>();
+const clientGet = jest.fn<Promise<unknown>, [url: string, config?: unknown]>();
+const flowProps = jest.fn();
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
-  default: { get: (...args: unknown[]) => apiGet(...args), put: jest.fn() },
-  axiosClient: { get: (...args: unknown[]) => clientGet(...args) },
+  default: { get: (...args: Parameters<typeof apiGet>) => apiGet(...args), put: jest.fn() },
+  axiosClient: { get: (...args: Parameters<typeof clientGet>) => clientGet(...args) },
   getErrorMessage: (error: Error) => error.message,
 }));
 jest.mock("reactflow", () => ({
   __esModule: true,
-  default: () => null,
+  default: (props: unknown) => {
+    flowProps(props);
+    return null;
+  },
   Background: () => null,
   Controls: () => null,
   MarkerType: { Arrow: "arrow" },
@@ -30,19 +35,18 @@ jest.mock("@/components/display/JsonViewer", () => ({
   default: ({ value }: { value: unknown }) => <pre>{JSON.stringify(value)}</pre>,
 }));
 
-const version = (id: string, output: string, createdDate: string): FlatJobHistory =>
-  ({
-    id,
-    title: `Version ${id}`,
-    output,
-    createdDate,
-    relativeDate: "now",
-    createdBy: "me",
-    jobReference: "1",
-  }) as FlatJobHistory;
+const version = (id: string, output: string, createdDate: string): WorkspaceHistoryRow => ({
+  id,
+  title: `Version ${id}`,
+  output,
+  createdDate,
+  relativeDate: "now",
+  createdBy: "me",
+  jobReference: "1",
+});
 
 // The parent owns the details flag; keep it in local state here.
-const StatefulStates = ({ history }: { history: FlatJobHistory[] }) => {
+const StatefulStates = ({ history }: { history: WorkspaceHistoryRow[] }) => {
   const [visible, setVisible] = useState(false);
   return (
     <MemoryRouter>
@@ -50,7 +54,7 @@ const StatefulStates = ({ history }: { history: FlatJobHistory[] }) => {
         history={history}
         stateDetailsVisible={visible}
         setStateDetailsVisible={setVisible}
-        workspace={{ id: "ws-1" } as Workspace}
+        workspace={workspacePageRow({ id: "ws-1", name: "ws" })}
         onRollback={() => {}}
         manageState
       />
@@ -61,6 +65,7 @@ const StatefulStates = ({ history }: { history: FlatJobHistory[] }) => {
 beforeEach(() => {
   apiGet.mockReset();
   clientGet.mockReset();
+  flowProps.mockReset();
 });
 
 describe("States", () => {
@@ -103,6 +108,48 @@ describe("States", () => {
     expect(clientGet).toHaveBeenCalledTimes(1);
     expect(clientGet).toHaveBeenCalledWith(`${storage}/2.json?sv=2024&sig=abc.json`);
     expect(apiGet).not.toHaveBeenCalled();
+  });
+
+  it("draws resources of nested child modules in the diagram", async () => {
+    const api = "https://terrakube-api.test/tfstate/v1/organization/o/workspace/w/state";
+    const resource = (address: string) => ({ address, mode: "managed", type: "null_resource", name: "n" });
+    apiGet.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.endsWith(".raw.json")
+          ? {}
+          : {
+              values: {
+                root_module: {
+                  resources: [resource("null_resource.n")],
+                  child_modules: [
+                    {
+                      address: "module.a",
+                      resources: [resource("module.a.null_resource.n")],
+                      child_modules: [
+                        { address: "module.a.module.b", resources: [resource("module.a.module.b.null_resource.n")] },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+      })
+    );
+    render(<StatefulStates history={[version("1", `${api}/1.json`, "2026-01-01")]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Version 1" }));
+
+    await waitFor(() =>
+      expect(flowProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          nodes: [
+            expect.objectContaining({ id: "null_resource.n" }),
+            expect.objectContaining({ id: "module.a.null_resource.n" }),
+            expect.objectContaining({ id: "module.a.module.b.null_resource.n" }),
+          ],
+        })
+      )
+    );
   });
 });
 

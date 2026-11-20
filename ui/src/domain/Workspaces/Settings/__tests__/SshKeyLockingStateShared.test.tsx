@@ -1,10 +1,13 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { message } from "antd";
 import { WorkspaceSSHKey } from "../SSHKey";
 import { WorkspaceLocking } from "../Locking";
 import { WorkspaceStateShared } from "../StateShared";
 import axiosInstance from "../../../../config/axiosConfig";
+import type { WorkspacePageRow } from "../../workspaceQuery";
+import { workspacePageRow } from "@/testUtils/workspacePageRow";
+import { recordOf, requestAttributes } from "@/testUtils/readRequestBody";
 
 jest.mock("../../../../config/axiosConfig", () => ({
   __esModule: true,
@@ -13,26 +16,36 @@ jest.mock("../../../../config/axiosConfig", () => ({
     post: jest.fn(),
     patch: jest.fn(),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message) || "Error",
 }));
 
-const workspace = (attributes: Record<string, unknown> = {}) =>
-  ({
+const workspace = (attributes: Partial<WorkspacePageRow> = {}) =>
+  workspacePageRow({
     id: "ws-1",
-    attributes: { name: "prod", locked: false, ...attributes },
-    relationships: { organization: { data: { id: "org-1" } } },
-  }) as any;
+    name: "prod",
+    locked: false,
+    organization: { id: "org-1", name: "acme" },
+    ...attributes,
+  });
+
+const firstOperationAttributes = (body: unknown) => {
+  const operations = recordOf(body)["atomic:operations"];
+  if (!Array.isArray(operations)) {
+    throw new Error(`Expected atomic operations, got ${JSON.stringify(body)}`);
+  }
+  return requestAttributes(operations[0]);
+};
 
 beforeEach(() => jest.clearAllMocks());
 
 describe("WorkspaceSSHKey", () => {
   it("lists the organization keys as options and links to the organization SSH keys page", async () => {
-    (axiosInstance.get as jest.Mock).mockResolvedValueOnce({
+    jest.mocked(axiosInstance.get).mockResolvedValueOnce({
       data: { data: [{ id: "key-1", attributes: { name: "deploy-key" } }] },
     });
     render(
       <MemoryRouter>
-        <WorkspaceSSHKey workspace={workspace()} manageWorkspace={true} />
+        <WorkspaceSSHKey organizationId="org-1" workspace={workspace()} manageWorkspace={true} />
       </MemoryRouter>
     );
 
@@ -43,16 +56,17 @@ describe("WorkspaceSSHKey", () => {
 
     fireEvent.mouseDown(screen.getByRole("combobox"));
     expect(await screen.findByText("deploy-key")).toBeInTheDocument();
+    expect(jest.mocked(axiosInstance.get).mock.calls[0][0]).toBe("organization/org-1/ssh?fields[ssh]=name");
     // One dropdown, not a Select nested per option.
     expect(screen.getAllByRole("combobox")).toHaveLength(1);
   });
 
   it("shows the server error when saving fails", async () => {
     const errorSpy = jest.spyOn(message, "error");
-    (axiosInstance.post as jest.Mock).mockRejectedValueOnce(new Error("key not found"));
+    jest.mocked(axiosInstance.post).mockRejectedValueOnce(new Error("key not found"));
     render(
       <MemoryRouter>
-        <WorkspaceSSHKey workspace={workspace()} manageWorkspace={true} />
+        <WorkspaceSSHKey organizationId="org-1" workspace={workspace()} manageWorkspace={true} />
       </MemoryRouter>
     );
 
@@ -64,9 +78,16 @@ describe("WorkspaceSSHKey", () => {
 
 describe("WorkspaceLocking", () => {
   it("locks with the given reason from a primary button", async () => {
-    (axiosInstance.patch as jest.Mock).mockResolvedValueOnce({});
+    jest.mocked(axiosInstance.patch).mockResolvedValueOnce({});
     const onUpdate = jest.fn();
-    render(<WorkspaceLocking workspace={workspace()} manageWorkspace={true} onWorkspaceUpdate={onUpdate} />);
+    render(
+      <WorkspaceLocking
+        organizationId="org-1"
+        workspace={workspace()}
+        manageWorkspace={true}
+        onWorkspaceUpdate={onUpdate}
+      />
+    );
 
     fireEvent.change(screen.getByLabelText("Lock reason"), { target: { value: "maintenance" } });
     const lock = screen.getByRole("button", { name: "Lock workspace" });
@@ -74,17 +95,18 @@ describe("WorkspaceLocking", () => {
     fireEvent.click(lock);
 
     await waitFor(() => expect(onUpdate).toHaveBeenCalled());
-    expect((axiosInstance.patch as jest.Mock).mock.calls[0][1].data.attributes).toEqual({
+    expect(requestAttributes(jest.mocked(axiosInstance.patch).mock.calls[0][1])).toEqual({
       locked: true,
       lockDescription: "maintenance",
     });
   });
 
   it("shows the lock as a warning and confirms unlock truthfully", async () => {
-    (axiosInstance.patch as jest.Mock).mockResolvedValueOnce({});
+    jest.mocked(axiosInstance.patch).mockResolvedValueOnce({});
     const onUpdate = jest.fn();
     render(
       <WorkspaceLocking
+        organizationId="org-1"
         workspace={workspace({ locked: true, lockDescription: "maintenance" })}
         manageWorkspace={true}
         onWorkspaceUpdate={onUpdate}
@@ -103,7 +125,7 @@ describe("WorkspaceLocking", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Unlock workspace" }));
 
     await waitFor(() => expect(onUpdate).toHaveBeenCalled());
-    expect((axiosInstance.patch as jest.Mock).mock.calls[0][1].data.attributes).toEqual({
+    expect(requestAttributes(jest.mocked(axiosInstance.patch).mock.calls[0][1])).toEqual({
       locked: false,
       lockDescription: "",
     });
@@ -112,30 +134,58 @@ describe("WorkspaceLocking", () => {
 
 describe("WorkspaceStateShared", () => {
   const shared = () => workspace({ globalRemoteState: false, sharedIds: "ws-a,ws-b" });
+  const named = (...ids: string[]) => ({
+    data: { data: ids.map((id) => ({ id, attributes: { name: `name-${id}` } })) },
+  });
+  const getUrls = () => jest.mocked(axiosInstance.get).mock.calls.map(([url]) => decodeURIComponent(url));
 
-  it("loads the shared workspace names in parallel", async () => {
-    const resolvers: Array<() => void> = [];
-    (axiosInstance.get as jest.Mock).mockImplementation(
-      (url: string) =>
-        new Promise((resolve) =>
-          resolvers.push(() => resolve({ data: { data: { attributes: { name: `name-${url.split("/").pop()}` } } } }))
-        )
+  it("loads every shared workspace name in one request, in sharedIds order", async () => {
+    jest.mocked(axiosInstance.get).mockResolvedValue(named("ws-b", "ws-a"));
+    render(<WorkspaceStateShared organizationId="org-1" workspace={shared()} manageWorkspace={true} />);
+
+    await screen.findByText("name-ws-a");
+    const rows = screen.getAllByRole("row");
+    expect(getUrls()).toEqual([
+      "organization/org-1/workspace?fields[workspace]=name&filter[workspace]=id=in=('ws-a','ws-b')",
+    ]);
+    expect(rows.slice(1).map((row) => within(row).getAllByRole("cell")[0].textContent)).toEqual([
+      "name-ws-a",
+      "name-ws-b",
+    ]);
+  });
+
+  it("keeps a shared workspace the API no longer returns, so its access can still be removed", async () => {
+    jest.mocked(axiosInstance.get).mockResolvedValue(named("ws-b"));
+    render(<WorkspaceStateShared organizationId="org-1" workspace={shared()} manageWorkspace={true} />);
+
+    expect(await screen.findByText("name-ws-b")).toBeInTheDocument();
+    expect(screen.getByText("Unknown workspace")).toBeInTheDocument();
+    expect(screen.getByText("ws-a")).toBeInTheDocument();
+  });
+
+  it("labels every shared workspace unknown when the name lookup fails", async () => {
+    jest.mocked(axiosInstance.get).mockRejectedValue(new Error("boom"));
+    render(<WorkspaceStateShared organizationId="org-1" workspace={shared()} manageWorkspace={true} />);
+
+    expect(await screen.findAllByText("Unknown workspace")).toHaveLength(2);
+  });
+
+  it("makes no request when nothing is shared", () => {
+    render(
+      <WorkspaceStateShared
+        organizationId="org-1"
+        workspace={workspace({ globalRemoteState: false, sharedIds: "" })}
+        manageWorkspace={true}
+      />
     );
-    render(<WorkspaceStateShared workspace={shared()} manageWorkspace={true} />);
 
-    // Both requests are in flight before either resolves.
-    expect(axiosInstance.get).toHaveBeenCalledTimes(2);
-    resolvers.forEach((resolve) => resolve());
-    expect(await screen.findByText("name-ws-a")).toBeInTheDocument();
-    expect(screen.getByText("name-ws-b")).toBeInTheDocument();
+    expect(axiosInstance.get).not.toHaveBeenCalled();
   });
 
   it("asks for confirmation before revoking access", async () => {
-    (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
-      Promise.resolve({ data: { data: { attributes: { name: `name-${url.split("/").pop()}` } } } })
-    );
-    (axiosInstance.post as jest.Mock).mockResolvedValueOnce({ status: 200 });
-    render(<WorkspaceStateShared workspace={shared()} manageWorkspace={true} />);
+    jest.mocked(axiosInstance.get).mockResolvedValue(named("ws-a", "ws-b"));
+    jest.mocked(axiosInstance.post).mockResolvedValueOnce({ status: 200 });
+    render(<WorkspaceStateShared organizationId="org-1" workspace={shared()} manageWorkspace={true} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Remove access for name-ws-a" }));
     expect(axiosInstance.post).not.toHaveBeenCalled();
@@ -144,7 +194,73 @@ describe("WorkspaceStateShared", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove access" }));
 
     await waitFor(() => expect(axiosInstance.post).toHaveBeenCalled());
-    const body = (axiosInstance.post as jest.Mock).mock.calls[0][1];
-    expect(body["atomic:operations"][0].data.attributes).toEqual({ sharedIds: "ws-b" });
+    expect(firstOperationAttributes(jest.mocked(axiosInstance.post).mock.calls[0][1])).toEqual({ sharedIds: "ws-b" });
+  });
+
+  describe("workspace search", () => {
+    const unshared = () => workspace({ globalRemoteState: false });
+    const type = (text: string) => fireEvent.change(screen.getByRole("combobox"), { target: { value: text } });
+
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it("waits for typing to pause, then sends one names-only request with the text quoted", async () => {
+      jest.mocked(axiosInstance.get).mockResolvedValue(named("ws-x"));
+      render(<WorkspaceStateShared organizationId="org-1" workspace={unshared()} manageWorkspace={true} />);
+
+      type("o'n");
+      type("o'ne");
+      type("o'ne,(x);");
+      // The GET leaves the timer callback one microtask later, so the check only bites once act flushes.
+      await act(async () => {
+        jest.advanceTimersByTime(299);
+      });
+      expect(axiosInstance.get).not.toHaveBeenCalled();
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+
+      expect(await screen.findByTitle("name-ws-x")).toBeInTheDocument();
+      expect(getUrls()).toEqual([
+        "organization/org-1/workspace?fields[workspace]=name&filter[workspace]=name=='*o\\'ne,(x);*'",
+      ]);
+    });
+
+    it("drops a response that arrives after a newer search was sent", async () => {
+      const responses: Record<string, (value: unknown) => void> = {};
+      jest.mocked(axiosInstance.get).mockImplementation(
+        (url: string) =>
+          new Promise((resolve) => {
+            responses[decodeURIComponent(url).includes("*old*") ? "old" : "new"] = resolve;
+          })
+      );
+      render(<WorkspaceStateShared organizationId="org-1" workspace={unshared()} manageWorkspace={true} />);
+
+      type("old");
+      act(() => jest.advanceTimersByTime(300));
+      type("new");
+      act(() => jest.advanceTimersByTime(300));
+      await act(async () => {});
+      expect(axiosInstance.get).toHaveBeenCalledTimes(2);
+
+      await act(async () => responses.new(named("ws-new")));
+      await act(async () => responses.old(named("ws-old")));
+
+      expect(screen.getByTitle("name-ws-new")).toBeInTheDocument();
+      expect(screen.queryByTitle("name-ws-old")).toBeNull();
+    });
+
+    it("sends nothing once the search is cleared before the pause", async () => {
+      render(<WorkspaceStateShared organizationId="org-1" workspace={unshared()} manageWorkspace={true} />);
+
+      type("prod");
+      type("");
+      // The GET leaves the timer callback one microtask later, so the check only bites once act flushes.
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+      });
+
+      expect(axiosInstance.get).not.toHaveBeenCalled();
+    });
   });
 });

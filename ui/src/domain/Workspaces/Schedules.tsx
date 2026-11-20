@@ -5,11 +5,18 @@ import { useEffect, useMemo, useState } from "react";
 import { Cron } from "react-js-cron";
 import "react-js-cron/dist/styles.css";
 import "./Workspaces.css";
-import { ORGANIZATION_ARCHIVE, WORKSPACE_ARCHIVE } from "../../config/actionTypes";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import * as C2Q from "cron-to-quartz";
-import { FlatSchedule, Template } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { CreateBody, UpdateBody } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
+import type { NamedSchedule } from "./workspaceDataUtils";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
+import { toQuartzCron } from "./quartzCron";
+
+const SCHEDULE_TEMPLATE_FIELDS = fields.template("name");
+
+type ScheduleTemplate = Row<typeof SCHEDULE_TEMPLATE_FIELDS>;
 
 type ScheduleForm = {
   templateId: string;
@@ -23,20 +30,20 @@ const validateMessages = {
 };
 
 type Props = {
-  schedules: FlatSchedule[];
+  schedules: NamedSchedule[];
   manageWorkspace: boolean;
   reload: () => void;
 };
 
 export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
-  const workspaceId = sessionStorage.getItem(WORKSPACE_ARCHIVE);
-  const organizationId = sessionStorage.getItem(ORGANIZATION_ARCHIVE);
-  const [form] = Form.useForm();
+  const workspaceId = useRequiredParam("id");
+  const organizationId = useRequiredParam("orgid");
+  const [form] = Form.useForm<ScheduleForm>();
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState("create");
   const [scheduleId, setScheduleId] = useState("");
-  const [templates, setTemplates] = useState([]);
+  const [templates, setTemplates] = useState<ScheduleTemplate[]>([]);
   const defaultValue = "* * * * *";
   const [value, setValue] = useState(defaultValue);
 
@@ -47,7 +54,7 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
         dataIndex: "id",
         width: "30%",
         key: "id",
-        render: (_: string, record: FlatSchedule) => {
+        render: (_: string, record: NamedSchedule) => {
           return record.id;
         },
       },
@@ -56,7 +63,7 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
         dataIndex: "jobType",
         key: "jobType",
         width: "10%",
-        render: (_: string, record: FlatSchedule) => {
+        render: (_: string, record: NamedSchedule) => {
           return record.name;
         },
       },
@@ -65,12 +72,12 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
         dataIndex: "cron",
         key: "cron",
         width: "30%",
-        render: (_: string, record: FlatSchedule) => {
+        render: (_: string, record: NamedSchedule) => {
           return (
             <span>
               <Tag color="default">cron: {record.cron} </Tag>
               <Tag icon={<InfoCircleOutlined />} color="default">
-                {cronstrue.toString(record.cron, {
+                {cronstrue.toString(record.cron ?? "", {
                   dayOfWeekStartIndexZero: false,
                 })}
               </Tag>
@@ -81,7 +88,7 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
       {
         title: "Actions",
         key: "action",
-        render: (_: string, record: FlatSchedule) => {
+        render: (_: string, record: NamedSchedule) => {
           return (
             <div>
               <Button type="link" icon={<EditOutlined />} onClick={() => onEdit(record)} disabled={!manageWorkspace}>
@@ -119,44 +126,45 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
   }, [organizationId]);
 
   const loadTemplates = () => {
-    axiosInstance
-      .get(`organization/${organizationId}/template`)
-      .then((response) => {
-        const templatesList = response.data.data.filter(function (obj: Template) {
-          //exclude CLI based templates
-          return (
-            obj.attributes.name !== "Terraform-Plan/Apply-Cli" && obj.attributes.name !== "Terraform-Plan/Destroy-Cli"
-          );
-        });
-        setTemplates(templatesList);
-        setLoading(false);
-      })
-      .catch((err) => {
-        message.error(getErrorMessage(err));
-        setLoading(false);
-      });
+    api
+      .organization(organizationId)
+      .template()
+      .select(SCHEDULE_TEMPLATE_FIELDS)
+      .then(
+        (response) => {
+          const templatesList = response.filter(function (obj) {
+            //exclude CLI based templates
+            return obj.name !== "Terraform-Plan/Apply-Cli" && obj.name !== "Terraform-Plan/Destroy-Cli";
+          });
+          setTemplates(templatesList);
+          setLoading(false);
+        },
+        (err) => {
+          message.error(getErrorMessage(err));
+          setLoading(false);
+        }
+      );
   };
 
   const onCancel = () => {
     setVisible(false);
   };
-  const onEdit = (schedule: FlatSchedule) => {
+  const onEdit = (schedule: NamedSchedule) => {
     setMode("edit");
     setScheduleId(schedule.id);
     form.setFieldsValue({
-      templateId: schedule.templateReference,
-      cron: schedule.cron,
+      templateId: schedule.templateReference ?? undefined,
     });
     setVisible(true);
   };
 
   const onCreate = (values: ScheduleForm) => {
-    const body = {
+    const body: CreateBody<"schedule"> = {
       data: {
         type: "schedule",
         attributes: {
           templateReference: values.templateId,
-          cron: C2Q.getQuartz(value)[0]?.join(" "),
+          cron: toQuartzCron(value),
         },
       },
     };
@@ -179,13 +187,13 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
   };
 
   const onUpdate = (values: ScheduleForm) => {
-    const body = {
+    const body: UpdateBody<"schedule"> = {
       data: {
         type: "schedule",
         id: scheduleId,
         attributes: {
           templateReference: values.templateId,
-          cron: C2Q.getQuartz(value)[0]?.join(" "),
+          cron: toQuartzCron(value),
         },
       },
     };
@@ -262,7 +270,7 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
               if (mode === "create") onCreate(values);
               else onUpdate(values);
             })
-            .catch((info) => {
+            .catch((info: unknown) => {
               console.log("Validate Failed:", info);
             });
         }}
@@ -282,9 +290,9 @@ export const Schedules = ({ schedules, manageWorkspace, reload }: Props) => {
                 <LoadingFallback />
               ) : (
                 <Select>
-                  {templates.map((item: Template) => (
+                  {templates.map((item) => (
                     <Select.Option value={item.id} key={item.id}>
-                      {item.attributes.name}
+                      {item.name}
                     </Select.Option>
                   ))}
                 </Select>

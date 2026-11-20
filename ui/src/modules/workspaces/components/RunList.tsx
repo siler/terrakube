@@ -1,11 +1,12 @@
+import { isStringArray } from "@/modules/utils/typeGuards";
 import { Avatar, Button, Pagination, Tag, Tooltip, Typography } from "antd";
 import { FieldTimeOutlined, UserOutlined, WarningOutlined } from "@ant-design/icons";
 import { FiGitCommit } from "react-icons/fi";
-import { Link, useParams } from "react-router-dom";
-import { FlatJob, formatJobVia } from "../../../domain/types";
+import { Link } from "react-router-dom";
+import { formatJobVia } from "../../../domain/types";
+import type { WorkspaceJobRow } from "../../../domain/Workspaces/workspaceDataUtils";
+import type { OrgTemplateRow } from "../../../domain/Workspaces/workspaceQuery";
 import { useState, useEffect, useMemo } from "react";
-import axiosInstance from "../../../config/axiosConfig";
-import { ORGANIZATION_ARCHIVE } from "../../../config/actionTypes";
 import RunFilter, { ALL_RUNS } from "./RunFilter";
 import WorkspaceStatusTag from "@/components/display/WorkspaceStatusTag";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -20,33 +21,32 @@ const RUNS_FILTER_KEY = "runsFilterValue";
 const RUNS_TEMPLATE_FILTER_KEY = "runsTemplateFilter";
 const PAGE_SIZE = 10;
 
-// Safely parse JSON with a fallback value
-const safeJsonParse = (jsonString: string | null, fallback: any): any => {
-  if (!jsonString) return fallback;
-
+// A missing, corrupt, or foreign-shaped stored filter means "no template filter" rather than a crash.
+const readStoredTemplateIds = (): string[] => {
+  const stored = sessionStorage.getItem(RUNS_TEMPLATE_FILTER_KEY);
+  if (!stored) {
+    return [];
+  }
   try {
-    return JSON.parse(jsonString);
+    const parsed: unknown = JSON.parse(stored);
+    return isStringArray(parsed) ? parsed : [];
   } catch {
-    return fallback;
+    return [];
   }
 };
 
 type Props = {
-  jobs: FlatJob[];
+  jobs: WorkspaceJobRow[];
+  /** Organization templates from the parent, null while it loads them. */
+  templates: OrgTemplateRow[] | null;
   onRunClick: (id: string) => void;
   runLink: (id: string) => string;
 };
 
-export default function RunList({ jobs, onRunClick, runLink }: Props) {
+export default function RunList({ jobs, templates, onRunClick, runLink }: Props) {
   const [currentPage, setCurrentPage] = useState<number>(parseInt(sessionStorage.getItem(RUNS_PAGE_KEY) || "1"));
-  const [templateNames, setTemplateNames] = useState<{ [key: string]: string }>({});
-  const { orgid } = useParams();
-  // A deep link has the organization in the URL before anything has put it in sessionStorage.
-  const organizationId = orgid ?? sessionStorage.getItem(ORGANIZATION_ARCHIVE);
   const [status, setStatus] = useState<string>(sessionStorage.getItem(RUNS_FILTER_KEY) || ALL_RUNS);
-  const [templateIds, setTemplateIds] = useState<string[]>(
-    safeJsonParse(sessionStorage.getItem(RUNS_TEMPLATE_FILTER_KEY), [])
-  );
+  const [templateIds, setTemplateIds] = useState<string[]>(readStoredTemplateIds);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -58,21 +58,11 @@ export default function RunList({ jobs, onRunClick, runLink }: Props) {
     sessionStorage.setItem(RUNS_TEMPLATE_FILTER_KEY, JSON.stringify(templateIds));
   }, [status, templateIds]);
 
-  // Load all templates to map template IDs to names
-  useEffect(() => {
-    if (!organizationId) return;
-    // Without the names the filter falls back to "Template <id>".
-    axiosInstance
-      .get(`organization/${organizationId}/template`)
-      .then((response) => {
-        const templateMap: { [key: string]: string } = {};
-        response.data.data.forEach((template: any) => {
-          templateMap[template.id] = template.attributes.name;
-        });
-        setTemplateNames(templateMap);
-      })
-      .catch(() => {});
-  }, [organizationId]);
+  // Until the names arrive the filter falls back to "Template <id>".
+  const templateNames = useMemo(
+    () => Object.fromEntries((templates ?? []).map((template) => [template.id, template.name])),
+    [templates]
+  );
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = { [ALL_RUNS]: jobs.length };

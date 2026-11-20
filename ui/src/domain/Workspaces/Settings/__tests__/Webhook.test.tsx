@@ -2,12 +2,15 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { MemoryRouter } from "react-router-dom";
 import { WorkspaceWebhook } from "../Webhook";
 import axiosInstance from "../../../../config/axiosConfig";
-import { VcsType } from "../../../types";
+import { VcsType } from "../../../generated/apiResources";
+import type { OrgTemplateRow, WorkspacePageRow } from "../../workspaceQuery";
+import { isRecord, isUnknownArray } from "@/modules/utils/typeGuards";
+import { workspacePageRow } from "@/testUtils/workspacePageRow";
 
 jest.mock("../../../../config/axiosConfig", () => ({
   __esModule: true,
   default: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message ? err.message : "Error"),
 }));
 jest.mock("../../Workspaces", () => ({ atomicHeader: {} }));
 let uuidCount = 0;
@@ -15,32 +18,61 @@ jest
   .spyOn(crypto, "randomUUID")
   .mockImplementation(() => `uuid-${++uuidCount}` as ReturnType<typeof crypto.randomUUID>);
 
-const workspace = (relationships: Record<string, unknown> = {}) =>
-  ({
-    id: "ws-1",
-    attributes: { name: "prod" },
-    relationships: { organization: { data: { id: "org-1" } }, ...relationships },
-  }) as any;
+const workspace = (related: Partial<WorkspacePageRow> = {}) =>
+  workspacePageRow({ id: "ws-1", name: "prod", organization: { id: "org-1", name: "acme" }, ...related });
 
 const withVcs = workspace({
-  vcs: { data: { type: "vcs", id: "vcs-1" } },
-  webhook: { data: { type: "webhook", id: "hook-1" } },
+  vcs: { id: "vcs-1", vcsType: "GITHUB" },
+  webhook: { id: "hook-1" },
 });
 
-const templates = [{ id: "tpl-1", type: "template", attributes: { name: "Plan and apply" } }] as any;
+const templates: OrgTemplateRow[] = [{ id: "tpl-1", name: "Plan and apply", tcl: null, description: null }];
 
 const renderWebhook = (ws = withVcs) =>
   render(
     <MemoryRouter>
-      <WorkspaceWebhook workspace={ws} vcsProvider={VcsType.GITHUB} orgTemplates={templates} manageWorkspace />
+      <WorkspaceWebhook
+        organizationId="org-1"
+        workspace={ws}
+        vcsProvider={VcsType.GITHUB}
+        orgTemplates={templates}
+        manageWorkspace
+      />
     </MemoryRouter>
   );
 
+const get = jest.mocked(axiosInstance.get);
+
+const getUrls = () => get.mock.calls.map(([url]) => url);
+
+const record = (value: unknown): Record<string, unknown> => {
+  if (!isRecord(value)) {
+    throw new Error(`Expected an object, got ${JSON.stringify(value)}`);
+  }
+  return value;
+};
+
+/** The `data` member of a JSON:API body or atomic operation. */
+const dataOf = (body: unknown) => record(record(body).data);
+
+/** The attributes a JSON:API body or atomic operation sends. */
+const attributesOf = (body: unknown) => record(dataOf(body).attributes);
+
+/** The atomic operations the given POST to /operations sent. */
+const postedOperations = (call: number) => {
+  const body: unknown = jest.mocked(axiosInstance.post).mock.calls[call]?.[1];
+  const operations = record(body)["atomic:operations"];
+  if (!isUnknownArray(operations)) {
+    throw new Error(`Expected atomic operations, got ${JSON.stringify(body)}`);
+  }
+  return operations.map(record);
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
-  (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+  get.mockImplementation((url: string) =>
     Promise.resolve(
-      url.endsWith("/events")
+      url.includes("/events?")
         ? {
             data: {
               data: [
@@ -58,11 +90,11 @@ beforeEach(() => {
               ],
             },
           }
-        : { data: { data: { attributes: { remoteHookId: "4242", migratedV2: false } } } }
+        : { data: { data: { id: "w-1", attributes: { remoteHookId: "4242", migratedV2: false } } } }
     )
   );
-  (axiosInstance.post as jest.Mock).mockResolvedValue({ status: 200 });
-  (axiosInstance.delete as jest.Mock).mockResolvedValue({ status: 204 });
+  jest.mocked(axiosInstance.post).mockResolvedValue({ status: 200 });
+  jest.mocked(axiosInstance.delete).mockResolvedValue({ status: 204 });
 });
 
 describe("WorkspaceWebhook", () => {
@@ -83,6 +115,10 @@ describe("WorkspaceWebhook", () => {
 
     expect(screen.getByRole("switch", { name: "Enable webhook" })).toBeChecked();
     expect(await screen.findByText("Triggers (1)")).toBeInTheDocument();
+    expect(getUrls()).toEqual([
+      "organization/org-1/workspace/ws-1/webhook/hook-1?fields[webhook]=remoteHookId,migratedV2,syncError",
+      "organization/org-1/workspace/ws-1/webhook/hook-1/events?fields[webhook_event]=priority,event,branch,pathType,path,templateId,prWorkflowEnabled,prApplyEnabled",
+    ]);
     expect(screen.getByLabelText("Webhook ID")).toHaveValue("hook-1");
     expect(screen.getByLabelText("Repository webhook ID")).toHaveValue("4242");
     const row = screen.getByRole("listitem");
@@ -120,9 +156,9 @@ describe("WorkspaceWebhook", () => {
   });
 
   it("deletes removed triggers and saves the rest in one atomic request", async () => {
-    (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+    get.mockImplementation((url: string) =>
       Promise.resolve(
-        url.endsWith("/events")
+        url.includes("/events?")
           ? {
               data: {
                 data: ["ev-1", "ev-2"].map((id, i) => ({
@@ -138,7 +174,7 @@ describe("WorkspaceWebhook", () => {
                 })),
               },
             }
-          : { data: { data: { attributes: { remoteHookId: "4242" } } } }
+          : { data: { data: { id: "w-1", attributes: { remoteHookId: "4242" } } } }
       )
     );
     renderWebhook();
@@ -150,16 +186,36 @@ describe("WorkspaceWebhook", () => {
 
     await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(1));
     expect(axiosInstance.delete).not.toHaveBeenCalled();
-    const ops = (axiosInstance.post as jest.Mock).mock.calls[0][1]["atomic:operations"];
-    expect(ops[0]).toEqual({ op: "remove", href: "/organization/org-1/workspace/ws-1/webhook/hook-1/events/ev-1" });
-    expect(ops[1].relationships.events.data).toEqual([{ type: "webhook_event", id: "ev-2" }]);
-    expect(ops.slice(2).map((op: any) => [op.op, op.data.id])).toEqual([["update", "ev-2"]]);
+    const ops = postedOperations(0);
+    // Events are linked by their href under the webhook; the webhook operation carries no linkage of its own.
+    expect(ops).toEqual([
+      { op: "remove", href: "/organization/org-1/workspace/ws-1/webhook/hook-1/events/ev-1" },
+      { op: "update", href: "/organization/org-1/workspace/ws-1/webhook", data: { type: "webhook", id: "hook-1" } },
+      {
+        op: "update",
+        href: "/organization/org-1/workspace/ws-1/webhook/hook-1/events/ev-2",
+        data: {
+          type: "webhook_event",
+          id: "ev-2",
+          attributes: {
+            priority: 1,
+            event: "PUSH",
+            branch: "b1",
+            path: "x/*",
+            pathType: "PATTERN",
+            templateId: "tpl-1",
+            prWorkflowEnabled: false,
+            prApplyEnabled: false,
+          },
+        },
+      },
+    ]);
   });
 
   it("keeps a deletion pending when the save fails, so the next save sends it again", async () => {
-    (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+    get.mockImplementation((url: string) =>
       Promise.resolve(
-        url.endsWith("/events")
+        url.includes("/events?")
           ? {
               data: {
                 data: ["ev-1", "ev-2"].map((id, i) => ({
@@ -175,10 +231,10 @@ describe("WorkspaceWebhook", () => {
                 })),
               },
             }
-          : { data: { data: { attributes: { remoteHookId: "4242" } } } }
+          : { data: { data: { id: "w-1", attributes: { remoteHookId: "4242" } } } }
       )
     );
-    (axiosInstance.post as jest.Mock).mockRejectedValueOnce(new Error("Invalid value"));
+    jest.mocked(axiosInstance.post).mockRejectedValueOnce(new Error("Invalid value"));
     renderWebhook();
     await screen.findByText("Triggers (2)");
 
@@ -190,12 +246,12 @@ describe("WorkspaceWebhook", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
     await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(2));
-    const ops = (axiosInstance.post as jest.Mock).mock.calls[1][1]["atomic:operations"];
+    const ops = postedOperations(1);
     expect(ops[0]).toEqual({ op: "remove", href: "/organization/org-1/workspace/ws-1/webhook/hook-1/events/ev-1" });
   });
 
   it("shows required-field errors inline on a new trigger", async () => {
-    renderWebhook(workspace({ vcs: { data: { type: "vcs", id: "vcs-1" } } }));
+    renderWebhook(workspace({ vcs: { id: "vcs-1", vcsType: "GITHUB" } }));
 
     const toggle = screen.getByRole("switch", { name: "Enable webhook" });
     expect(toggle).not.toBeChecked();
@@ -209,13 +265,13 @@ describe("WorkspaceWebhook", () => {
   });
 
   describe("shared webhook", () => {
-    const patch = () => axiosInstance.patch as jest.Mock;
+    const patch = () => jest.mocked(axiosInstance.patch);
     const mockWebhook = (attributes: Record<string, unknown>) =>
-      (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+      get.mockImplementation((url: string) =>
         Promise.resolve(
-          url.endsWith("/events")
+          url.includes("/events?")
             ? { data: { data: [] } }
-            : { data: { data: { attributes: { remoteHookId: "4242", ...attributes } } } }
+            : { data: { data: { id: "w-1", attributes: { remoteHookId: "4242", ...attributes } } } }
         )
       );
 
@@ -228,7 +284,7 @@ describe("WorkspaceWebhook", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Migrate" }));
 
       await waitFor(() => expect(patch()).toHaveBeenCalledTimes(1));
-      expect(patch().mock.calls[0][1].data.attributes).toEqual({ migratedV2: true });
+      expect(attributesOf(patch().mock.calls[0]?.[1])).toEqual({ migratedV2: true });
       expect(await screen.findByText("Shared with every workspace on this repository.")).toBeInTheDocument();
       expect(screen.queryByLabelText("Repository webhook ID")).not.toBeInTheDocument();
     });
@@ -244,7 +300,7 @@ describe("WorkspaceWebhook", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Switch" }));
 
       await waitFor(() => expect(patch()).toHaveBeenCalledTimes(1));
-      expect(patch().mock.calls[0][1].data.attributes).toEqual({ migratedV2: false });
+      expect(attributesOf(patch().mock.calls[0]?.[1])).toEqual({ migratedV2: false });
       expect(await screen.findByLabelText("Repository webhook ID")).toHaveValue("9001");
     });
 
@@ -268,7 +324,7 @@ describe("WorkspaceWebhook", () => {
     });
 
     it("creates a new webhook as a shared one when asked", async () => {
-      renderWebhook(workspace({ vcs: { data: { type: "vcs", id: "vcs-1" } } }));
+      renderWebhook(workspace({ vcs: { id: "vcs-1", vcsType: "GITHUB" } }));
       fireEvent.click(screen.getByRole("switch", { name: "Enable webhook" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "Share one webhook across this repository" }));
 
@@ -280,14 +336,31 @@ describe("WorkspaceWebhook", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
 
       await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(1));
-      const ops = (axiosInstance.post as jest.Mock).mock.calls[0][1]["atomic:operations"];
-      expect(ops[0]).toMatchObject({ op: "add", data: { type: "webhook", attributes: { migratedV2: true } } });
+      const ops = postedOperations(0);
+      const webhookId = dataOf(ops[0]).id;
+      expect(typeof webhookId).toBe("string");
+      const eventData = dataOf(ops[1]);
+      expect(typeof eventData.id).toBe("string");
+      expect(isRecord(eventData.attributes)).toBe(true);
+      expect(ops).toEqual([
+        {
+          op: "add",
+          href: "/organization/org-1/workspace/ws-1/webhook",
+          data: { type: "webhook", id: webhookId, attributes: { migratedV2: true } },
+        },
+        {
+          op: "add",
+          href: `/organization/org-1/workspace/ws-1/webhook/${String(webhookId)}/events`,
+          data: { type: "webhook_event", id: eventData.id, attributes: eventData.attributes },
+        },
+      ]);
     });
 
     it("offers no shared webhook for a provider that can't share one", async () => {
       render(
         <MemoryRouter>
           <WorkspaceWebhook
+            organizationId="org-1"
             workspace={withVcs}
             vcsProvider={VcsType.BITBUCKET}
             orgTemplates={templates}
@@ -303,15 +376,15 @@ describe("WorkspaceWebhook", () => {
 
   describe("triggers", () => {
     const loadEvents = (events: Record<string, unknown>[]) =>
-      (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+      get.mockImplementation((url: string) =>
         Promise.resolve(
-          url.endsWith("/events")
+          url.includes("/events?")
             ? { data: { data: events.map((attributes, i) => ({ id: `ev-${i + 1}`, attributes })) } }
-            : { data: { data: { attributes: { remoteHookId: "4242" } } } }
+            : { data: { data: { id: "w-1", attributes: { remoteHookId: "4242" } } } }
         )
       );
     const base = { event: "PUSH", templateId: "tpl-1", pathType: "REGEX", prWorkflowEnabled: false };
-    const savedOps = () => (axiosInstance.post as jest.Mock).mock.calls[0][1]["atomic:operations"];
+    const savedOps = () => postedOperations(0);
 
     it("shows each regex as its own chip and sends them back comma-separated", async () => {
       loadEvents([{ ...base, priority: 0, branch: "master", path: "^environments/.*$,^modules/.*$" }]);
@@ -325,7 +398,7 @@ describe("WorkspaceWebhook", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
       await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(1));
-      expect(savedOps()[1].data.attributes).toMatchObject({
+      expect(attributesOf(savedOps()[1])).toMatchObject({
         priority: 1,
         branch: "master",
         path: "^environments/.*$,^modules/.*$",
@@ -377,7 +450,7 @@ describe("WorkspaceWebhook", () => {
       expect(screen.getByRole("listitem")).toHaveTextContent("Push · any branch · any file → Plan and apply");
       fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
       await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(1));
-      expect(savedOps()[1].data.attributes).toMatchObject({ branch: ".*", path: "**", pathType: "PATTERN" });
+      expect(attributesOf(savedOps()[1])).toMatchObject({ branch: ".*", path: "**", pathType: "PATTERN" });
     });
 
     it("hides the path filter for a release", async () => {
@@ -405,11 +478,47 @@ describe("WorkspaceWebhook", () => {
       expect(
         savedOps()
           .slice(1)
-          .map((op: any) => [op.data.id, op.data.attributes.priority])
+          .map((op) => [dataOf(op).id, attributesOf(op).priority])
       ).toEqual([
         ["ev-2", 1],
         ["ev-1", 2],
       ]);
+    });
+
+    it("saves the event chosen in the select as the API's event type", async () => {
+      loadEvents([{ ...base, priority: 0, branch: "main", path: "a/*", pathType: "PATTERN" }]);
+      renderWebhook();
+      await screen.findByText("Triggers (1)");
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit trigger 1" }));
+      fireEvent.mouseDown(screen.getByLabelText("Event"));
+      fireEvent.click(await screen.findByTitle("Pull request"));
+      fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
+
+      await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(1));
+      expect(attributesOf(savedOps()[1]).event).toBe("PULL_REQUEST");
+    });
+
+    it("keeps an event the select doesn't offer when saving", async () => {
+      loadEvents([{ ...base, event: "PR_COMMENT", priority: 0, branch: "main", path: "a/*", pathType: "PATTERN" }]);
+      renderWebhook();
+      expect(await screen.findByText(/^New trigger/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
+
+      await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledTimes(1));
+      expect(attributesOf(savedOps()[1]).event).toBe("PR_COMMENT");
+    });
+
+    it("explains a 424 as missing webhook permissions on the VCS connection", async () => {
+      loadEvents([{ ...base, priority: 0, branch: "main", path: "a/*", pathType: "PATTERN" }]);
+      jest.mocked(axiosInstance.post).mockRejectedValueOnce({ response: { status: 424 } });
+      renderWebhook();
+      await screen.findByText("Triggers (1)");
+
+      fireEvent.click(screen.getByRole("button", { name: "Save webhook" }));
+
+      expect(await screen.findByText(/The VCS connection can't manage webhooks/)).toBeInTheDocument();
     });
 
     it("duplicates a trigger as a new unsaved one", async () => {
@@ -426,20 +535,18 @@ describe("WorkspaceWebhook", () => {
 
   describe("on a workspace that restricts apply to its configured branch", () => {
     const restricted = (branch = "main") => {
-      const ws = JSON.parse(JSON.stringify(withVcs));
-      ws.attributes = { name: "prod", branch, restrictApplyToConfiguredBranch: true };
-      return ws;
+      return { ...withVcs, branch, restrictApplyToConfiguredBranch: true };
     };
     const mockEvent = (attributes: Record<string, unknown>) =>
-      (axiosInstance.get as jest.Mock).mockImplementation((url: string) =>
+      get.mockImplementation((url: string) =>
         Promise.resolve(
-          url.endsWith("/events")
+          url.includes("/events?")
             ? {
                 data: {
                   data: [{ id: "ev-1", attributes: { priority: 1, path: "*", templateId: "tpl-1", ...attributes } }],
                 },
               }
-            : { data: { data: { attributes: { remoteHookId: "4242", migratedV2: false } } } }
+            : { data: { data: { id: "w-1", attributes: { remoteHookId: "4242", migratedV2: false } } } }
         )
       );
     const openTrigger = async () => {

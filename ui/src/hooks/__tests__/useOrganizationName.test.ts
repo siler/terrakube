@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import axiosInstance from "@/config/axiosConfig";
 import { ORGANIZATION_NAME } from "@/config/actionTypes";
+import { axiosResponse } from "@/testUtils/fakeAxiosResponse";
 import { cacheOrganizationName, useOrganizationName } from "../useOrganizationName";
 
 jest.mock("@/config/axiosConfig", () => ({
@@ -8,7 +9,7 @@ jest.mock("@/config/axiosConfig", () => ({
   default: { get: jest.fn() },
 }));
 
-const get = axiosInstance.get as jest.Mock;
+const get = jest.mocked(axiosInstance.get);
 const ORG_A = "aaaaaaaa-0000-0000-0000-000000000001";
 const ORG_B = "bbbbbbbb-0000-0000-0000-000000000002";
 const ORG_C = "cccccccc-0000-0000-0000-000000000003";
@@ -18,7 +19,7 @@ const respond = (names: Record<string, string>) =>
   get.mockImplementation((url: string) => {
     const id = Object.keys(names).find((key) => url.startsWith(`organization/${key}?`));
     return id
-      ? Promise.resolve({ data: { data: { id, attributes: { name: names[id] } } } })
+      ? Promise.resolve(axiosResponse({ data: { data: { id, attributes: { name: names[id] } } } }))
       : Promise.reject(new Error("not found"));
   });
 
@@ -36,7 +37,7 @@ describe("useOrganizationName", () => {
 
     expect(result.current).toBeUndefined();
     await waitFor(() => expect(result.current).toBe("simple-governance"));
-    expect(get).toHaveBeenCalledWith(`organization/${ORG_A}?fields[organization]=name`);
+    expect(get).toHaveBeenCalledWith(`organization/${ORG_A}?fields[organization]=name`, expect.anything());
     expect(sessionStorage.getItem(`${ORGANIZATION_NAME}:${ORG_A}`)).toBe("simple-governance");
   });
 

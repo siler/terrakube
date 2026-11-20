@@ -6,36 +6,54 @@ import {
   TeamOutlined,
   UsergroupAddOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Checkbox, Form, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import {
+  type TableColumnsType,
+  Button,
+  Card,
+  Checkbox,
+  Form,
+  Select,
+  Space,
+  Spin,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+} from "antd";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
+import { getErrorMessage, isPermissionError } from "@/config/axiosConfig";
 import { useEffect, useRef, useState } from "react";
-import axiosInstance from "@/config/axiosConfig";
 import workspaceAccessService, {
   WorkspaceAccessModel,
   WorkspaceAccessPermissions,
 } from "@/modules/workspaces/workspaceAccessService";
-import { Workspace } from "../../types";
+import { api, fields } from "../../generated/apiPaths";
+import type { Row } from "../../api/fieldSelection";
+import type { WriteAttributes } from "../../api/writeBodies";
+import type { WorkspacePageRow } from "../workspaceQuery";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import "./TeamAccess.css";
 
 type Props = {
-  workspace: Workspace;
+  organizationId: string;
+  workspace: WorkspacePageRow;
   manageWorkspace: boolean;
 };
 
+// teamName is the team picker's value, sent on as the access resource's name; the permission checkboxes only
+// apply to the custom role, so they stay optional.
 type AddTeamForm = {
   teamName: string;
-  role: string;
-  manageWorkspace?: boolean;
-  manageState?: boolean;
-  planJob?: boolean;
-  approveJob?: boolean;
-  destroyJob?: boolean;
-};
+  role: NonNullable<WriteAttributes<"access">["role"]>;
+} & Pick<WriteAttributes<"access">, "manageWorkspace" | "manageState" | "planJob" | "approveJob" | "destroyJob">;
 
-type TeamOption = { id: string; name: string };
+const TEAM_FIELDS = fields.team("name");
+
+/** An organization team as the grant-access picker lists it. */
+type TeamOption = Row<typeof TEAM_FIELDS>;
 
 const ROLES = [
   {
@@ -90,6 +108,11 @@ function roleDescription(role: string): string {
   return ROLES.find((r) => r.value === role)?.description ?? "";
 }
 
+const accessErrorMessage = (action: string, err: unknown): string =>
+  isPermissionError(err)
+    ? "You are not authorized to manage workspace team access."
+    : `${action}: ${getErrorMessage(err)}`;
+
 function effectivePermissions(record: WorkspaceAccessModel): WorkspaceAccessPermissions {
   switch (record.role) {
     case "admin":
@@ -110,8 +133,7 @@ function effectivePermissions(record: WorkspaceAccessModel): WorkspaceAccessPerm
   }
 }
 
-export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
-  const orgid = workspace.relationships.organization.data.id;
+export const WorkspaceTeamAccess = ({ organizationId, workspace, manageWorkspace }: Props) => {
   const workspaceId = workspace.id;
   const canManage = manageWorkspace;
 
@@ -142,7 +164,7 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
   const load = async () => {
     setLoading(true);
     try {
-      const result = await workspaceAccessService.listWorkspaceAccess(orgid, workspaceId);
+      const result = await workspaceAccessService.listWorkspaceAccess(organizationId, workspaceId);
       if (!result.isError) {
         setAccessList(result.data ?? []);
       } else {
@@ -158,18 +180,20 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
   }, [workspaceId]);
 
   useEffect(() => {
+    let cancelled = false;
     setLoadingTeams(true);
-    axiosInstance
-      .get(`organization/${orgid}/team`)
-      .then((res) => {
-        const list = (res.data?.data ?? []).map((t: any) => ({
-          id: t.id,
-          name: t.attributes.name,
-        }));
-        setTeams(list);
-      })
-      .finally(() => setLoadingTeams(false));
-  }, [orgid]);
+    (async () => {
+      try {
+        const teams = await api.organization(organizationId).team().select(TEAM_FIELDS);
+        if (!cancelled) setTeams(teams);
+      } finally {
+        if (!cancelled) setLoadingTeams(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
 
   const onAdd = async (values: AddTeamForm) => {
     setAdding(true);
@@ -184,16 +208,18 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
               destroyJob: !!values.destroyJob,
             }
           : undefined;
-      await workspaceAccessService.addWorkspaceAccess(orgid, workspaceId, values.teamName, values.role, permissions);
+      await workspaceAccessService.addWorkspaceAccess(
+        organizationId,
+        workspaceId,
+        values.teamName,
+        values.role,
+        permissions
+      );
       message.success(`Team "${values.teamName}" added to workspace`);
       form.resetFields();
       await load();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        message.error("You are not authorized to manage workspace team access.");
-      } else {
-        message.error(err?.message ?? "Failed to add team access");
-      }
+    } catch (err) {
+      message.error(accessErrorMessage("Failed to add team access", err));
     } finally {
       setAdding(false);
     }
@@ -201,15 +227,11 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
 
   const onRemove = async (accessId: string, teamName: string) => {
     try {
-      await workspaceAccessService.removeWorkspaceAccess(orgid, workspaceId, accessId);
+      await workspaceAccessService.removeWorkspaceAccess(organizationId, workspaceId, accessId);
       message.success(`Team "${teamName}" removed from workspace`);
       await load();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        message.error("You are not authorized to manage workspace team access.");
-      } else {
-        message.error(err?.message ?? "Failed to remove team access");
-      }
+    } catch (err) {
+      message.error(accessErrorMessage("Failed to remove team access", err));
     }
   };
 
@@ -223,16 +245,18 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
     setSavingRole(true);
     try {
       const permissions = editingRole === "custom" ? editingPermissions : undefined;
-      await workspaceAccessService.updateWorkspaceAccess(orgid, workspaceId, record.id, editingRole, permissions);
+      await workspaceAccessService.updateWorkspaceAccess(
+        organizationId,
+        workspaceId,
+        record.id,
+        editingRole,
+        permissions
+      );
       message.success(`Role for "${record.name}" updated to ${roleLabel(editingRole)}`);
       setEditingId(null);
       await load();
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        message.error("You are not authorized to manage workspace team access.");
-      } else {
-        message.error(err?.message ?? "Failed to update role");
-      }
+    } catch (err) {
+      message.error(accessErrorMessage("Failed to update role", err));
     } finally {
       setSavingRole(false);
     }
@@ -265,7 +289,7 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
     />
   );
 
-  const columns = [
+  const columns: TableColumnsType<WorkspaceAccessModel> = [
     {
       title: "Team",
       dataIndex: "name",
@@ -337,9 +361,9 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
           </Tooltip>
         ),
         key: field.key,
-        align: "center" as const,
+        align: "center",
         width: 96,
-        render: (_: any, record: WorkspaceAccessModel) => {
+        render: (_: unknown, record: WorkspaceAccessModel) => {
           const granted = effectivePermissions(record)[field.key];
           const label = `${granted ? "Can" : "Cannot"} ${field.label.toLowerCase()}`;
           return (
@@ -360,9 +384,9 @@ export const WorkspaceTeamAccess = ({ workspace, manageWorkspace }: Props) => {
     {
       title: "",
       key: "actions",
-      align: "right" as const,
+      align: "right",
       width: 56,
-      render: (_: any, record: WorkspaceAccessModel) => (
+      render: (_: unknown, record: WorkspaceAccessModel) => (
         <Tooltip title="Remove access">
           <Button
             danger

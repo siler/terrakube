@@ -22,7 +22,7 @@ describe("OrganizationSettings breadcrumbs", () => {
     // A previous visit to another organization left its name behind.
     sessionStorage.setItem(ORGANIZATION_ARCHIVE, ORG_ID);
     sessionStorage.setItem(ORGANIZATION_NAME, "simple");
-    (axiosInstance.get as jest.Mock).mockResolvedValue({
+    jest.mocked(axiosInstance.get).mockResolvedValue({
       data: { data: { id: ORG_ID, attributes: { name: "simple-governance" } } },
     });
 
@@ -37,7 +37,10 @@ describe("OrganizationSettings breadcrumbs", () => {
     expect(screen.queryByText("simple")).not.toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "simple-governance" })).toBeInTheDocument();
     await waitFor(() =>
-      expect(axiosInstance.get).toHaveBeenCalledWith(`organization/${ORG_ID}?fields[organization]=name`)
+      expect(axiosInstance.get).toHaveBeenCalledWith(
+        `organization/${ORG_ID}?fields[organization]=name`,
+        expect.anything()
+      )
     );
     expect(screen.queryByText("simple")).not.toBeInTheDocument();
   });

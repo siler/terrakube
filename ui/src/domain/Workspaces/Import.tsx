@@ -30,10 +30,21 @@ import { Link, useParams } from "react-router-dom";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "../../config/actionTypes";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
 import organizationService from "@/modules/organizations/organizationService";
-import { VcsModel, VcsTypeExtended } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { Row } from "../api/fieldSelection";
+import { VcsTypeExtended } from "../types";
 import PageWrapper from "@/components/layout/PageWrapper/PageWrapper";
 import VcsLogo from "@/components/display/VcsLogo";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
+import {
+  fetchImporterWorkspaces,
+  parseImportResult,
+  parseSensitiveVariables,
+  parseWorkspaceVarsets,
+  type SensitiveVariablePreview,
+  type WorkspaceRecord,
+  type WorkspaceVarset,
+} from "./importWorkspaceData";
 import "./CreateImport.css";
 const { Content } = Layout;
 const validateMessages = {
@@ -51,36 +62,15 @@ type Platform = {
   height?: string;
 };
 
-type WorkspaceRecord = {
-  id: string;
-  attributes: {
-    name: string;
-    description?: string;
-    "terraform-version": string;
-    "execution-mode"?: string;
-    "working-directory"?: string;
-    "vcs-repo"?: {
-      branch?: string;
-      identifier?: string;
-      "service-provider"?: string;
-      "repository-http-url"?: string;
-    };
-  };
+type ImportConnectionForm = {
+  apiUrl: string;
+  organization: string;
+  apiToken: string;
+  source?: string;
+  branch?: string;
 };
 
 type CollectionOption = {
-  id: string;
-  name: string;
-};
-
-type CollectionApiRecord = {
-  id: string;
-  attributes: {
-    name: string;
-  };
-};
-
-type WorkspaceVarset = {
   id: string;
   name: string;
 };
@@ -105,20 +95,19 @@ type WorkspaceMappingLoadResult = {
   failedSensitiveVariableWorkspaceNames: string[];
 };
 
-type SensitiveVariablePreview = {
-  id: string;
-  key: string;
-  description?: string;
-  category: string;
-  hcl: boolean;
-};
-
 type SensitiveVariableDraft = SensitiveVariablePreview & {
   value: string;
 };
 
 const NONE_COLLECTION_VALUE = "__none__";
 const WORKSPACE_IMPORT_PREVIEW_CONCURRENCY = 4;
+
+const VCS_FIELDS = fields.vcs("name", "vcsType");
+
+/** A VCS provider as the import flow lists it. */
+type VcsRow = Row<typeof VCS_FIELDS>;
+
+const COLLECTION_FIELDS = fields.collection("name");
 
 const mapWithConcurrency = async <T, TResult>(
   items: T[],
@@ -158,7 +147,7 @@ const mapWithConcurrency = async <T, TResult>(
 
 export const ImportWorkspace = () => {
   const [organizationName, setOrganizationName] = useState<string>();
-  const [vcs, setVCS] = useState<VcsModel[]>([]);
+  const [vcs, setVCS] = useState<VcsRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [vcsButtonsVisible, setVCSButtonsVisible] = useState(true);
   const [vcsId, setVcsId] = useState("");
@@ -329,13 +318,31 @@ export const ImportWorkspace = () => {
   };
 
   const loadVCS = () => {
-    axiosInstance.get(`organization/${organizationId}/vcs`).then((response) => {
-      setVCS(response.data.data);
+    if (!organizationId) {
       setLoading(false);
-    });
+      return;
+    }
+    api
+      .organization(organizationId)
+      .vcs()
+      .select(VCS_FIELDS)
+      .then((rows) => {
+        setVCS(rows);
+        setLoading(false);
+      });
   };
 
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<ImportConnectionForm>();
+
+  const formString = (name: keyof ImportConnectionForm): string | undefined => {
+    const value: unknown = form.getFieldValue(name);
+    return typeof value === "string" ? value : undefined;
+  };
+
+  const importerHeaders = () => ({
+    "X-TFC-Token": formString("apiToken"),
+    "X-TFC-Url": formString("apiUrl"),
+  });
 
   const handleCliDriven = () => {
     setVersionControlFlow(false);
@@ -394,43 +401,33 @@ export const ImportWorkspace = () => {
       return availableCollections;
     }
 
-    const response = await axiosInstance.get(`organization/${organizationId}/collection`);
-    const collections = response.data.data.map((collection: CollectionApiRecord) => ({
-      id: collection.id,
-      name: collection.attributes.name,
-    }));
-    setAvailableCollections(collections);
-    return collections;
+    const collections = await api.organization(organizationId).collection().select(COLLECTION_FIELDS);
+    const options = collections.map((collection) => ({ id: collection.id, name: collection.name }));
+    setAvailableCollections(options);
+    return options;
   };
 
   const fetchWorkspaceVarsets = async (
     importerBaseUrl: string,
     workspace: WorkspaceRecord
   ): Promise<WorkspaceMappingRow[]> => {
-    const response = await axiosInstance.get(`${importerBaseUrl}/workspaces/${workspace.id}/varsets`, {
-      headers: {
-        "X-TFC-Token": form.getFieldValue("apiToken"),
-        "X-TFC-Url": form.getFieldValue("apiUrl"),
-      },
+    const response = await axiosInstance.get<unknown>(`${importerBaseUrl}/workspaces/${workspace.id}/varsets`, {
+      headers: importerHeaders(),
     });
 
-    const varsets: WorkspaceVarset[] = response.data ?? [];
-    return buildWorkspaceMappingRows(varsets);
+    return buildWorkspaceMappingRows(parseWorkspaceVarsets(response.data));
   };
 
   const fetchWorkspaceSensitiveVariables = async (
     importerBaseUrl: string,
     workspace: WorkspaceRecord
   ): Promise<SensitiveVariableDraft[]> => {
-    const response = await axiosInstance.get(`${importerBaseUrl}/workspaces/${workspace.id}/sensitive-variables`, {
-      headers: {
-        "X-TFC-Token": form.getFieldValue("apiToken"),
-        "X-TFC-Url": form.getFieldValue("apiUrl"),
-      },
-    });
+    const response = await axiosInstance.get<unknown>(
+      `${importerBaseUrl}/workspaces/${workspace.id}/sensitive-variables`,
+      { headers: importerHeaders() }
+    );
 
-    const sensitiveVariables: SensitiveVariablePreview[] = response.data ?? [];
-    return buildSensitiveVariableDrafts(sensitiveVariables);
+    return buildSensitiveVariableDrafts(parseSensitiveVariables(response.data));
   };
 
   const loadWorkspaceImportData = async (importerBaseUrl: string): Promise<WorkspaceMappingLoadResult> => {
@@ -574,7 +571,7 @@ export const ImportWorkspace = () => {
     }
   };
 
-  const importWorkspace = async (workspace: WorkspaceRecord) => {
+  const importWorkspace = async (workspace: WorkspaceRecord): Promise<string> => {
     try {
       const importerBaseUrl = getImporterBaseUrl();
       const workingDirectory = workspace.attributes["working-directory"];
@@ -585,13 +582,13 @@ export const ImportWorkspace = () => {
         folder = trimmedWorkingDirectory;
       }
 
-      const response = await axiosInstance.post(
+      const response = await axiosInstance.post<unknown>(
         `${importerBaseUrl}/workspaces`,
         {
           organizationId: organizationId,
           vcsId: vcsId,
           id: workspace.id,
-          organization: form.getFieldValue("organization"),
+          organization: formString("organization"),
           branch: workspace.attributes["vcs-repo"]?.branch,
           folder,
           name: workspace.attributes.name,
@@ -602,15 +599,10 @@ export const ImportWorkspace = () => {
           variableCollectionIds: getSelectedCollectionIds(workspace.id),
           sensitiveVariables: getSelectedSensitiveVariables(workspace.id),
         },
-        {
-          headers: {
-            "X-TFC-Token": form.getFieldValue("apiToken"),
-            "X-TFC-Url": form.getFieldValue("apiUrl"),
-          },
-        }
+        { headers: importerHeaders() }
       );
 
-      return response?.data;
+      return parseImportResult(response.data);
     } catch (error) {
       return `Failed to import workspace: ${getErrorMessage(error)}`;
     }
@@ -625,7 +617,7 @@ export const ImportWorkspace = () => {
     }),
   };
 
-  const onFinish = (values: any) => {
+  const onFinish = (values: ImportConnectionForm) => {
     handleChange(4);
     setWorkspacesLoading(true);
 
@@ -638,15 +630,12 @@ export const ImportWorkspace = () => {
       return;
     }
 
-    axiosInstance
-      .get(`${importerBaseUrl}/workspaces?organization=${values.organization}`, {
-        headers: {
-          "X-TFC-Token": values.apiToken,
-          "X-TFC-Url": values.apiUrl,
-        },
-      })
-      .then((response) => {
-        setWorkspaces(response.data);
+    fetchImporterWorkspaces(importerBaseUrl, values.organization, {
+      "X-TFC-Token": values.apiToken,
+      "X-TFC-Url": values.apiUrl,
+    })
+      .then((records) => {
+        setWorkspaces(records);
         setSelectedWorkspaces([]);
         setImportProgress([]);
         setWorkspaceMappings({});
@@ -876,7 +865,7 @@ export const ImportWorkspace = () => {
                     <Space orientation="vertical">
                       <img
                         className="ws-import-platform-logo"
-                        style={{ "--ws-import-logo-height": item.height } as React.CSSProperties}
+                        style={{ "--ws-import-logo-height": item.height }}
                         alt={item.name}
                         src={item.icon}
                       />
@@ -944,13 +933,13 @@ export const ImportWorkspace = () => {
                       return (
                         <Button
                           key={item.id}
-                          icon={<VcsLogo type={item.attributes.vcsType} size={20} />}
+                          icon={<VcsLogo type={item.vcsType} size={20} />}
                           onClick={() => {
                             handleGitClick(item.id);
                           }}
                           size="large"
                         >
-                          &nbsp;{item.attributes.name}
+                          &nbsp;{item.name}
                         </Button>
                       );
                     })

@@ -2,13 +2,17 @@ import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { AutoComplete, Button, Flex, Input, message, Modal, Space, Typography } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { TagModel } from "@/modules/organizations/types";
+import { TagModel } from "@/modules/organizations/organizationService";
 import { WorkspaceTagBinding } from "@/modules/workspaces/types";
 import { TAG_KEY_MAX_LENGTH, TAG_VALUE_MAX_LENGTH } from "@/modules/workspaces/utils/tagLimits";
 import WorkspaceTagChips from "@/modules/workspaces/components/WorkspaceTagChips";
-import quoteRsql from "@/modules/workspaces/utils/quoteRsql";
 import workspaceService from "@/modules/workspaces/workspaceService";
-import { Tag, ApiWorkspaceTag } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import { rowFrom } from "../api/flattenDocument";
+import type { CreateBody, UpdateBody } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
+import { parseApiDocument } from "@/domain/api/parseDocument";
+import { WORKSPACETAG_FIELDS, type WorkspaceTagRow } from "./workspaceTagFields";
 import "./Workspaces.css";
 
 type Props = {
@@ -16,6 +20,11 @@ type Props = {
   workspaceId: string;
   manageWorkspace: boolean;
 };
+
+const TAG_FIELDS = fields.tag("name");
+
+/** An organization tag key as the editor lists and suggests it. */
+type TagRow = Row<typeof TAG_FIELDS>;
 
 type SavedTag = WorkspaceTagBinding & { id: string };
 
@@ -34,13 +43,15 @@ type TagChange =
 
 const JSON_API_HEADERS = { "Content-Type": "application/vnd.api+json" };
 
-const toSavedTag = ({ id, attributes }: ApiWorkspaceTag): SavedTag => ({
-  id,
-  tagId: attributes.tagId,
-  value: attributes.value ?? null,
+// Key-only tags have no value, so an absent value is stored as null.
+// A create response always carries the created resource, so the flattening union collapses to the single row.
+const toSavedTag = (row: WorkspaceTagRow): SavedTag => ({
+  id: row.id,
+  tagId: row.tagId,
+  value: row.value ?? null,
 });
 
-const toTagModel = (tag: Tag): TagModel => ({ id: tag.id, name: tag.attributes.name });
+const toTagModel = ({ id, name }: TagRow): TagModel => ({ id, name: name ?? "" });
 
 /**
  * The tags of one workspace as chips, with the editor in a modal: the sidebar is too narrow for a key and a
@@ -61,13 +72,13 @@ export const Tags = ({ organizationId, workspaceId, manageWorkspace }: Props) =>
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      axiosInstance.get(`organization/${organizationId}/workspace/${workspaceId}/workspaceTag`),
-      axiosInstance.get(`organization/${organizationId}/tag`),
+      api.organization(organizationId).workspace(workspaceId).workspaceTag().select(WORKSPACETAG_FIELDS),
+      api.organization(organizationId).tag().select(TAG_FIELDS),
     ])
       .then(([workspaceTags, organizationTags]) => {
         if (cancelled) return;
-        setBindings((workspaceTags.data.data ?? []).map(toSavedTag));
-        setTags((organizationTags.data.data ?? []).map(toTagModel));
+        setBindings(workspaceTags);
+        setTags(organizationTags.map(toTagModel));
       })
       .catch((err) => {
         if (!cancelled) message.error(getErrorMessage(err));
@@ -92,19 +103,21 @@ export const Tags = ({ organizationId, workspaceId, manageWorkspace }: Props) =>
     if (known) return known.id;
 
     // Another user may have created the key since the list was loaded
-    const existing = await axiosInstance.get(`organization/${organizationId}/tag`, {
-      params: { "filter[tag]": `name==${quoteRsql(name)}` },
-    });
-    const existingId = existing.data?.data?.[0]?.id;
+    const existing = await api
+      .organization(organizationId)
+      .tag()
+      .select(TAG_FIELDS)
+      .where((tag) => tag.name.eq(name));
+    const existingId = existing[0]?.id;
     if (existingId) return existingId;
 
-    const created = await axiosInstance.post(
-      `organization/${organizationId}/tag`,
-      { data: { type: "tag", attributes: { name } } },
-      { headers: JSON_API_HEADERS }
-    );
-    setTags((prev) => [...prev, toTagModel(created.data.data)]);
-    return created.data.data.id;
+    const body: CreateBody<"tag"> = { data: { type: "tag", attributes: { name } } };
+    const created = await axiosInstance.post<unknown>(`organization/${organizationId}/tag`, body, {
+      headers: JSON_API_HEADERS,
+    });
+    const row = rowFrom(TAG_FIELDS, parseApiDocument(created.data));
+    setTags((prev) => [...prev, toTagModel(row)]);
+    return row.id;
   };
 
   const openEditor = () => {
@@ -155,20 +168,18 @@ export const Tags = ({ organizationId, workspaceId, manageWorkspace }: Props) =>
     if (change.kind === "update") {
       // An empty input and a tag that never had a value are the same thing, so both are stored as null
       const value = change.value || null;
-      await axiosInstance.patch(
-        `${base}/${change.binding.id}`,
-        { data: { type: "workspacetag", id: change.binding.id, attributes: { value } } },
-        { headers: JSON_API_HEADERS }
-      );
+      const body: UpdateBody<"workspacetag"> = {
+        data: { type: "workspacetag", id: change.binding.id, attributes: { value } },
+      };
+      await axiosInstance.patch(`${base}/${change.binding.id}`, body, { headers: JSON_API_HEADERS });
       return { ...change.binding, value };
     }
     const tagId = await findOrCreateTag(change.row.key.trim());
-    const response = await axiosInstance.post(
-      base,
-      { data: { type: "workspacetag", attributes: { tagId, value: change.row.value.trim() || null } } },
-      { headers: JSON_API_HEADERS }
-    );
-    return toSavedTag(response.data.data);
+    const body: CreateBody<"workspacetag"> = {
+      data: { type: "workspacetag", attributes: { tagId, value: change.row.value.trim() || null } },
+    };
+    const response = await axiosInstance.post<unknown>(base, body, { headers: JSON_API_HEADERS });
+    return toSavedTag(rowFrom(WORKSPACETAG_FIELDS, parseApiDocument(response.data)));
   };
 
   const save = async () => {
@@ -186,9 +197,15 @@ export const Tags = ({ organizationId, workspaceId, manageWorkspace }: Props) =>
     for (const change of changes) {
       try {
         const saved = await apply(change);
-        if (change.kind === "add") added.set(change.row.rowKey, saved!.id);
-        else current = current.filter((binding) => binding.id !== change.binding.id);
-        if (saved) current = [...current, saved];
+        if (change.kind !== "add") {
+          current = current.filter((binding) => binding.id !== change.binding.id);
+        }
+        if (saved) {
+          current = [...current, saved];
+          if (change.kind === "add") {
+            added.set(change.row.rowKey, saved.id);
+          }
+        }
       } catch (err) {
         failures++;
         message.error(getErrorMessage(err));

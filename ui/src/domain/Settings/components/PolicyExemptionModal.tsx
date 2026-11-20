@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Button, DatePicker, Flex, Form, Input, Modal, Select, Space, Switch, Typography, message } from "antd";
 import dayjs, { Dayjs } from "dayjs";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
+import { api, fields } from "../../generated/apiPaths";
+import type { CreateBody, FormValues, Linkage, UpdateBody, WriteAttributes } from "../../api/writeBodies";
+import type { Row } from "../../api/fieldSelection";
 import { RadioChoices } from "@/components/settings/RadioChoices";
 import "@/components/modals/CrudFormModal/CrudFormModal.css";
 import "../PolicySets.css";
@@ -10,17 +13,25 @@ import "./PolicyComponents.css";
 const { TextArea } = Input;
 const { Text } = Typography;
 
+const POLICY_SET_NAME_FIELDS = fields.policy_set("name");
+type PolicySetName = Row<typeof POLICY_SET_NAME_FIELDS>;
+
+const PROJECT_NAME_FIELDS = fields.project("name");
+type ProjectName = Row<typeof PROJECT_NAME_FIELDS>;
+
+const WORKSPACE_NAME_FIELDS = fields.workspace("name");
+type WorkspaceName = Row<typeof WORKSPACE_NAME_FIELDS>;
+
 export type ExemptionScopeType = "ORGANIZATION" | "PROJECT" | "WORKSPACE";
 
-export type ExemptionFormData = {
+export type ExemptionFormData = Pick<FormValues<"policy_exemption">, "ruleId" | "ticketReference" | "justification"> & {
+  // The scope pickers and the indefinite switch hold UI state, not exemption attributes.
   policySetId: string;
-  ruleId: string;
   scopeType: ExemptionScopeType;
   workspaceId?: string;
   projectId?: string;
-  ticketReference: string;
-  justification: string;
   isIndefinite: boolean;
+  // Held as a Dayjs in the form and serialised to ISO on submit.
   expiresAt?: Dayjs;
 };
 
@@ -45,7 +56,7 @@ export type PolicyExemptionModalProps = {
   };
   organizationId: string;
   onCancel: () => void;
-  onSuccess: (savedExemption?: any) => void;
+  onSuccess: () => void;
 };
 
 export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
@@ -59,9 +70,9 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
 }) => {
   const [form] = Form.useForm<ExemptionFormData>();
   const [submitting, setSubmitting] = useState(false);
-  const [policySets, setPolicySets] = useState<any[]>([]);
-  const [workspaces, setWorkspaces] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [policySets, setPolicySets] = useState<PolicySetName[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceName[]>([]);
+  const [projects, setProjects] = useState<ProjectName[]>([]);
   const [loadingRefs, setLoadingRefs] = useState(false);
 
   const scopeType = Form.useWatch("scopeType", form) || lockedScope?.scopeType || "ORGANIZATION";
@@ -70,19 +81,11 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
   useEffect(() => {
     if (visible && organizationId) {
       setLoadingRefs(true);
+      // A query is a thenable, not a Promise, so a per-read fallback wraps it in Promise.resolve.
       Promise.all([
-        axiosInstance
-          .get(`organization/${organizationId}/policySet`)
-          .then((res) => res.data?.data || [])
-          .catch(() => []),
-        axiosInstance
-          .get(`organization/${organizationId}/workspace`)
-          .then((res) => res.data?.data || [])
-          .catch(() => []),
-        axiosInstance
-          .get(`organization/${organizationId}/project`)
-          .then((res) => res.data?.data || [])
-          .catch(() => []),
+        Promise.resolve(api.organization(organizationId).policySet().select(POLICY_SET_NAME_FIELDS)).catch(() => []),
+        Promise.resolve(api.organization(organizationId).workspace().select(WORKSPACE_NAME_FIELDS)).catch(() => []),
+        Promise.resolve(api.organization(organizationId).project().select(PROJECT_NAME_FIELDS)).catch(() => []),
       ])
         .then(([sets, wsList, projList]) => {
           setPolicySets(sets);
@@ -151,70 +154,51 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
       const formattedExpiresAt =
         isIndefinite || values.isIndefinite || !values.expiresAt ? null : values.expiresAt.toISOString();
 
-      const payload: any = {
-        data: {
-          type: "policy_exemption",
-          ...(mode === "edit" && initialData?.id ? { id: initialData.id } : {}),
-          attributes: {
-            ruleId: values.ruleId.trim(),
-            ticketReference: values.ticketReference.trim(),
-            justification: values.justification.trim(),
-            expiresAt: formattedExpiresAt,
-          },
-          relationships: {
-            organization: {
-              data: {
-                type: "organization",
-                id: organizationId,
-              },
-            },
-            policySet: {
-              data: {
-                type: "policy_set",
-                id: values.policySetId,
-              },
-            },
-          },
-        },
+      const attributes: WriteAttributes<"policy_exemption"> = {
+        ruleId: values.ruleId.trim(),
+        ticketReference: values.ticketReference.trim(),
+        justification: values.justification.trim(),
+        expiresAt: formattedExpiresAt,
+      };
+      const relationships: Linkage<"policy_exemption"> = {
+        organization: { data: { type: "organization", id: organizationId } },
+        policySet: { data: { type: "policy_set", id: values.policySetId } },
       };
 
       if (values.scopeType === "WORKSPACE" && values.workspaceId) {
-        payload.data.relationships.workspace = {
-          data: {
-            type: "workspace",
-            id: values.workspaceId,
-          },
-        };
-        payload.data.relationships.project = { data: null };
+        relationships.workspace = { data: { type: "workspace", id: values.workspaceId } };
+        relationships.project = { data: null };
       } else if (values.scopeType === "PROJECT" && values.projectId) {
-        payload.data.relationships.project = {
-          data: {
-            type: "project",
-            id: values.projectId,
-          },
-        };
-        payload.data.relationships.workspace = { data: null };
+        relationships.project = { data: { type: "project", id: values.projectId } };
+        relationships.workspace = { data: null };
       } else {
-        payload.data.relationships.workspace = { data: null };
-        payload.data.relationships.project = { data: null };
+        relationships.workspace = { data: null };
+        relationships.project = { data: null };
       }
 
-      let response;
       if (mode === "create") {
-        response = await axiosInstance.post("policy_exemption", payload, {
+        const payload: CreateBody<"policy_exemption"> = {
+          data: { type: "policy_exemption", attributes, relationships },
+        };
+        await axiosInstance.post("policy_exemption", payload, {
           headers: { "Content-Type": "application/vnd.api+json" },
         });
         message.success("Policy exemption created successfully");
       } else {
-        response = await axiosInstance.patch(`policy_exemption/${initialData?.id}`, payload, {
+        const id = initialData?.id;
+        if (!id) throw new Error("No policy exemption is selected to update");
+        const payload: UpdateBody<"policy_exemption"> = {
+          data: { type: "policy_exemption", id, attributes, relationships },
+        };
+        await axiosInstance.patch(`policy_exemption/${id}`, payload, {
           headers: { "Content-Type": "application/vnd.api+json" },
         });
         message.success("Policy exemption updated successfully");
       }
 
-      onSuccess(response.data?.data);
+      onSuccess();
       form.resetFields();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err) || "Failed to save policy exemption");
     } finally {
       setSubmitting(false);
@@ -248,7 +232,7 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
             showSearch
             optionFilterProp="label"
             disabled={mode === "edit"}
-            options={policySets.map((ps) => ({ value: ps.id, label: ps.attributes?.name || ps.id }))}
+            options={policySets.map((ps) => ({ value: ps.id, label: ps.name || ps.id }))}
           />
         </Form.Item>
 
@@ -280,7 +264,7 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
               showSearch
               optionFilterProp="label"
               disabled={mode === "edit"}
-              options={projects.map((proj) => ({ value: proj.id, label: proj.attributes?.name || proj.id }))}
+              options={projects.map((proj) => ({ value: proj.id, label: proj.name || proj.id }))}
             />
           </Form.Item>
         )}
@@ -293,7 +277,7 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
               showSearch
               optionFilterProp="label"
               disabled={Boolean(lockedScope) || mode === "edit"}
-              options={workspaces.map((ws) => ({ value: ws.id, label: ws.attributes?.name || ws.id }))}
+              options={workspaces.map((ws) => ({ value: ws.id, label: ws.name || ws.id }))}
             />
           </Form.Item>
         )}
@@ -334,13 +318,15 @@ export const PolicyExemptionModal: React.FC<PolicyExemptionModalProps> = ({
             rules={[{ required: !isIndefinite, message: "Pick an expiration date" }]}
             extra={
               <Space wrap size={4} className="policy-exemption-durations">
-                {[
-                  [30, "30 days"],
-                  [60, "60 days"],
-                  [90, "90 days"],
-                  [365, "1 year"],
-                ].map(([days, label]) => (
-                  <Button key={days} size="small" onClick={() => handleQuickDuration(days as number)}>
+                {(
+                  [
+                    [30, "30 days"],
+                    [60, "60 days"],
+                    [90, "90 days"],
+                    [365, "1 year"],
+                  ] as const
+                ).map(([days, label]) => (
+                  <Button key={days} size="small" onClick={() => handleQuickDuration(days)}>
                     {label}
                   </Button>
                 ))}

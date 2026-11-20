@@ -11,10 +11,25 @@ jest.mock("../../../config/axiosConfig", () => ({
     post: jest.fn(),
     patch: jest.fn(),
   },
-  getErrorMessage: (err: any) => err?.message || "Error",
+  getErrorMessage: (err: unknown) => (err instanceof Error && err.message ? err.message : "Error"),
 }));
 
+const get = jest.mocked(axiosInstance.get);
+
 describe("PolicyExemptionsSettings", () => {
+  // Answers only the exact URLs given, so a request that drops a field fails the test.
+  const respondTo = (routes: Record<string, unknown>) =>
+    get.mockImplementation((url: string) =>
+      url in routes ? Promise.resolve({ data: routes[url] }) : Promise.reject(new Error(`Unexpected GET ${url}`))
+    );
+
+  const POLICY_SETS_URL = "policy_set?fields[policy_set]=name,organization";
+  const EXEMPTIONS_URL =
+    "organization/org-1/policyExemption?fields[policy_exemption]=ruleId,ticketReference,justification,expiresAt,createdDate,createdBy,policySet,workspace,project";
+  // The workspace scope names are fetched by id once the exemptions name their scopes.
+  const WORKSPACE_NAMES_URL =
+    "organization/org-1/workspace?fields[workspace]=name&filter[workspace]=id%3Din%3D('ws-1')";
+
   const sampleRawExemptions = [
     {
       id: "ex-1",
@@ -23,11 +38,13 @@ describe("PolicyExemptionsSettings", () => {
         ticketReference: "SEC-101",
         justification: "Approved CDN bucket waiver",
         expiresAt: "2099-12-31T00:00:00Z",
+        createdDate: null,
+        createdBy: null,
       },
       relationships: {
-        organization: { data: { id: "org-1" } },
         policySet: { data: { id: "ps-1" } },
         workspace: { data: { id: "ws-1" } },
+        project: { data: null },
       },
     },
     {
@@ -37,54 +54,40 @@ describe("PolicyExemptionsSettings", () => {
         ticketReference: "SEC-202",
         justification: "Global tagging exemption for sandbox",
         expiresAt: null,
+        createdDate: null,
+        createdBy: null,
       },
       relationships: {
-        organization: { data: { id: "org-1" } },
         policySet: { data: { id: "ps-2" } },
+        workspace: { data: null },
+        project: { data: null },
       },
     },
   ];
 
-  const sampleIncluded = [
+  const policySetRows = [
     {
-      type: "policy_set",
       id: "ps-1",
       attributes: { name: "AWS Security Rules" },
+      relationships: { organization: { data: { id: "org-1" } } },
     },
     {
-      type: "policy_set",
       id: "ps-2",
       attributes: { name: "FinOps Governance" },
-    },
-    {
-      type: "workspace",
-      id: "ws-1",
-      attributes: { name: "frontend-prod" },
+      relationships: { organization: { data: { id: "org-1" } } },
     },
   ];
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (axiosInstance.get as jest.Mock).mockImplementation((url: string) => {
-      if (url === "policy_set") {
-        return Promise.resolve({
-          data: {
-            data: [
-              { id: "ps-1", attributes: { name: "AWS Security Rules" } },
-              { id: "ps-2", attributes: { name: "FinOps Governance" } },
-            ],
-          },
-        });
-      }
-      if (url.includes("policyExemption")) {
-        return Promise.resolve({
-          data: {
-            data: sampleRawExemptions,
-            included: sampleIncluded,
-          },
-        });
-      }
-      return Promise.resolve({ data: { data: [] } });
+    respondTo({
+      [POLICY_SETS_URL]: { data: policySetRows },
+      [EXEMPTIONS_URL]: { data: sampleRawExemptions },
+      [WORKSPACE_NAMES_URL]: { data: [{ id: "ws-1", attributes: { name: "frontend-prod" } }] },
+      // The create modal loads its own pickers when it opens.
+      "organization/org-1/policySet?fields[policy_set]=name": { data: [] },
+      "organization/org-1/workspace?fields[workspace]=name": { data: [] },
+      "organization/org-1/project?fields[project]=name": { data: [] },
     });
   });
 

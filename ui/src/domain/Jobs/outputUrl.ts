@@ -2,7 +2,14 @@ import { apiPrefix, getPublicApiOrigin } from "@/config/apiUrls";
 
 export { getPublicApiOrigin };
 
-export function getJobOutputRequestUrl(output: string): string {
+// The API records log and state URLs with the host it was configured with, which the browser may not reach.
+const API_FILE_PATHS = ["/tfoutput/", "/tfstate/"];
+
+/**
+ * Points a log or state URL the API stored at the API origin this UI talks to, leaving other storage URLs alone.
+ * Relative paths resolve against that origin.
+ */
+export function getApiRequestUrl(output: string): string {
   const publicApiOrigin = getPublicApiOrigin();
 
   try {
@@ -12,7 +19,7 @@ export function getJobOutputRequestUrl(output: string): string {
       return outputUrl.toString();
     }
 
-    if (outputUrl.pathname.startsWith("/tfoutput/")) {
+    if (API_FILE_PATHS.some((path) => outputUrl.pathname.startsWith(path))) {
       return `${publicApiOrigin}${apiPrefix()}${outputUrl.pathname}${outputUrl.search}${outputUrl.hash}`;
     }
 

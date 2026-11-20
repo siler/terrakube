@@ -2,12 +2,13 @@ import { Avatar, Button, Card } from "antd";
 import { memo } from "react";
 import { HiOutlineExternalLink } from "react-icons/hi";
 import { Handle, NodeProps, Position } from "reactflow";
-import { Resource } from "../types.js";
+import type { Resource, ResourceNodeData } from "../types.js";
 import { getServiceIcon } from "./Icons.jsx";
 import "./Workspaces.css";
 const { Meta } = Card;
 
-export default memo(function NodeResource({ data, isConnectable }: NodeProps<Resource>) {
+const NodeResource = memo(({ data, isConnectable }: NodeProps<ResourceNodeData>) => {
+  const { showDrawer, ...resource } = data;
   return (
     <>
       <Handle
@@ -23,7 +24,7 @@ export default memo(function NodeResource({ data, isConnectable }: NodeProps<Res
           title={
             <>
               {" "}
-              <Button onClick={() => data.showDrawer(data)} type="link">
+              <Button onClick={() => showDrawer(resource)} type="link">
                 {data.name} &nbsp;
                 <HiOutlineExternalLink />
               </Button>{" "}
@@ -42,6 +43,9 @@ export default memo(function NodeResource({ data, isConnectable }: NodeProps<Res
     </>
   );
 });
+NodeResource.displayName = "NodeResource";
+
+export default NodeResource;
 
 const GetResourceIcon = (resource: Resource) => {
   const iconSource = getServiceIcon(resource.provider, resource.type);

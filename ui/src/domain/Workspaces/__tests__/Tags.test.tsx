@@ -1,24 +1,27 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Tags } from "../Tags";
+import { requestAttributes } from "@/testUtils/readRequestBody";
 
-const getMock = jest.fn();
-const patchMock = jest.fn();
-const postMock = jest.fn();
-const deleteMock = jest.fn();
+type Request = [url: string, ...rest: unknown[]];
+
+const getMock = jest.fn<Promise<unknown>, Request>();
+const patchMock = jest.fn<Promise<unknown>, Request>();
+const postMock = jest.fn<Promise<unknown>, Request>();
+const deleteMock = jest.fn<Promise<unknown>, Request>();
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
   default: {
-    get: (...args: unknown[]) => getMock(...args),
-    patch: (...args: unknown[]) => patchMock(...args),
-    post: (...args: unknown[]) => postMock(...args),
-    delete: (...args: unknown[]) => deleteMock(...args),
+    get: (...args: Request) => getMock(...args),
+    patch: (...args: Request) => patchMock(...args),
+    post: (...args: Request) => postMock(...args),
+    delete: (...args: Request) => deleteMock(...args),
   },
   getErrorMessage: () => "error",
 }));
 
-const clearTagFilterCacheMock = jest.fn();
+const clearTagFilterCacheMock = jest.fn<void, []>();
 
 jest.mock("@/modules/workspaces/workspaceService", () => ({
   __esModule: true,
@@ -44,11 +47,12 @@ const organizationTags = {
 };
 
 function renderTags(manageWorkspace = true) {
-  getMock.mockImplementation((url: string, config?: { params?: Record<string, string> }) => {
-    if (url.endsWith("workspaceTag")) return Promise.resolve(bindings);
-    const filter = config?.params?.["filter[tag]"];
+  getMock.mockImplementation((url: string) => {
+    if (url.includes("organization/org-1/workspace/ws-1/workspaceTag?")) return Promise.resolve(bindings);
+    const filter = url.match(/filter\[tag\]=([^&]+)/)?.[1];
     if (filter) {
-      const name = JSON.parse(filter.replace("name==", ""));
+      // The query quotes the value, so the decoded filter is `name=='<name>'`.
+      const name = decodeURIComponent(filter).replace("name==", "").slice(1, -1);
       return Promise.resolve({
         data: { data: organizationTags.data.data.filter((tag) => tag.attributes.name === name) },
       });
@@ -77,6 +81,10 @@ describe("Tags", () => {
     renderTags();
 
     expect(await screen.findByTitle("env = prod")).toBeInTheDocument();
+    // The bindings are read on today's org-scoped Elide path, not the bare workspace root.
+    expect(getMock.mock.calls[0][0]).toBe(
+      "organization/org-1/workspace/ws-1/workspaceTag?fields[workspacetag]=tagId,value"
+    );
     expect(screen.queryByLabelText("Value of env")).not.toBeInTheDocument();
     expect(await openEditor()).toHaveValue("prod");
   });
@@ -101,7 +109,7 @@ describe("Tags", () => {
     await save();
 
     await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
-    expect(patchMock.mock.calls[0][1].data.attributes.value).toBe("staging");
+    expect(requestAttributes(patchMock.mock.calls[0][1]).value).toBe("staging");
     expect(await screen.findByTitle("env = staging")).toBeInTheDocument();
   });
 
@@ -139,8 +147,8 @@ describe("Tags", () => {
 
     await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
     expect(deleteMock.mock.calls[0][0]).toMatch(/workspaceTag\/wt-2$/);
-    expect(patchMock.mock.calls[0][1].data.attributes.value).toBe("dev");
-    expect(postMock.mock.calls[0][1].data.attributes).toEqual({ tagId: "tag-3", value: "alice" });
+    expect(requestAttributes(patchMock.mock.calls[0][1]).value).toBe("dev");
+    expect(requestAttributes(postMock.mock.calls[0][1])).toEqual({ tagId: "tag-3", value: "alice" });
     expect(await screen.findByTitle("owner = alice")).toBeInTheDocument();
     expect(screen.queryByTitle("team = infra")).not.toBeInTheDocument();
     // A known key is taken from the loaded list, and the workspace list forgets what its tag filter matched
@@ -163,11 +171,12 @@ describe("Tags", () => {
     await save();
 
     await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
-    expect(getMock).toHaveBeenCalledWith("organization/org-1/tag", {
-      params: { "filter[tag]": 'name=="cost center"' },
-    });
-    expect(postMock.mock.calls[0][1].data.attributes).toEqual({ name: "cost center" });
-    expect(postMock.mock.calls[1][1].data.attributes).toEqual({ tagId: "tag-9", value: "42" });
+    expect(getMock).toHaveBeenCalledWith(
+      "organization/org-1/tag?fields[tag]=name&filter[tag]=name%3D%3D'cost%20center'",
+      expect.anything()
+    );
+    expect(requestAttributes(postMock.mock.calls[0][1])).toEqual({ name: "cost center" });
+    expect(requestAttributes(postMock.mock.calls[1][1])).toEqual({ tagId: "tag-9", value: "42" });
     expect(await screen.findByTitle("cost center = 42")).toBeInTheDocument();
   });
 

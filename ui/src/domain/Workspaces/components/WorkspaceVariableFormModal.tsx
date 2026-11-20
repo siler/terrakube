@@ -1,7 +1,8 @@
 import type { FormInstance } from "antd";
 import { CrudFormModal } from "@/components/modals/CrudFormModal";
 import { VariableFormFields } from "@/components/forms/VariableFormFields";
-import { CreateVariableForm, VariableCategory } from "@/domain/types";
+import { CreateVariableForm } from "@/domain/types";
+import type { Category } from "@/domain/generated/apiResources";
 
 const validateMessages = {
   required: "${label} is required!",
@@ -11,8 +12,8 @@ type Props = {
   open: boolean;
   mode: "create" | "edit";
   variableName?: string;
-  category: VariableCategory | null;
-  onCategoryChange: (value: VariableCategory) => void;
+  category: Category | null;
+  onCategoryChange: (value: Category) => void;
   form: FormInstance<CreateVariableForm>;
   onCancel: () => void;
   onSubmit: (values: CreateVariableForm) => void;
@@ -40,10 +41,7 @@ export default function WorkspaceVariableFormModal({
       validateMessages={validateMessages}
       initialValues={{ category: "TERRAFORM", hcl: false, sensitive: false }}
     >
-      <VariableFormFields
-        category={category ?? undefined}
-        onCategoryChange={(value) => onCategoryChange(value as VariableCategory)}
-      />
+      <VariableFormFields category={category ?? undefined} onCategoryChange={onCategoryChange} />
     </CrudFormModal>
   );
 }
