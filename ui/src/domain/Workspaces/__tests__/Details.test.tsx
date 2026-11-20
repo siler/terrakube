@@ -41,9 +41,15 @@ jest.mock("../../Jobs/Details", () => ({
   },
 }));
 
+const mockSubscriptions: { poll?: () => void; jobEvent?: () => void } = {};
 jest.mock("../../../hooks", () => ({
-  usePolling: jest.fn(),
-  useJobStatusSubscription: jest.fn(),
+  usePolling: (callback: () => void) => {
+    mockSubscriptions.poll = callback;
+  },
+  useJobStatusSubscription: ({ onEvent }: { onEvent: () => void }) => {
+    mockSubscriptions.jobEvent = onEvent;
+  },
+  useCoalescedReload: jest.requireActual("../../../hooks/useCoalescedReload").useCoalescedReload,
 }));
 
 describe("WorkspaceDetails", () => {
@@ -372,6 +378,77 @@ describe("WorkspaceDetails", () => {
       expect(permissionLoads()).toBe(3);
       expect(templateLoads()).toBe(3);
       expect(workspaceLoads()).toBe(1);
+    });
+  });
+
+  describe("reloading the workspace", () => {
+    const workspaceResponse = {
+      data: {
+        data: {
+          id: "ws-1",
+          type: "workspace",
+          attributes: { name: "sample-workspace", source: "https://github.com/example/repo.git", branch: "main" },
+          relationships: { organization: { data: { id: "org-1" } } },
+        },
+        included: [{ id: "org-1", type: "organization", attributes: { name: "test-org" } }],
+      },
+    };
+    const workspaceRequests: Array<{ resolve: (value: unknown) => void; signal?: AbortSignal }> = [];
+
+    beforeEach(() => {
+      workspaceRequests.length = 0;
+      getMock.mockImplementation((url: string, config?: { signal?: AbortSignal }) => {
+        if (url.startsWith("organization/org-1/workspace/ws-1?")) {
+          return new Promise((resolve) => workspaceRequests.push({ resolve, signal: config?.signal }));
+        }
+        if (url.includes("/workspace/ws-1")) return Promise.resolve(workspaceResponse);
+        return Promise.resolve({ data: { data: [] } });
+      });
+      render(
+        <MemoryRouter initialEntries={["/organizations/org-1/workspaces/ws-1"]}>
+          <Routes>
+            <Route
+              path="/organizations/:orgid/workspaces/:id"
+              element={<WorkspaceDetails setOrganizationName={jest.fn()} setWorkspaceManageState={jest.fn()} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      );
+    });
+
+    it("keeps one workspace request in flight and folds the polls that overlap it into one more", async () => {
+      await waitFor(() => expect(workspaceRequests).toHaveLength(1));
+      expect(workspaceRequests[0].signal).toBeInstanceOf(AbortSignal);
+
+      act(() => {
+        mockSubscriptions.poll?.();
+        mockSubscriptions.poll?.();
+        mockSubscriptions.poll?.();
+      });
+      expect(workspaceRequests).toHaveLength(1);
+
+      await act(async () => workspaceRequests[0].resolve(workspaceResponse));
+      await waitFor(() => expect(workspaceRequests).toHaveLength(2));
+      await act(async () => workspaceRequests[1].resolve(workspaceResponse));
+      expect(workspaceRequests).toHaveLength(2);
+    });
+
+    it("reloads once for a burst of job status events", async () => {
+      await waitFor(() => expect(workspaceRequests).toHaveLength(1));
+      await act(async () => workspaceRequests[0].resolve(workspaceResponse));
+      await screen.findByText("Run now");
+
+      act(() => {
+        mockSubscriptions.jobEvent?.();
+        mockSubscriptions.jobEvent?.();
+        mockSubscriptions.jobEvent?.();
+      });
+      expect(workspaceRequests).toHaveLength(1);
+
+      await waitFor(() => expect(workspaceRequests).toHaveLength(2), { timeout: 2000 });
+      await act(async () => workspaceRequests[1].resolve(workspaceResponse));
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      expect(workspaceRequests).toHaveLength(2);
     });
   });
 });
