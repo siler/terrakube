@@ -75,7 +75,7 @@ export default function PolicyStatusTag({
         isInteractive && "policy-status-tag-interactive",
         className
       )}
-      style={{ "--status-color": color, ...style } as React.CSSProperties}
+      style={{ "--status-color": color, ...style }}
       data-testid={`policy-status-tag-${testIdKey}`}
     >
       {label}

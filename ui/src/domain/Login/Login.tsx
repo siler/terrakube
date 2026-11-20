@@ -3,12 +3,14 @@ import { useState } from "react";
 import { mgr } from "../../config/authConfig";
 import { getUiRedirectUri } from "../../config/basePath";
 import {
-  ColorSchemeOption,
   ThemeMode,
+  colorSchemeOptions,
   defaultColorScheme,
   defaultThemeMode,
   getThemeConfig,
+  themeModeOptions,
 } from "../../config/themeConfig";
+import { isOneOf } from "@/modules/utils/typeGuards";
 import logo from "./logo.svg";
 import logoDark from "./logo-dark.svg";
 import "./Login.css";
@@ -16,8 +18,10 @@ import "./Login.css";
 const { Title, Text } = Typography;
 
 const Login = () => {
-  const savedScheme = (localStorage.getItem("terrakube-color-scheme") as ColorSchemeOption) || defaultColorScheme;
-  const savedThemeMode = (localStorage.getItem("terrakube-theme-mode") as ThemeMode) || defaultThemeMode;
+  const storedScheme = localStorage.getItem("terrakube-color-scheme");
+  const storedThemeMode = localStorage.getItem("terrakube-theme-mode");
+  const savedScheme = isOneOf(colorSchemeOptions, storedScheme) ? storedScheme : defaultColorScheme;
+  const savedThemeMode = isOneOf(themeModeOptions, storedThemeMode) ? storedThemeMode : defaultThemeMode;
 
   return (
     <ConfigProvider theme={getThemeConfig(savedScheme, savedThemeMode)}>

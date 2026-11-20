@@ -4,6 +4,8 @@
  * to safely retrieve icons by name with fallback support.
  */
 
+import type { ComponentType, CSSProperties } from "react";
+
 // ============================================================================
 // ANT DESIGN ICONS - Direct imports (NO barrel imports)
 // ============================================================================
@@ -157,10 +159,17 @@ import {
 // ============================================================================
 export const FallbackIcon = QuestionCircleOutlined;
 
+/** The props every icon in these maps accepts, shared by Ant Design and react-icons components. */
+export type IconComponent = ComponentType<{ className?: string; style?: CSSProperties }>;
+
+// Names come from user data, so inherited keys like "constructor" must not resolve to Object.prototype members.
+const lookupIcon = (icons: Record<string, IconComponent>, name: string): IconComponent =>
+  Object.prototype.hasOwnProperty.call(icons, name) ? icons[name] : FallbackIcon;
+
 // ============================================================================
 // ANT DESIGN ICON MAP
 // ============================================================================
-export const antdIcons: Record<string, React.ComponentType<any>> = {
+export const antdIcons: Record<string, IconComponent> = {
   // Common/Status Icons
   QuestionCircleOutlined,
   CheckCircleOutlined,
@@ -241,7 +250,7 @@ export const antdIcons: Record<string, React.ComponentType<any>> = {
 // ============================================================================
 // FONTAWESOME ICON MAP
 // ============================================================================
-export const faIcons: Record<string, React.ComponentType<any>> = {
+export const faIcons: Record<string, IconComponent> = {
   FaHouse,
   FaUser,
   FaGear,
@@ -316,8 +325,8 @@ export const faIcons: Record<string, React.ComponentType<any>> = {
  * @param name - The name of the icon (e.g., "QuestionCircleOutlined")
  * @returns The icon component or FallbackIcon if not found
  */
-export function getIcon(name: string): React.ComponentType<any> {
-  return antdIcons[name] || FallbackIcon;
+export function getIcon(name: string): IconComponent {
+  return lookupIcon(antdIcons, name);
 }
 
 /**
@@ -327,8 +336,8 @@ export function getIcon(name: string): React.ComponentType<any> {
  * @param name - The name of the icon (e.g., "FaHome")
  * @returns The icon component or FallbackIcon if not found
  */
-export function getFaIcon(name: string): React.ComponentType<any> {
-  return faIcons[name] || FallbackIcon;
+export function getFaIcon(name: string): IconComponent {
+  return lookupIcon(faIcons, name);
 }
 
 // ============================================================================

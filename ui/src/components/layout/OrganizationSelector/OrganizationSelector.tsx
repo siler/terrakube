@@ -70,7 +70,7 @@ export const OrganizationSelector: React.FC<OrganizationSelectorProps> = ({
     }
 
     const onDocumentClick = (event: MouseEvent) => {
-      const target = event.target as Node;
+      const target = event.target instanceof Node ? event.target : null;
       if (!containerRef.current?.contains(target)) {
         setOpen(false);
         setSearchTerm("");

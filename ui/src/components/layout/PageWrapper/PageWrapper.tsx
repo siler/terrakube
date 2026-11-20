@@ -15,7 +15,7 @@ export type PageWidth = "fluid" | "reading" | "form";
 type Props = {
   title: string;
   subTitle?: string;
-  children: any;
+  children: React.ReactNode;
   error?: ErrorInformation | string;
   loading?: boolean;
   loadingText?: string;
@@ -60,14 +60,16 @@ export default function PageWrapper({
         <Breadcrumb
           className="page-wrapper-crumbs"
           items={breadcrumbs.map((bc, index) => {
-            const isOrgCrumb = orgId && index === 0;
-            if (isOrgCrumb && !orgName) {
-              return {
-                key: "organization",
-                title: <Skeleton.Input active size="small" className="page-wrapper-crumb-skeleton" />,
-              };
+            let label = bc.label;
+            if (orgId && index === 0) {
+              if (!orgName) {
+                return {
+                  key: "organization",
+                  title: <Skeleton.Input active size="small" className="page-wrapper-crumb-skeleton" />,
+                };
+              }
+              label = orgName;
             }
-            const label = isOrgCrumb ? orgName! : bc.label;
             return {
               key: bc.path ?? label,
               title: bc.path ? <NavLink to={bc.path}>{label}</NavLink> : label,
