@@ -14,7 +14,7 @@ import {
 } from "@ant-design/icons";
 import { Alert, Avatar, Button, Col, Empty, message, Row, Space, Table, Tabs, Typography, Modal } from "antd";
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useJobStatusSubscription, usePolling } from "../../hooks";
 import { BiTerminal } from "react-icons/bi";
 import { FiGitCommit } from "react-icons/fi";
@@ -60,7 +60,7 @@ import {
   isValidUrl,
   fixSshURL,
   StateOutputVariableWithName,
-  WORKSPACE_PAGE_QUERY,
+  workspacePageRequest,
 } from "./workspaceDataUtils";
 import VcsLogo from "@/components/display/VcsLogo";
 import { formatDateTime, formatDuration, relativeTime } from "@/modules/utils/dates";
@@ -128,17 +128,18 @@ export const WorkspaceDetails = ({
   const [planJob, setPlanJob] = useState(false);
   const [approveJob, setApproveJob] = useState(false);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
-  const [variables, setVariables] = useState<FlatVariable[]>([]);
+  // Tab collections stay null until a load that carries them lands.
+  const [variables, setVariables] = useState<FlatVariable[] | null>(null);
   const [collectionVariables, setCollectionVariables] = useState<any[]>([]);
   const [collectionEnvVariables, setCollectionEnvVariables] = useState<any[]>([]);
   const [globalVariables, setGlobalVariables] = useState<FlatVariable[]>([]);
   const [globalEnvVariables, setGlobalEnvVariables] = useState<FlatVariable[]>([]);
   const [history, setHistory] = useState<FlatJobHistory[]>([]);
-  const [schedule, setSchedule] = useState<FlatSchedule[]>([]);
+  const [schedule, setSchedule] = useState<FlatSchedule[] | null>(null);
   const [open, setOpen] = useState(false);
   const [resource, setResource] = useState<Resource>();
-  const [envVariables, setEnvVariables] = useState<FlatVariable[]>([]);
-  const [jobs, setJobs] = useState<FlatJob[]>([]);
+  const [envVariables, setEnvVariables] = useState<FlatVariable[] | null>(null);
+  const [jobs, setJobs] = useState<FlatJob[] | null>(null);
   const [stateDetailsVisible, setStateDetailsVisible] = useState(false);
   const [jobId, setJobId] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -148,7 +149,6 @@ export const WorkspaceDetails = ({
   const [workspaceName, setWorkspaceName] = useState("...");
   const [activeKey, setActiveKey] = useState(selectedTab ?? "1");
   const [templates, setTemplates] = useState([]);
-  const [lastRun, setLastRun] = useState("");
   const [executionMode, setExecutionMode] = useState("...");
   const [orgTemplates, setOrgTemplates] = useState([]);
   const [vcsProvider, setVCSProvider] = useState<VcsType>(VcsType.UNKNOWN);
@@ -341,6 +341,15 @@ export const WorkspaceDetails = ({
     setActiveKey(selectedTab ?? "1");
   }, [selectedTab]);
 
+  // The page stays mounted across its tabs, so a tab that shows other collections than the last one loads them.
+  const tabQuery = workspacePageRequest(selectedTab ?? "1", Boolean(runid)).query;
+  const loadedQuery = useRef(tabQuery);
+  useEffect(() => {
+    if (loadedQuery.current === tabQuery) return;
+    loadedQuery.current = tabQuery;
+    loadWorkspace(false);
+  }, [tabQuery]);
+
   // Keep the Runs view in sync with the URL: viewing /runs/:runid shows that job's
   // details, but navigating back to the bare /runs list (e.g. via the sidebar) must
   // reset jobVisible, otherwise it stays stuck showing the last-viewed job forever.
@@ -418,38 +427,37 @@ export const WorkspaceDetails = ({
           return template.data.data;
         })
       : Promise.resolve(templates);
+    const request = workspacePageRequest(selectedTab ?? "1", Boolean(runid));
     templatesRequest
       .then((templateList) => {
         axiosInstance
-          .get(`organization/${organizationId}/workspace/${id}?${WORKSPACE_PAGE_QUERY}`)
+          .get(`organization/${organizationId}/workspace/${id}?${request.query}`)
           .then(async (response) => {
             if (_loadPermissionSet) loadPermissionSet();
 
             setWorkspace(response.data.data);
 
-            if (response.data.included) {
-              await setupWorkspaceIncludes(
-                response.data,
-                setVariables,
-                setJobs,
-                setEnvVariables,
-                setHistory,
-                setSchedule,
-                templateList,
-                setLastRun,
-                setVCSProvider,
-                setCurrentStateId,
-                currentStateId,
-                axiosInstance,
-                setResources,
-                setOutputs,
-                setContextState,
-                setCollectionVariables,
-                setCollectionEnvVariables,
-                setGlobalVariables,
-                setGlobalEnvVariables
-              );
-            }
+            await setupWorkspaceIncludes(
+              response.data,
+              request,
+              setVariables,
+              setJobs,
+              setEnvVariables,
+              setHistory,
+              setSchedule,
+              templateList,
+              setVCSProvider,
+              setCurrentStateId,
+              currentStateId,
+              axiosInstance,
+              setResources,
+              setOutputs,
+              setContextState,
+              setCollectionVariables,
+              setCollectionEnvVariables,
+              setGlobalVariables,
+              setGlobalEnvVariables
+            );
 
             const organization: Organization | undefined = response.data.included?.find(
               (item: IncludedItem<Organization>) => item.type === "organization"
@@ -534,10 +542,10 @@ export const WorkspaceDetails = ({
       });
   };
 
-  const currentRun = selectCurrentRun(jobs);
+  const currentRun = selectCurrentRun(jobs ?? []);
   const latestJob = currentRun?.job;
   const runCardTitle = currentRun?.active ? "Current run" : "Latest run";
-  const metrics = computeWorkspaceMetrics(jobs);
+  const metrics = computeWorkspaceMetrics(jobs ?? []);
 
   const renderSection = (workspace: Workspace) => {
     switch (activeKey) {
@@ -553,7 +561,7 @@ export const WorkspaceDetails = ({
                 <div>
                   <div className="latest-run-header">
                     <Typography.Title level={3}>{runCardTitle}</Typography.Title>
-                    {jobs.length > 0 && (
+                    {jobs && jobs.length > 0 && (
                       <Link to={`/organizations/${organizationId}/workspaces/${id}/runs`}>
                         View all runs <ArrowRightOutlined aria-hidden />
                       </Link>
@@ -649,6 +657,8 @@ export const WorkspaceDetails = ({
                         </LinkButton>
                       </div>
                     </article>
+                  ) : jobs === null ? (
+                    <LoadingFallback />
                   ) : (
                     <div className="latest-run latest-run--empty">
                       <Empty
@@ -788,13 +798,14 @@ export const WorkspaceDetails = ({
           </Row>
         );
       case "2":
-        return jobVisible ? (
-          <Suspense fallback={<LoadingFallback />}>
-            <DetailsJob jobId={jobId!} workspaceName={workspaceName} canApprove={approveJob} />
-          </Suspense>
-        ) : (
-          <RunList jobs={jobs} onRunClick={changeJob} runLink={runLink} />
-        );
+        if (jobVisible) {
+          return (
+            <Suspense fallback={<LoadingFallback />}>
+              <DetailsJob jobId={jobId!} workspaceName={workspaceName} canApprove={approveJob} />
+            </Suspense>
+          );
+        }
+        return jobs === null ? <LoadingFallback /> : <RunList jobs={jobs} onRunClick={changeJob} runLink={runLink} />;
       case "3":
         return (
           <Suspense fallback={<LoadingFallback />}>
@@ -809,6 +820,7 @@ export const WorkspaceDetails = ({
           </Suspense>
         );
       case "4":
+        if (variables === null || envVariables === null) return <LoadingFallback />;
         return (
           <Variables
             vars={variables}
@@ -822,7 +834,7 @@ export const WorkspaceDetails = ({
           />
         );
       case "5":
-        return templates ? (
+        return templates && schedule ? (
           <Schedules schedules={schedule} manageWorkspace={manageWorkspace} reload={() => loadWorkspace(false)} />
         ) : (
           <p>Loading...</p>
@@ -954,7 +966,7 @@ export const WorkspaceDetails = ({
           ? { title: loadError.includes("permission") ? "Access Denied" : "Error", message: loadError }
           : undefined
       }
-      loading={!loadError && (loading || !workspace || !variables || !jobs)}
+      loading={!loadError && (loading || !workspace)}
       loadingText="Loading Workspace..."
       actions={pageActions}
     >
@@ -1007,7 +1019,9 @@ export const WorkspaceDetails = ({
                 </span>
                 <Typography.Text>
                   <ClockCircleOutlined /> Updated{" "}
-                  <span className="workspace-status-value">{relativeTime(lastRun) ?? "never executed"}</span>
+                  <span className="workspace-status-value">
+                    {relativeTime(workspace.attributes.lastJobDate) ?? "never executed"}
+                  </span>
                 </Typography.Text>
                 {workspace.attributes.locked && (
                   <Alert
