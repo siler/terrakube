@@ -14,7 +14,7 @@ import {
 } from "@ant-design/icons";
 import { Alert, Avatar, Button, Col, Empty, message, Row, Space, Table, Tabs, Typography, Modal } from "antd";
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useJobStatusSubscription, usePolling } from "../../hooks";
 import { BiTerminal } from "react-icons/bi";
 import { FiGitCommit } from "react-icons/fi";
@@ -276,6 +276,7 @@ export const WorkspaceDetails = ({
       .get(`organization/${organizationId}/template`)
       .then((response) => {
         setOrgTemplates(response.data.data);
+        setTemplates(response.data.data);
       })
       .catch((err) => {
         console.error("Failed to load org templates:", err);
@@ -346,6 +347,19 @@ export const WorkspaceDetails = ({
     } else {
       setJobVisible(false);
     }
+  }, [runid]);
+
+  // The page stays mounted across runs, so a run change refreshes what a page load fetches besides the
+  // workspace, and closing a run reloads the workspace so the runs list is current.
+  const previousRunid = useRef(runid);
+  useEffect(() => {
+    if (previousRunid.current === runid) return;
+    const runClosed = Boolean(previousRunid.current) && !runid;
+    previousRunid.current = runid;
+    loadPermissionSet();
+    loadOrgTemplates();
+    fetchActions();
+    if (runClosed) loadWorkspace(false);
   }, [runid]);
 
   // Polling for workspace updates
@@ -470,7 +484,6 @@ export const WorkspaceDetails = ({
             setOrganizationNameLocal(sessionStorage.getItem(ORGANIZATION_NAME)!);
             setWorkspaceName(response.data.data.attributes.name);
             setExecutionMode(response.data.data.attributes.executionMode ?? "remote");
-            if (runid && _loadVersions) changeJob(runid); // if runid is provided, show the job details
             if (_loadVersions) fetchActions();
             setLoadError(null);
           })
@@ -789,7 +802,7 @@ export const WorkspaceDetails = ({
       case "2":
         return jobVisible ? (
           <Suspense fallback={<LoadingFallback />}>
-            <DetailsJob jobId={jobId!} workspaceName={workspaceName} canApprove={approveJob} />
+            <DetailsJob key={jobId} jobId={jobId!} workspaceName={workspaceName} canApprove={approveJob} />
           </Suspense>
         ) : (
           <RunList jobs={jobs} onRunClick={changeJob} runLink={runLink} />
