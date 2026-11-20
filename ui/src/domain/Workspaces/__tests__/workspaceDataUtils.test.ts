@@ -6,6 +6,11 @@ import {
   setupWorkspaceIncludes,
 } from "../workspaceDataUtils";
 import { Resource } from "../../types";
+import { axiosAuxiliary } from "../../../config/axiosConfig";
+
+jest.mock("../../../config/axiosConfig", () => ({
+  axiosAuxiliary: { get: jest.fn(() => new Promise(() => {})) },
+}));
 
 const baseResource: Resource = {
   name: "example",
@@ -193,7 +198,7 @@ describe("setupWorkspaceIncludes job and history titles", () => {
         capturedHistory = history;
       },
       () => {},
-      [],
+      Promise.resolve(false),
       () => {},
       () => {},
       () => {},
@@ -265,5 +270,51 @@ describe("setupWorkspaceIncludes job and history titles", () => {
     Object.assign(payload.included[0].attributes, { comments: "Deploy release 2.4" });
     const { jobs } = await runSetup(payload);
     expect(jobs[0].title).toBe("Deploy release 2.4");
+  });
+});
+
+describe("setupWorkspaceIncludes state preview", () => {
+  it("waits on the page's permission request instead of asking for permissions again", async () => {
+    const get = jest.fn(() => Promise.resolve({ data: {} }));
+    let resolveManageState: (value: boolean) => void = () => {};
+    const manageState = new Promise<boolean>((resolve) => {
+      resolveManageState = resolve;
+    });
+    const payload = {
+      data: { attributes: {} },
+      included: [{ id: "hist-1", type: "history", attributes: { output: "https://state/hist-1.json" } }],
+    };
+    const noop = () => {};
+
+    await setupWorkspaceIncludes(
+      payload,
+      noop,
+      noop,
+      noop,
+      noop,
+      noop,
+      manageState,
+      noop,
+      noop,
+      noop,
+      "",
+      { get },
+      noop,
+      noop,
+      noop,
+      false,
+      noop,
+      noop,
+      noop,
+      noop,
+      noop
+    );
+    expect(axiosAuxiliary.get).not.toHaveBeenCalled();
+
+    resolveManageState(true);
+    await manageState;
+
+    expect(axiosAuxiliary.get).toHaveBeenCalledWith("https://state/hist-1.json", expect.anything());
+    expect(get).not.toHaveBeenCalled();
   });
 });
