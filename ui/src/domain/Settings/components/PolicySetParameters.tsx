@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Flex, Form, Input, Table, Typography, message } from "antd";
 import { DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import axiosInstance, { getErrorMessage } from "../../../config/axiosConfig";
+import { api, fields } from "../../generated/apiPaths";
+import type { CreateBody, UpdateBody, WriteAttributes } from "../../api/writeBodies";
 import DeleteConfirmationModal from "@/components/modals/DeleteConfirmationModal/DeleteConfirmationModal";
 import { CrudFormModal } from "@/components/modals/CrudFormModal";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -18,6 +20,10 @@ export interface PolicyParameterItem {
   description?: string;
 }
 
+const PARAMETER_FIELDS = fields.policy_set_parameter("key", "value", "description");
+
+type ParameterForm = { key: string; value: string; description?: string };
+
 type Props = {
   policySetId: string;
   managePermission?: boolean;
@@ -33,7 +39,7 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
   const [editingParam, setEditingParam] = useState<PolicyParameterItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<ParameterForm>();
 
   // Delete state
   const [pendingDelete, setPendingDelete] = useState<PolicyParameterItem | null>(null);
@@ -42,16 +48,16 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
   const loadParameters = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await axiosInstance.get(`policy_set/${policySetId}/parameters`);
-      const rawData = res.data?.data || [];
-      const parsed: PolicyParameterItem[] = rawData.map((item: any) => ({
-        id: item.id,
-        key: item.attributes?.key || "",
-        value: item.attributes?.value || "",
-        description: item.attributes?.description || "",
-      }));
-      setParameters(parsed);
-    } catch (err: any) {
+      const rows = await api.policy_set(policySetId).parameters().select(PARAMETER_FIELDS);
+      setParameters(
+        rows.map((row) => ({
+          id: row.id,
+          key: row.key || "",
+          value: row.value || "",
+          description: row.description || "",
+        }))
+      );
+    } catch (err) {
       message.error(getErrorMessage(err));
     } finally {
       setLoading(false);
@@ -80,18 +86,19 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
     setModalVisible(true);
   };
 
-  const handleSubmit = async (values: any) => {
+  const handleSubmit = async (values: ParameterForm) => {
     setSubmitting(true);
     try {
+      const attributes: WriteAttributes<"policy_set_parameter"> = {
+        key: values.key.trim(),
+        value: values.value,
+        description: values.description ? values.description.trim() : null,
+      };
       if (modalMode === "create") {
-        const payload = {
+        const payload: CreateBody<"policy_set_parameter"> = {
           data: {
             type: "policy_set_parameter",
-            attributes: {
-              key: values.key.trim(),
-              value: values.value,
-              description: values.description ? values.description.trim() : null,
-            },
+            attributes,
             relationships: {
               policySet: {
                 data: {
@@ -107,15 +114,11 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
         });
         message.success("Parameter added successfully");
       } else if (editingParam) {
-        const payload = {
+        const payload: UpdateBody<"policy_set_parameter"> = {
           data: {
             type: "policy_set_parameter",
             id: editingParam.id,
-            attributes: {
-              key: values.key.trim(),
-              value: values.value,
-              description: values.description ? values.description.trim() : null,
-            },
+            attributes,
           },
         };
         await axiosInstance.patch(`policy_set/${policySetId}/parameters/${editingParam.id}`, payload, {
@@ -126,7 +129,7 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
       setModalVisible(false);
       form.resetFields();
       await loadParameters();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err));
     } finally {
       setSubmitting(false);
@@ -141,7 +144,7 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
       message.success("Parameter deleted successfully");
       setPendingDelete(null);
       await loadParameters();
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err));
     } finally {
       setDeleting(false);
@@ -197,7 +200,7 @@ export const PolicySetParameters: React.FC<Props> = ({ policySetId, managePermis
       key: "actions",
       width: 96,
       align: "right" as const,
-      render: (_: any, record: PolicyParameterItem) => (
+      render: (_: unknown, record: PolicyParameterItem) => (
         <Flex gap={8} justify="flex-end">
           <Button
             icon={<EditOutlined />}

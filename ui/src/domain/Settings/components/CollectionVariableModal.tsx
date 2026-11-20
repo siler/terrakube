@@ -1,12 +1,13 @@
 import type { FormInstance } from "antd";
 import { CrudFormModal } from "@/components/modals/CrudFormModal";
 import { VariableFormFields } from "@/components/forms/VariableFormFields";
+import type { Category } from "@/domain/generated/apiResources";
 
 export type CollectionVariableFormValues = {
   key: string;
   value?: string;
   hcl: boolean;
-  category: string;
+  category: Category;
   description: string;
   sensitive: boolean;
 };

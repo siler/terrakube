@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { Form, Input, Select, Tabs, Typography, message } from "antd";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
+import type { CreateBody, Linkage, UpdateBody, WriteAttributes } from "../api/writeBodies";
+import type { PolicyEnforcementLevel } from "../generated/apiResources";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
 import { SettingsForm } from "@/components/settings/SettingsForm";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
@@ -9,10 +14,59 @@ import { RadioChoices } from "@/components/settings/RadioChoices";
 import { DangerZone } from "@/components/settings/DangerZone";
 import LoadingFallback from "@/components/feedback/LoadingFallback";
 import { PolicySetParameters } from "./components";
+import { createdResourceId } from "@/domain/api/parseDocument";
 import "./PolicySets.css";
 
 const { Option } = Select;
 const { TextArea } = Input;
+
+// Every picker lists one name per row.
+const VCS_NAME_FIELDS = fields.vcs("name");
+const WORKSPACE_FIELDS = fields.workspace("name");
+const PROJECT_NAME_FIELDS = fields.project("name");
+const TAG_NAME_FIELDS = fields.tag("name");
+const NOTIFICATION_NAME_FIELDS = fields.notification_configuration("name");
+const TEAM_NAME_FIELDS = fields.team("name");
+type WorkspaceName = Row<typeof WORKSPACE_FIELDS>;
+
+// The form reads these attributes; the vcs and notification ids come from the linkage so they survive
+// the related resource being unreadable.
+const POLICY_SET_FORM_FIELDS = fields.policy_set(
+  "name",
+  "description",
+  "enforcementLevel",
+  "shadowEnforcementLevel",
+  "overrideTeam",
+  "global",
+  "repository",
+  "branch",
+  "folder",
+  "opaVersion",
+  { vcs: ids, notificationConfiguration: ids }
+);
+// Each attachment links exactly one scope target; the read only needs those ids.
+const ATTACHMENT_SCOPE_FIELDS = fields.policy_attachment({ workspace: ids, project: ids, tag: ids });
+// The delete sweep deletes by id; the required policySet linkage keeps the fieldset non-empty.
+const ATTACHMENT_ID_FIELDS = fields.policy_attachment({ policySet: ids });
+
+// Nullable attributes stay nullable because the edit form is filled straight from the API row.
+type PolicySetForm = {
+  name: string;
+  description?: string | null;
+  enforcementLevel: PolicyEnforcementLevel;
+  shadowEnforcementLevel?: PolicyEnforcementLevel | null;
+  overrideTeam?: string | null;
+  global: boolean;
+  repository?: string | null;
+  branch?: string;
+  folder?: string;
+  opaVersion?: string | null;
+  vcsId?: string;
+  notificationConfigurationId?: string;
+  workspaces?: string[];
+  projects?: string[];
+  tags?: string[];
+};
 
 type Props = {
   mode: "create" | "edit";
@@ -21,18 +75,18 @@ type Props = {
 };
 
 export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, managePermission = true }) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const navigate = useNavigate();
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<PolicySetForm>();
 
   const [loading, setLoading] = useState(mode === "edit");
   const [submitting, setSubmitting] = useState(false);
-  const [vcsProviders, setVcsProviders] = useState<any[]>([]);
-  const [workspaces, setWorkspaces] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [tags, setTags] = useState<any[]>([]);
-  const [notificationConfigs, setNotificationConfigs] = useState<any[]>([]);
-  const [teams, setTeams] = useState<any[]>([]);
+  const [vcsProviders, setVcsProviders] = useState<Row<typeof VCS_NAME_FIELDS>[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceName[]>([]);
+  const [projects, setProjects] = useState<Row<typeof PROJECT_NAME_FIELDS>[]>([]);
+  const [tags, setTags] = useState<Row<typeof TAG_NAME_FIELDS>[]>([]);
+  const [notificationConfigs, setNotificationConfigs] = useState<Row<typeof NOTIFICATION_NAME_FIELDS>[]>([]);
+  const [teams, setTeams] = useState<Row<typeof TEAM_NAME_FIELDS>[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
   const [policySetName, setPolicySetName] = useState("");
   const [activeTab, setActiveTab] = useState("settings");
@@ -45,26 +99,25 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
     const loadReferences = async () => {
       try {
         setLoadingTeams(true);
-        const [vcsRes, wsRes, projRes, tagsRes, notifRes, teamsRes] = await Promise.all([
-          axiosInstance.get(`organization/${orgid}/vcs`).catch(() => ({ data: { data: [] } })),
-          axiosInstance.get(`organization/${orgid}/workspace`).catch(() => ({ data: { data: [] } })),
-          axiosInstance.get(`organization/${orgid}/project`).catch(() => ({ data: { data: [] } })),
-          axiosInstance.get(`organization/${orgid}/tag`).catch(() => ({ data: { data: [] } })),
-          axiosInstance.get(`organization/${orgid}/notificationConfiguration`).catch(() => ({ data: { data: [] } })),
-          axiosInstance.get(`organization/${orgid}/team`).catch(() => ({ data: { data: [] } })),
+        // A query is a thenable, not a Promise, so a per-read fallback wraps it in Promise.resolve;
+        // a failed reference list only costs the options in its picker.
+        const [vcsRows, wsRows, projRows, tagRows, notifRows, teamRows] = await Promise.all([
+          Promise.resolve(api.organization(orgid).vcs().select(VCS_NAME_FIELDS)).catch(() => []),
+          Promise.resolve(api.organization(orgid).workspace().select(WORKSPACE_FIELDS)).catch(() => []),
+          Promise.resolve(api.organization(orgid).project().select(PROJECT_NAME_FIELDS)).catch(() => []),
+          Promise.resolve(api.organization(orgid).tag().select(TAG_NAME_FIELDS)).catch(() => []),
+          Promise.resolve(api.organization(orgid).notificationConfiguration().select(NOTIFICATION_NAME_FIELDS)).catch(
+            () => []
+          ),
+          Promise.resolve(api.organization(orgid).team().select(TEAM_NAME_FIELDS)).catch(() => []),
         ]);
 
-        setVcsProviders(vcsRes.data?.data || []);
-        setWorkspaces(wsRes.data?.data || []);
-        setProjects(projRes.data?.data || []);
-        setTags(tagsRes.data?.data || []);
-        setNotificationConfigs(notifRes.data?.data || []);
-        setTeams(
-          (teamsRes.data?.data || []).map((t: any) => ({
-            id: t.id,
-            name: t.attributes?.name || t.name || t.id,
-          }))
-        );
+        setVcsProviders(vcsRows);
+        setWorkspaces(wsRows);
+        setProjects(projRows);
+        setTags(tagRows);
+        setNotificationConfigs(notifRows);
+        setTeams(teamRows.map((team) => ({ id: team.id, name: team.name || team.id })));
       } catch (e) {
         console.error("Failed to load reference data", e);
       } finally {
@@ -74,57 +127,44 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
 
     void loadReferences();
 
-    if (mode === "edit" && policySetId) {
-      axiosInstance
-        .get(`policy_set/${policySetId}?include=vcs,attachments,notificationConfiguration`)
-        .then(async (res) => {
-          const item = res.data.data;
-          const attrs = item.attributes;
-          setPolicySetName(attrs.name);
+    const loadPolicySet = async (id: string) => {
+      try {
+        const item = await api.policy_set(id).select(POLICY_SET_FORM_FIELDS);
+        setPolicySetName(item.name);
 
-          const attachedWorkspaces: string[] = [];
-          const attachedProjects: string[] = [];
-          const attachedTags: string[] = [];
+        let attachments: Row<typeof ATTACHMENT_SCOPE_FIELDS>[] = [];
+        try {
+          attachments = await api.policy_set(id).attachments().select(ATTACHMENT_SCOPE_FIELDS);
+        } catch {
+          // attachments query fallback
+        }
 
-          try {
-            const attachRes = await axiosInstance.get(
-              `policy_set/${policySetId}/attachments?include=workspace,project,tag`
-            );
-            const attachments = attachRes.data.data || [];
-            attachments.forEach((att: any) => {
-              const rels = att.relationships || {};
-              if (rels.workspace?.data?.id) attachedWorkspaces.push(rels.workspace.data.id);
-              if (rels.project?.data?.id) attachedProjects.push(rels.project.data.id);
-              if (rels.tag?.data?.id) attachedTags.push(rels.tag.data.id);
-            });
-          } catch {
-            // attachments query fallback
-          }
-
-          form.setFieldsValue({
-            name: attrs.name,
-            description: attrs.description,
-            enforcementLevel: attrs.enforcementLevel || "HARD_MANDATORY",
-            shadowEnforcementLevel: attrs.shadowEnforcementLevel || undefined,
-            overrideTeam: attrs.overrideTeam,
-            global: attrs.global || false,
-            repository: attrs.repository,
-            branch: attrs.branch || "main",
-            folder: attrs.folder || "/",
-            opaVersion: attrs.opaVersion,
-            vcsId: item.relationships?.vcs?.data?.id || undefined,
-            notificationConfigurationId: item.relationships?.notificationConfiguration?.data?.id || undefined,
-            workspaces: attachedWorkspaces,
-            projects: attachedProjects,
-            tags: attachedTags,
-          });
-        })
-        .catch((err) => {
-          message.error(getErrorMessage(err));
-        })
-        .finally(() => {
-          setLoading(false);
+        form.setFieldsValue({
+          name: item.name,
+          description: item.description,
+          enforcementLevel: item.enforcementLevel || "HARD_MANDATORY",
+          shadowEnforcementLevel: item.shadowEnforcementLevel || undefined,
+          overrideTeam: item.overrideTeam,
+          global: item.global || false,
+          repository: item.repository,
+          branch: item.branch || "main",
+          folder: item.folder || "/",
+          opaVersion: item.opaVersion,
+          vcsId: item.vcs?.id || undefined,
+          notificationConfigurationId: item.notificationConfiguration?.id || undefined,
+          workspaces: attachments.flatMap((att) => (att.workspace ? [att.workspace.id] : [])),
+          projects: attachments.flatMap((att) => (att.project ? [att.project.id] : [])),
+          tags: attachments.flatMap((att) => (att.tag ? [att.tag.id] : [])),
         });
+      } catch (err) {
+        message.error(getErrorMessage(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (mode === "edit" && policySetId) {
+      void loadPolicySet(policySetId);
     } else {
       form.setFieldsValue({
         enforcementLevel: "HARD_MANDATORY",
@@ -135,37 +175,34 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
     }
   }, [form, mode, orgid, policySetId]);
 
-  const onFinish = async (values: any) => {
+  const onFinish = async (values: PolicySetForm) => {
     setSubmitting(true);
     try {
-      const payload: any = {
-        data: {
-          type: "policy_set",
-          attributes: {
-            name: values.name,
-            description: values.description,
-            enforcementLevel: values.enforcementLevel,
-            shadowEnforcementLevel: values.shadowEnforcementLevel || null,
-            overrideTeam: values.overrideTeam || null,
-            global: values.global || false,
-            repository: values.repository,
-            branch: values.branch,
-            folder: values.folder,
-            opaVersion: values.opaVersion ? values.opaVersion.trim() : null,
-          },
-          relationships: {
-            organization: {
-              data: {
-                type: "organization",
-                id: orgid,
-              },
-            },
+      const attributes: WriteAttributes<"policy_set"> = {
+        name: values.name,
+        description: values.description,
+        enforcementLevel: values.enforcementLevel,
+        shadowEnforcementLevel: values.shadowEnforcementLevel || null,
+        overrideTeam: values.overrideTeam || null,
+        global: values.global || false,
+        repository: values.repository,
+        branch: values.branch,
+        folder: values.folder,
+        // A blank version means "inherit the system default", which the API spells as null.
+        opaVersion: values.opaVersion?.trim() || null,
+      };
+
+      const relationships: Linkage<"policy_set"> = {
+        organization: {
+          data: {
+            type: "organization",
+            id: orgid,
           },
         },
       };
 
       if (values.vcsId) {
-        payload.data.relationships.vcs = {
+        relationships.vcs = {
           data: {
             type: "vcs",
             id: values.vcsId,
@@ -174,14 +211,14 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
       }
 
       if (values.notificationConfigurationId) {
-        payload.data.relationships.notificationConfiguration = {
+        relationships.notificationConfiguration = {
           data: {
             type: "notification_configuration",
             id: values.notificationConfigurationId,
           },
         };
       } else if (mode === "edit") {
-        payload.data.relationships.notificationConfiguration = {
+        relationships.notificationConfiguration = {
           data: null,
         };
       }
@@ -189,14 +226,20 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
       let savedId = policySetId;
 
       if (mode === "create") {
-        const createRes = await axiosInstance.post("policy_set", payload, {
+        const body: CreateBody<"policy_set"> = {
+          data: { type: "policy_set", attributes, relationships },
+        };
+        const createRes = await axiosInstance.post<unknown>("policy_set", body, {
           headers: { "Content-Type": "application/vnd.api+json" },
         });
-        savedId = createRes.data?.data?.id;
+        savedId = createdResourceId(createRes.data);
         message.success("Policy set created");
       } else {
-        payload.data.id = policySetId;
-        await axiosInstance.patch(`policy_set/${policySetId}`, payload, {
+        if (!policySetId) throw new Error("No policy set is selected to update");
+        const body: UpdateBody<"policy_set"> = {
+          data: { type: "policy_set", id: policySetId, attributes, relationships },
+        };
+        await axiosInstance.patch(`policy_set/${policySetId}`, body, {
           headers: { "Content-Type": "application/vnd.api+json" },
         });
         message.success("Policy set updated");
@@ -206,14 +249,11 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
       if (savedId && !values.global) {
         try {
           // Fetch existing attachments and remove
-          const existingRes = await axiosInstance.get(`policy_set/${savedId}/attachments`);
-          const existing = existingRes.data.data || [];
-          await Promise.all(
-            existing.map((att: any) => axiosInstance.delete(`policy_set/${savedId}/attachments/${att.id}`))
-          );
+          const existing = await api.policy_set(savedId).attachments().select(ATTACHMENT_ID_FIELDS);
+          await Promise.all(existing.map((att) => axiosInstance.delete(`policy_set/${savedId}/attachments/${att.id}`)));
 
           // Add new workspace attachments
-          const wsPromises = (values.workspaces || []).map((wsId: string) =>
+          const wsPromises = (values.workspaces ?? []).map((wsId) =>
             axiosInstance.post(
               `policy_set/${savedId}/attachments`,
               {
@@ -224,13 +264,13 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
                     workspace: { data: { type: "workspace", id: wsId } },
                   },
                 },
-              },
+              } satisfies CreateBody<"policy_attachment">,
               { headers: { "Content-Type": "application/vnd.api+json" } }
             )
           );
 
           // Add new project attachments
-          const projPromises = (values.projects || []).map((projId: string) =>
+          const projPromises = (values.projects ?? []).map((projId) =>
             axiosInstance.post(
               `policy_set/${savedId}/attachments`,
               {
@@ -241,13 +281,13 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
                     project: { data: { type: "project", id: projId } },
                   },
                 },
-              },
+              } satisfies CreateBody<"policy_attachment">,
               { headers: { "Content-Type": "application/vnd.api+json" } }
             )
           );
 
           // Add new tag attachments
-          const tagPromises = (values.tags || []).map((tagId: string) =>
+          const tagPromises = (values.tags ?? []).map((tagId) =>
             axiosInstance.post(
               `policy_set/${savedId}/attachments`,
               {
@@ -258,7 +298,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
                     tag: { data: { type: "tag", id: tagId } },
                   },
                 },
-              },
+              } satisfies CreateBody<"policy_attachment">,
               { headers: { "Content-Type": "application/vnd.api+json" } }
             )
           );
@@ -270,7 +310,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
       }
 
       navigate(backUrl);
-    } catch (err: any) {
+    } catch (err) {
       message.error(getErrorMessage(err));
     } finally {
       setSubmitting(false);
@@ -405,7 +445,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
               data-testid="policy-set-notification-select"
               options={notificationConfigs.map((nc) => ({
                 value: nc.id,
-                label: nc.attributes?.name || nc.id,
+                label: nc.name || nc.id,
               }))}
             />
           </Form.Item>
@@ -416,7 +456,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
             <Select
               allowClear
               placeholder="No VCS provider"
-              options={vcsProviders.map((v) => ({ value: v.id, label: v.attributes?.name || v.id }))}
+              options={vcsProviders.map((v) => ({ value: v.id, label: v.name || v.id }))}
             />
           </Form.Item>
           <Form.Item
@@ -461,7 +501,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
                   placeholder="Choose workspaces"
                   allowClear
                   optionFilterProp="label"
-                  options={workspaces.map((ws) => ({ value: ws.id, label: ws.attributes?.name || ws.id }))}
+                  options={workspaces.map((ws) => ({ value: ws.id, label: ws.name || ws.id }))}
                 />
               </Form.Item>
               <Form.Item name="projects" label="Projects" extra="Includes every workspace in the project.">
@@ -470,7 +510,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
                   placeholder="Choose projects"
                   allowClear
                   optionFilterProp="label"
-                  options={projects.map((p) => ({ value: p.id, label: p.attributes?.name || p.id }))}
+                  options={projects.map((p) => ({ value: p.id, label: p.name || p.id }))}
                 />
               </Form.Item>
               <Form.Item name="tags" label="Tags" extra="Includes every workspace with the tag.">
@@ -479,7 +519,7 @@ export const CreateEditPolicySet: React.FC<Props> = ({ mode, policySetId, manage
                   placeholder="Choose tags"
                   allowClear
                   optionFilterProp="label"
-                  options={tags.map((t) => ({ value: t.id, label: t.attributes?.name || t.id }))}
+                  options={tags.map((t) => ({ value: t.id, label: t.name || t.id }))}
                 />
               </Form.Item>
             </>
