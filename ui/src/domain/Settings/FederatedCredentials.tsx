@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { LinkButton } from "@/components/navigation/LinkButton";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { Federated } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import { ids, type Row } from "../api/fieldSelection";
 import { EditFederatedCredential } from "./EditFederatedCredential";
 import "./Settings.css";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
@@ -20,13 +21,18 @@ type Props = {
   managePermission?: boolean;
 };
 
+const FEDERATED_FIELDS = fields.federated("name", "issuerUrl", "audience");
+type FederatedRow = Row<typeof FEDERATED_FIELDS>;
+// The list only counts claims, so the count read asks for linkage alone.
+const CLAIM_COUNT_FIELDS = fields.federated_claim({ federated: ids });
+
 export const FederatedCredentials = ({ editorMode, editorId, managePermission = true }: Props) => {
   const { orgid } = useParams();
-  const [federated, setFederated] = useState<Federated[]>([]);
+  const [federated, setFederated] = useState<FederatedRow[]>([]);
   const [claimCounts, setClaimCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
-  const [pendingDelete, setPendingDelete] = useState<Federated | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<FederatedRow | null>(null);
   const navigate = useNavigate();
   const mode: "list" | "edit" | "create" = editorMode === "new" ? "create" : (editorMode ?? "list");
   const federatedId = editorId;
@@ -35,47 +41,42 @@ export const FederatedCredentials = ({ editorMode, editorId, managePermission = 
   const onDelete = async (id: string) => {
     try {
       // Delete all claims first, then the federated credential
-      const claimsRes = await axiosInstance.get(`federated/${id}/claims`);
-      const claimsData = claimsRes.data.data || [];
-      await Promise.all(claimsData.map((c: any) => axiosInstance.delete(`federated/${id}/claims/${c.id}`)));
+      const claims = await api.federated(id).claims().select(CLAIM_COUNT_FIELDS);
+      await Promise.all(claims.map((claim) => axiosInstance.delete(`federated/${id}/claims/${claim.id}`)));
       await axiosInstance.delete(`federated/${id}`);
       message.success("Federated credential deleted");
       loadFederated();
-    } catch (err: any) {
+    } catch (err) {
       message.error(`Could not delete the federated credential: ${getErrorMessage(err)}`);
     }
   };
 
-  const loadFederated = () => {
-    axiosInstance
-      .get(`federated`)
-      .then(async (response) => {
-        const items: Federated[] = response.data.data;
-        setFederated(items);
+  const loadFederated = async () => {
+    try {
+      const items = await api.federated().select(FEDERATED_FIELDS);
+      setFederated(items);
 
-        // Load claim counts for each federated credential
-        const counts: Record<string, number> = {};
-        await Promise.all(
-          items.map(async (item) => {
-            try {
-              const claimsRes = await axiosInstance.get(`federated/${item.id}/claims`);
-              counts[item.id] = (claimsRes.data.data || []).length;
-            } catch {
-              counts[item.id] = 0;
-            }
-          })
-        );
-        setClaimCounts(counts);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (isPermissionError(err)) {
-          setError(getErrorMessage(err));
-        } else {
-          message.error(`Could not load federated credentials: ${getErrorMessage(err)}`);
-        }
-        setLoading(false);
-      });
+      // Load claim counts for each federated credential
+      const counts: Record<string, number> = {};
+      await Promise.all(
+        items.map(async (item) => {
+          try {
+            counts[item.id] = (await api.federated(item.id).claims().select(CLAIM_COUNT_FIELDS)).length;
+          } catch {
+            counts[item.id] = 0;
+          }
+        })
+      );
+      setClaimCounts(counts);
+    } catch (err) {
+      if (isPermissionError(err)) {
+        setError(getErrorMessage(err));
+      } else {
+        message.error(`Could not load federated credentials: ${getErrorMessage(err)}`);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -108,7 +109,7 @@ export const FederatedCredentials = ({ editorMode, editorId, managePermission = 
               <ResourceCard
                 key={item.id}
                 icon={<SafetyOutlined />}
-                name={item.attributes.name}
+                name={item.name}
                 tags={
                   claims > 0 ? (
                     <Tag>
@@ -125,14 +126,14 @@ export const FederatedCredentials = ({ editorMode, editorId, managePermission = 
                         to={`/organizations/${orgid}/settings/federated-credentials/edit/${item.id}`}
                         icon={<EditOutlined />}
                         disabled={!managePermission}
-                        aria-label={`Edit federated credential ${item.attributes.name}`}
+                        aria-label={`Edit federated credential ${item.name}`}
                       />
                     </Tooltip>
                     <Tooltip title="Delete">
                       <Button
                         icon={<DeleteOutlined />}
                         disabled={!managePermission}
-                        aria-label={`Delete federated credential ${item.attributes.name}`}
+                        aria-label={`Delete federated credential ${item.name}`}
                         onClick={() => setPendingDelete(item)}
                       />
                     </Tooltip>
@@ -141,9 +142,9 @@ export const FederatedCredentials = ({ editorMode, editorId, managePermission = 
               >
                 <dl className="resource-card-fields">
                   <dt>Issuer URL</dt>
-                  <dd className="resource-mono">{item.attributes.issuerUrl}</dd>
+                  <dd className="resource-mono">{item.issuerUrl}</dd>
                   <dt>Audience</dt>
-                  <dd className="resource-mono">{item.attributes.audience}</dd>
+                  <dd className="resource-mono">{item.audience}</dd>
                 </dl>
               </ResourceCard>
             );
@@ -189,12 +190,12 @@ export const FederatedCredentials = ({ editorMode, editorId, managePermission = 
             title="Delete federated credential"
             message={
               <>
-                Tokens from <span className="resource-mono">{pendingDelete?.attributes.issuerUrl}</span> can no longer
-                act as team <strong>{pendingDelete?.attributes.name}</strong>, so pipelines that use it fail to sign in.
-                Its claim conditions are deleted too. This cannot be undone.
+                Tokens from <span className="resource-mono">{pendingDelete?.issuerUrl}</span> can no longer act as team{" "}
+                <strong>{pendingDelete?.name}</strong>, so pipelines that use it fail to sign in. Its claim conditions
+                are deleted too. This cannot be undone.
               </>
             }
-            confirmValue={pendingDelete?.attributes.name ?? ""}
+            confirmValue={pendingDelete?.name ?? ""}
             okText="Delete federated credential"
             onConfirm={() => {
               if (pendingDelete) onDelete(pendingDelete.id);

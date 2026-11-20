@@ -2,9 +2,12 @@ import { DeleteOutlined, EditOutlined, LockOutlined, PlusOutlined } from "@ant-d
 import { Button, Flex, Form, message, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { Loading } from "@/components/feedback/Loading";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage, isPermissionError } from "../../config/axiosConfig";
-import { CreateVariableForm, UpdateVariableForm, Variable } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { CreateBody, UpdateBody } from "../api/writeBodies";
+import type { Row } from "../api/fieldSelection";
+import { CreateVariableForm, UpdateVariableForm } from "../types";
 import "./Settings.css";
 import "./TeamsTagsVariables.css";
 import { AccessDeniedAlert } from "@/components/feedback/AccessDeniedAlert";
@@ -17,16 +20,21 @@ type Props = {
   managePermission?: boolean;
 };
 
+// The list never reads the description; the edit modal's own read selects it.
+const GLOBALVAR_LIST_FIELDS = fields.globalvar("key", "value", "hcl", "sensitive", "category");
+const GLOBALVAR_EDIT_FIELDS = fields.globalvar("key", "value", "hcl", "sensitive", "category", "description");
+type GlobalVarRow = Row<typeof GLOBALVAR_LIST_FIELDS>;
+
 export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
-  const { orgid } = useParams();
-  const [globalVariables, setGlobalVariables] = useState<Variable[]>([]);
+  const orgid = useRequiredParam("orgid");
+  const [globalVariables, setGlobalVariables] = useState<GlobalVarRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [visible, setVisible] = useState(false);
   const [variableKey, setVariableKey] = useState<string>();
   const [mode, setMode] = useState("create");
   const [variableId, setVariableId] = useState<string>();
-  const [pendingDelete, setPendingDelete] = useState<Variable | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<GlobalVarRow | null>(null);
   const [form] = Form.useForm<CreateVariableForm>();
 
   const columns = [
@@ -35,36 +43,36 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
       key: "key",
       // Same width in both tables so the columns line up.
       width: 320,
-      sorter: (a: Variable, b: Variable) => a.attributes.key.localeCompare(b.attributes.key),
+      sorter: (a: GlobalVarRow, b: GlobalVarRow) => a.key.localeCompare(b.key),
       defaultSortOrder: "ascend" as const,
-      render: (_: unknown, record: Variable) => (
+      render: (_: unknown, record: GlobalVarRow) => (
         <Space size={4} wrap>
-          <span className="settings-list-mono global-variable-key">{record.attributes.key}</span>
-          {record.attributes.hcl && <Tag>HCL</Tag>}
-          {record.attributes.sensitive && <Tag icon={<LockOutlined />}>Sensitive</Tag>}
+          <span className="settings-list-mono global-variable-key">{record.key}</span>
+          {record.hcl && <Tag>HCL</Tag>}
+          {record.sensitive && <Tag icon={<LockOutlined />}>Sensitive</Tag>}
         </Space>
       ),
     },
     {
       title: "Value",
       key: "value",
-      render: (_: unknown, record: Variable) =>
-        record.attributes.sensitive ? (
+      render: (_: unknown, record: GlobalVarRow) =>
+        record.sensitive ? (
           <span className="global-variable-value global-variable-value-sensitive">Sensitive, write-only</span>
         ) : (
-          <span className="settings-list-mono global-variable-value">{record.attributes.value}</span>
+          <span className="settings-list-mono global-variable-value">{record.value}</span>
         ),
     },
     {
       title: <span className="settings-list-sr-only">Actions</span>,
       key: "actions",
       align: "right" as const,
-      render: (_: unknown, record: Variable) => (
+      render: (_: unknown, record: GlobalVarRow) => (
         <Flex gap="small" justify="flex-end">
           <Tooltip title="Edit variable">
             <Button
               icon={<EditOutlined />}
-              aria-label={`Edit variable ${record.attributes.key}`}
+              aria-label={`Edit variable ${record.key}`}
               disabled={!managePermission}
               onClick={() => onEdit(record.id)}
             />
@@ -73,7 +81,7 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
             <Button
               danger
               icon={<DeleteOutlined />}
-              aria-label={`Delete variable ${record.attributes.key}`}
+              aria-label={`Delete variable ${record.key}`}
               disabled={!managePermission}
               onClick={() => setPendingDelete(record)}
             />
@@ -85,26 +93,25 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
   const onCancel = () => {
     setVisible(false);
   };
-  const onEdit = (id: string) => {
+  const onEdit = async (id: string) => {
     setMode("edit");
     setVariableId(id);
     setVisible(true);
-    axiosInstance
-      .get(`organization/${orgid}/globalvar/${id}`)
-      .then((response) => {
-        setVariableKey(response.data.data.attributes.key);
-        form.setFieldsValue({
-          key: response.data.data.attributes.key,
-          value: response.data.data.attributes.value,
-          hcl: response.data.data.attributes.hcl,
-          sensitive: response.data.data.attributes.sensitive,
-          category: response.data.data.attributes.category,
-          description: response.data.data.attributes.description,
-        });
-      })
-      .catch((err) => {
-        message.error(`Could not load the variable: ${getErrorMessage(err)}`);
+    try {
+      const variable = await api.organization(orgid).globalvar(id).select(GLOBALVAR_EDIT_FIELDS);
+      setVariableKey(variable.key);
+      form.setFieldsValue({
+        key: variable.key,
+        // An unreadable secret must not become an empty string, or saving would wipe it.
+        value: variable.value ?? undefined,
+        hcl: variable.hcl,
+        sensitive: variable.sensitive,
+        category: variable.category,
+        description: variable.description,
       });
+    } catch (err) {
+      message.error(`Could not load the variable: ${getErrorMessage(err)}`);
+    }
   };
 
   const onNew = () => {
@@ -127,7 +134,7 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
   };
 
   const onCreate = (values: CreateVariableForm) => {
-    const body = {
+    const body: CreateBody<"globalvar"> = {
       data: {
         type: "globalvar",
         attributes: {
@@ -159,7 +166,11 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
   };
 
   const onUpdate = (values: UpdateVariableForm) => {
-    const body = {
+    if (!variableId) {
+      message.error("Could not save the variable: no variable is selected");
+      return;
+    }
+    const body: UpdateBody<"globalvar"> = {
       data: {
         type: "globalvar",
         id: variableId,
@@ -190,29 +201,26 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
       });
   };
 
-  const loadGlobalVariables = () => {
-    axiosInstance
-      .get(`organization/${orgid}/globalvar`)
-      .then((response) => {
-        setGlobalVariables(response.data.data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (isPermissionError(err)) {
-          setError(getErrorMessage(err));
-        } else {
-          message.error(`Could not load global variables: ${getErrorMessage(err)}`);
-        }
-        setLoading(false);
-      });
+  const loadGlobalVariables = async () => {
+    try {
+      setGlobalVariables(await api.organization(orgid).globalvar().select(GLOBALVAR_LIST_FIELDS));
+    } catch (err) {
+      if (isPermissionError(err)) {
+        setError(getErrorMessage(err));
+      } else {
+        message.error(`Could not load global variables: ${getErrorMessage(err)}`);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => {
     setLoading(true);
     loadGlobalVariables();
   }, [orgid]);
 
-  const terraformVariables = globalVariables.filter((v) => v.attributes.category === "TERRAFORM");
-  const envVariables = globalVariables.filter((v) => v.attributes.category !== "TERRAFORM");
+  const terraformVariables = globalVariables.filter((v) => v.category === "TERRAFORM");
+  const envVariables = globalVariables.filter((v) => v.category !== "TERRAFORM");
 
   return (
     <div className="setting">
@@ -277,7 +285,7 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
             open={visible}
             mode={mode === "create" ? "create" : "edit"}
             variableKey={variableKey}
-            existingKeys={globalVariables.map((v) => v.attributes.key)}
+            existingKeys={globalVariables.map((v) => v.key)}
             form={form}
             onCancel={onCancel}
             onSubmit={(values) => {
@@ -291,8 +299,8 @@ export const GlobalVariablesSettings = ({ managePermission = true }: Props) => {
             title="Delete global variable"
             message={
               <>
-                The global variable <strong>{pendingDelete?.attributes.key}</strong> will no longer be passed to runs in
-                any workspace. This cannot be undone.
+                The global variable <strong>{pendingDelete?.key}</strong> will no longer be passed to runs in any
+                workspace. This cannot be undone.
               </>
             }
             okText="Delete variable"

@@ -41,8 +41,10 @@ export default function GlobalVariableFormModal({
         rules={[
           { required: true, message: "Enter a key" },
           {
-            validator: (_, value) => {
-              if (!value) return Promise.resolve();
+            validator: (_, value: unknown) => {
+              if (typeof value !== "string" || !value) {
+                return Promise.resolve();
+              }
               const trimmed = value.trim();
               if (mode === "create" && existingKeys?.includes(trimmed)) {
                 return Promise.reject(new Error("A global variable with this key already exists"));

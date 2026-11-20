@@ -1,8 +1,11 @@
 import { Form, Input, Spin, message } from "antd";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useRequiredParam } from "@/hooks/useRequiredParam";
 import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
-import { VcsConnectionType, VcsTypeExtended } from "../types";
+import { api, fields } from "../generated/apiPaths";
+import type { FormValues, UpdateBody, WriteAttributes } from "../api/writeBodies";
+import { VcsConnectionType } from "../generated/apiResources";
+import { VcsTypeExtended } from "../types";
 import "./Settings.css";
 import "./components/ResourceCard.css";
 import { SettingsPageHeader } from "@/components/settings/SettingsPageHeader";
@@ -26,17 +29,13 @@ type Props = {
   loadVCS: () => void;
 };
 
-type EditVcsForm = {
-  name: string;
-  endpoint: string;
-  apiUrl: string;
-  clientId: string;
-  clientSecret: string;
-  privateKey: string;
-};
+type EditVcsForm = Pick<FormValues<"vcs">, "name" | "clientId" | "clientSecret" | "privateKey" | "endpoint" | "apiUrl">;
+
+// Only what the form reads; the secrets stay blank on load, so they are not requested.
+const VCS_EDIT_FIELDS = fields.vcs("name", "vcsType", "connectionType", "endpoint", "apiUrl", "clientId", "callback");
 
 export const EditVCS = ({ vcsId, setMode, loadVCS }: Props) => {
-  const { orgid } = useParams();
+  const orgid = useRequiredParam("orgid");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [vcsTypeExtended, setVcsTypeExtended] = useState<VcsTypeExtended>(VcsTypeExtended.GITHUB);
@@ -46,32 +45,33 @@ export const EditVCS = ({ vcsId, setMode, loadVCS }: Props) => {
 
   useEffect(() => {
     setLoading(true);
-    axiosInstance
-      .get(`organization/${orgid}/vcs/${vcsId}`)
-      .then((response) => {
-        const attrs = response.data.data.attributes;
-        setVcsTypeExtended(getVcsTypeExtended(attrs.vcsType, attrs.connectionType, attrs.endpoint));
-        setConnectionType(attrs.connectionType);
-        setCallbackId(attrs.callback ?? vcsId);
+    (async () => {
+      try {
+        const vcs = await api.organization(orgid).vcs(vcsId).select(VCS_EDIT_FIELDS);
+        const connectionType = vcs.connectionType;
+        setVcsTypeExtended(getVcsTypeExtended(vcs.vcsType, connectionType, vcs.endpoint));
+        setConnectionType(connectionType);
+        setCallbackId(vcs.callback ?? vcsId);
         form.setFieldsValue({
-          name: attrs.name,
-          endpoint: attrs.endpoint ?? "",
-          apiUrl: attrs.apiUrl ?? "",
-          clientId: attrs.clientId,
+          name: vcs.name,
+          endpoint: vcs.endpoint ?? "",
+          apiUrl: vcs.apiUrl ?? "",
+          clientId: vcs.clientId ?? "",
           clientSecret: "",
           privateKey: "",
         });
-      })
-      .catch((err) => {
+      } catch (err) {
         message.error(`Could not load the VCS provider: ${getErrorMessage(err)}`);
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [vcsId]);
 
   const fixedUrls = usesFixedUrls(vcsTypeExtended);
 
   const onFinish = async (values: EditVcsForm) => {
-    const attributes: Record<string, unknown> = {
+    const attributes: WriteAttributes<"vcs"> = {
       name: values.name,
       endpoint: fixedUrls ? undefined : values.endpoint,
       apiUrl: fixedUrls ? undefined : values.apiUrl,
@@ -85,12 +85,11 @@ export const EditVCS = ({ vcsId, setMode, loadVCS }: Props) => {
     }
 
     setSaving(true);
+    const body: UpdateBody<"vcs"> = { data: { type: "vcs", id: vcsId, attributes } };
     try {
-      await axiosInstance.patch(
-        `organization/${orgid}/vcs/${vcsId}`,
-        { data: { type: "vcs", id: vcsId, attributes } },
-        { headers: { "Content-Type": "application/vnd.api+json" } }
-      );
+      await axiosInstance.patch(`organization/${orgid}/vcs/${vcsId}`, body, {
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
       message.success("VCS provider updated");
       loadVCS();
       setMode("list");

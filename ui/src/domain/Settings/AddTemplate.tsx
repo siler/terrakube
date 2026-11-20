@@ -4,8 +4,9 @@ import { Button, Card, Form, Input, List, message, Typography } from "antd";
 import { decodeBase64, encodeBase64 } from "@/modules/utils/base64";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import axiosInstance from "../../config/axiosConfig";
-import { TemplateAttributes } from "../types";
+import axios from "axios";
+import axiosInstance, { getErrorMessage } from "../../config/axiosConfig";
+import type { CreateBody, FormValues } from "../api/writeBodies";
 import SettingsSection from "@/components/settings/SettingsSection/SettingsSection";
 import "./Settings.css";
 import "./EditorForm.css";
@@ -28,18 +29,22 @@ type AddTemplateForm = {
   tcl: string;
   version: string;
 };
+/** A starting point offered when creating a template; the logo is only shown here and is never saved. */
+// Every starter ships a name, description and definition, so none of them is nullable here.
+type StarterTemplate = Pick<FormValues<"template">, "name" | "description" | "tcl"> & { image: string };
+
 export const AddTemplate = ({ setMode, loadTemplates }: Props) => {
   const { orgid } = useParams();
   const [chosen, setChosen] = useState(false);
   const [tcl, setTCL] = useState("");
-  const [templates, setTemplates] = useState<TemplateAttributes[]>([]);
+  const [templates, setTemplates] = useState<StarterTemplate[]>([]);
   const editorRef = useRef<IStandaloneCodeEditor>(null);
 
   function handleEditorDidMount(editor: IStandaloneCodeEditor) {
     editorRef.current = editor;
   }
 
-  const handleClick = (item: TemplateAttributes) => {
+  const handleClick = (item: StarterTemplate) => {
     setTCL(decodeBase64(item.tcl));
     setChosen(true);
   };
@@ -50,7 +55,7 @@ export const AddTemplate = ({ setMode, loadTemplates }: Props) => {
 
   const getTCLTemplates = () => {
     //TODO: Use github repo to get Templates
-    const templates: TemplateAttributes[] = [
+    const templates: StarterTemplate[] = [
       {
         name: "Blank template",
         description: "Create an empty template. So you can define your template from scratch.",
@@ -97,7 +102,7 @@ export const AddTemplate = ({ setMode, loadTemplates }: Props) => {
   };
 
   const onFinish = (values: AddTemplateForm) => {
-    const body = {
+    const body: CreateBody<"template"> = {
       data: {
         type: "template",
         attributes: {
@@ -123,10 +128,10 @@ export const AddTemplate = ({ setMode, loadTemplates }: Props) => {
         }
       })
       .catch((error) => {
-        if (error.response) {
-          if (error.response.status === 403) {
-            message.error(<PermissionErrorMessage action="create Templates" permission="Manage Templates" />);
-          }
+        if (axios.isAxiosError(error) && error.response?.status === 403) {
+          message.error(<PermissionErrorMessage action="create Templates" permission="Manage Templates" />);
+        } else {
+          message.error(`Could not create the template: ${getErrorMessage(error)}`);
         }
       });
   };
