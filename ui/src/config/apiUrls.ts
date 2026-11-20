@@ -24,5 +24,5 @@ export function subscriptionsUrl(): string {
 /** Hostname shown in CLI snippets. */
 export function publicHostname(): string {
   const publicUrl = window._env_.REACT_APP_TERRAKUBE_PUBLIC_URL;
-  return new URL(apiPrefix() ? (publicUrl as string) : window._env_.REACT_APP_TERRAKUBE_API_URL).hostname;
+  return new URL(apiPrefix() && publicUrl ? publicUrl : window._env_.REACT_APP_TERRAKUBE_API_URL).hostname;
 }

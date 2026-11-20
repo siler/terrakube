@@ -11,8 +11,9 @@ import { FederatedCredentials } from "../FederatedCredentials";
 import { EditFederatedCredential } from "../EditFederatedCredential";
 import { getConnectUrl } from "../vcsProviders";
 import { VcsType } from "../../generated/apiResources";
+import { fakeUuid } from "@/testUtils/fakeUuid";
 
-jest.spyOn(crypto, "randomUUID").mockReturnValue("uuid-1" as ReturnType<typeof crypto.randomUUID>);
+jest.spyOn(crypto, "randomUUID").mockReturnValue(fakeUuid(1));
 
 jest.mock("../../../config/axiosConfig", () => ({
   __esModule: true,
@@ -344,7 +345,9 @@ describe("Add VCS provider", () => {
     expect(
       await screen.findByRole("heading", { name: "Register Terrakube on GitLab Community Edition" })
     ).toBeVisible();
-    expect(screen.getByLabelText("Redirect URI")).toHaveValue("https://terrakube-api.test/callback/v1/vcs/uuid-1");
+    expect(screen.getByLabelText("Redirect URI")).toHaveValue(
+      `https://terrakube-api.test/callback/v1/vcs/${fakeUuid(1)}`
+    );
     expect(screen.getByRole("button", { name: "Copy Redirect URI" })).toBeInTheDocument();
     // Secrets are typed into a password field.
     expect(screen.getByLabelText("Secret")).toHaveAttribute("type", "password");

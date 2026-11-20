@@ -6,7 +6,7 @@ import { ModuleDetails } from "../Details";
 
 const permissions = { manageModule: false };
 const mockModuleAttributes: Record<string, unknown> = {};
-const mockPost = jest.fn(() => Promise.resolve({}));
+const mockPost = jest.fn((..._args: unknown[]) => Promise.resolve({}));
 
 jest.mock("@/modules/permissions/useOrgPermissions", () => ({
   useOrgPermissions: () => ({ permissions, loading: false }),
@@ -65,7 +65,7 @@ jest.mock("../../../config/axiosConfig", () => ({
       ),
     delete: jest.fn(),
     patch: jest.fn(),
-    post: (...args: unknown[]) => mockPost(...(args as [])),
+    post: (...args: unknown[]) => mockPost(...args),
   },
   getErrorMessage: (error: Error) => error.message,
 }));

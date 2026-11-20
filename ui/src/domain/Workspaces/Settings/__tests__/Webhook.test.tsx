@@ -6,6 +6,7 @@ import { VcsType } from "../../../generated/apiResources";
 import type { OrgTemplateRow, WorkspacePageRow } from "../../workspaceQuery";
 import { isRecord, isUnknownArray } from "@/modules/utils/typeGuards";
 import { workspacePageRow } from "@/testUtils/workspacePageRow";
+import { fakeUuid } from "@/testUtils/fakeUuid";
 
 jest.mock("../../../../config/axiosConfig", () => ({
   __esModule: true,
@@ -14,9 +15,7 @@ jest.mock("../../../../config/axiosConfig", () => ({
 }));
 jest.mock("../../Workspaces", () => ({ atomicHeader: {} }));
 let uuidCount = 0;
-jest
-  .spyOn(crypto, "randomUUID")
-  .mockImplementation(() => `uuid-${++uuidCount}` as ReturnType<typeof crypto.randomUUID>);
+jest.spyOn(crypto, "randomUUID").mockImplementation(() => fakeUuid(++uuidCount));
 
 const workspace = (related: Partial<WorkspacePageRow> = {}) =>
   workspacePageRow({ id: "ws-1", name: "prod", organization: { id: "org-1", name: "acme" }, ...related });
