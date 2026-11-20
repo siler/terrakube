@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { CreateJob } from "../Create";
+import { Template } from "../../types";
 
 window._env_ = {
   REACT_APP_AUTHORITY: "http://localhost/authority",
@@ -172,5 +173,47 @@ describe("CreateJob on a workspace that restricts apply to its branch", () => {
     fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "feature/x" } });
 
     expect(await screen.findByText("No plan-only templates available in this organization")).toBeInTheDocument();
+  });
+});
+
+describe("CreateJob with templates from the workspace page", () => {
+  const template = (id: string, name: string) =>
+    ({ id, attributes: { name, description: name, tcl: "" } }) as unknown as Template;
+
+  beforeEach(() => {
+    getMock.mockReset();
+    getMock.mockResolvedValue({
+      data: { data: { attributes: { branch: "main", defaultTemplate: "t-old" } } },
+    });
+  });
+
+  it("uses the given templates without fetching them, and asks for a refresh as the dialog opens", async () => {
+    const onOpen = jest.fn();
+    render(
+      <CreateJob
+        changeJob={jest.fn()}
+        planJob={true}
+        templates={[template("t-old", "Old"), template("t-new", "New")]}
+        onOpen={onOpen}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /run now/i }));
+
+    expect(await screen.findByRole("radio", { name: /^Old/ })).toBeChecked();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(getMock.mock.calls.map(([url]) => url)).not.toContainEqual(expect.stringContaining("/template"));
+  });
+
+  it("moves the selection to the first template when a refresh shows the selected one was deleted", async () => {
+    const props = { changeJob: jest.fn(), planJob: true };
+    const { rerender } = render(
+      <CreateJob {...props} templates={[template("t-old", "Old"), template("t-new", "New")]} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /run now/i }));
+    expect(await screen.findByRole("radio", { name: /^Old/ })).toBeChecked();
+
+    rerender(<CreateJob {...props} templates={[template("t-new", "New")]} />);
+
+    await waitFor(() => expect(screen.getByRole("radio", { name: /^New/ })).toBeChecked());
   });
 });

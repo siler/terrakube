@@ -2,7 +2,7 @@ import { Avatar, Button, Pagination, Tag, Tooltip, Typography } from "antd";
 import { FieldTimeOutlined, UserOutlined, WarningOutlined } from "@ant-design/icons";
 import { FiGitCommit } from "react-icons/fi";
 import { Link, useParams } from "react-router-dom";
-import { FlatJob, formatJobVia } from "../../../domain/types";
+import { FlatJob, formatJobVia, Template } from "../../../domain/types";
 import { useState, useEffect, useMemo } from "react";
 import axiosInstance from "../../../config/axiosConfig";
 import { ORGANIZATION_ARCHIVE } from "../../../config/actionTypes";
@@ -33,13 +33,15 @@ const safeJsonParse = (jsonString: string | null, fallback: any): any => {
 
 type Props = {
   jobs: FlatJob[];
+  // Organization templates from the parent, null while it loads them. When omitted, the list fetches them.
+  templates?: Template[] | null;
   onRunClick: (id: string) => void;
   runLink: (id: string) => string;
 };
 
-export default function RunList({ jobs, onRunClick, runLink }: Props) {
+export default function RunList({ jobs, templates, onRunClick, runLink }: Props) {
   const [currentPage, setCurrentPage] = useState<number>(parseInt(sessionStorage.getItem(RUNS_PAGE_KEY) || "1"));
-  const [templateNames, setTemplateNames] = useState<{ [key: string]: string }>({});
+  const [fetchedTemplates, setFetchedTemplates] = useState<Template[]>([]);
   const { orgid } = useParams();
   // A deep link has the organization in the URL before anything has put it in sessionStorage.
   const organizationId = orgid ?? sessionStorage.getItem(ORGANIZATION_ARCHIVE);
@@ -58,21 +60,21 @@ export default function RunList({ jobs, onRunClick, runLink }: Props) {
     sessionStorage.setItem(RUNS_TEMPLATE_FILTER_KEY, JSON.stringify(templateIds));
   }, [status, templateIds]);
 
-  // Load all templates to map template IDs to names
+  const templatesProvided = templates !== undefined;
+
   useEffect(() => {
-    if (!organizationId) return;
+    if (templatesProvided || !organizationId) return;
     // Without the names the filter falls back to "Template <id>".
     axiosInstance
       .get(`organization/${organizationId}/template`)
-      .then((response) => {
-        const templateMap: { [key: string]: string } = {};
-        response.data.data.forEach((template: any) => {
-          templateMap[template.id] = template.attributes.name;
-        });
-        setTemplateNames(templateMap);
-      })
+      .then((response) => setFetchedTemplates(response.data.data))
       .catch(() => {});
-  }, [organizationId]);
+  }, [organizationId, templatesProvided]);
+
+  const templateNames = useMemo(() => {
+    const source = templatesProvided ? (templates ?? []) : fetchedTemplates;
+    return Object.fromEntries(source.map((template) => [template.id, template.attributes.name]));
+  }, [templatesProvided, templates, fetchedTemplates]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = { [ALL_RUNS]: jobs.length };
