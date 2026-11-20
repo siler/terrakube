@@ -9,7 +9,6 @@ import {
   JobVia,
   Resource,
   Schedule,
-  Template,
   VcsType,
   StateOutputValue,
   formatJobVia,
@@ -72,7 +71,7 @@ export async function setupWorkspaceIncludes(
   setEnvVariables: (val: any[]) => void,
   setHistory: (val: FlatJobHistory[]) => void,
   setSchedule: (val: any[]) => void,
-  templates: Template[],
+  manageState: Promise<boolean>,
   setLastRun: (val: string) => void,
   setVCSProvider: (val: VcsType) => void,
   setCurrentStateId: (val: string) => void,
@@ -162,12 +161,7 @@ export async function setupWorkspaceIncludes(
       }
 
       case include.SCHEDULE:
-        schedule.push({
-          id: element.id,
-          name: templates?.find((template: Template) => template.id === element.attributes.templateReference)
-            ?.attributes?.name,
-          ...element.attributes,
-        });
+        schedule.push({ id: element.id, ...element.attributes });
         break;
       case include.VCS:
         setVCSProvider(element.attributes.vcsType);
@@ -251,27 +245,10 @@ export async function setupWorkspaceIncludes(
   // reload state only if there is a new version
 
   if (currentStateId !== lastState?.id) {
-    const organizationId = sessionStorage.getItem(ORGANIZATION_ARCHIVE);
-    const workspaceId = sessionStorage.getItem(WORKSPACE_ARCHIVE);
-    const url = `${apiUrl(
-      ""
-    )}/access-token/v1/teams/permissions/organization/${organizationId}/workspace/${workspaceId}`;
-    axiosInstance
-      .get(url)
-      .then((response: any) => {
-        loadState(
-          lastState,
-          axiosInstance,
-          setOutputs,
-          setResources,
-          sessionStorage.getItem(WORKSPACE_ARCHIVE)!,
-          setContextState,
-          response.data.manageState
-        );
-      })
-      .catch((err: any) => {
-        console.error("Failed to load workspace permissions for state:", err);
-      });
+    const workspaceId = sessionStorage.getItem(WORKSPACE_ARCHIVE)!;
+    manageState.then((canManageState) => {
+      loadState(lastState, axiosInstance, setOutputs, setResources, workspaceId, setContextState, canManageState);
+    });
   }
   setCurrentStateId(lastState?.id);
 }

@@ -268,4 +268,110 @@ describe("WorkspaceDetails", () => {
       expect(screen.queryByText("run r1")).not.toBeInTheDocument();
     });
   });
+
+  describe("permissions, templates and actions", () => {
+    const workspaceResponse = (included: unknown[] = []) => ({
+      data: {
+        data: {
+          id: "ws-1",
+          type: "workspace",
+          attributes: { name: "sample-workspace", source: "https://github.com/example/repo.git", branch: "main" },
+          relationships: { organization: { data: { id: "org-1" } } },
+        },
+        included: [{ id: "org-1", type: "organization", attributes: { name: "test-org" } }, ...included],
+      },
+    });
+    const templatesResponse = {
+      data: { data: [{ id: "tpl-1", type: "template", attributes: { name: "Plan and apply" } }] },
+    };
+    const urls = () => getMock.mock.calls.map(([url]) => String(url));
+    const count = (match: (url: string) => boolean) => urls().filter(match).length;
+    const workspaceLoads = () => count((url) => url.startsWith("organization/org-1/workspace/ws-1?"));
+    const permissionLoads = () => count((url) => url.includes("/access-token/v1/teams/permissions/"));
+    const templateLoads = () => count((url) => url === "organization/org-1/template");
+    const actionLoads = () => count((url) => url === "action");
+
+    const page = (selectedTab: string, settingsSection?: string) => (
+      <MemoryRouter initialEntries={["/organizations/org-1/workspaces/ws-1"]}>
+        <Routes>
+          <Route
+            path="/organizations/:orgid/workspaces/:id"
+            element={
+              <WorkspaceDetails
+                setOrganizationName={jest.fn()}
+                setWorkspaceManageState={jest.fn()}
+                selectedTab={selectedTab}
+                settingsSection={settingsSection}
+              />
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    it("asks the workspace endpoint for permissions once and does not hold the workspace back for templates", async () => {
+      getMock.mockImplementation((url: string) => {
+        if (url === "organization/org-1/template") return new Promise(() => {});
+        if (url.includes("/access-token/")) return Promise.resolve({ data: { manageState: true, planJob: true } });
+        if (url.includes("/workspace/ws-1")) return Promise.resolve(workspaceResponse());
+        return Promise.resolve({ data: { data: [] } });
+      });
+      render(page("1"));
+
+      expect(await screen.findByText("Run now")).toBeInTheDocument();
+      expect(urls().filter((url) => url.includes("/access-token/"))).toEqual([
+        "http://localhost:8080/access-token/v1/teams/permissions/organization/org-1/workspace/ws-1",
+      ]);
+      expect(templateLoads()).toBe(1);
+    });
+
+    it("names schedules from templates that arrive after the workspace", async () => {
+      let resolveTemplates: (value: unknown) => void = () => {};
+      getMock.mockImplementation((url: string) => {
+        if (url === "organization/org-1/template") {
+          return new Promise((resolve) => {
+            resolveTemplates = resolve;
+          });
+        }
+        if (url.includes("/workspace/ws-1")) {
+          return Promise.resolve(
+            workspaceResponse([
+              { id: "sch-1", type: "schedule", attributes: { cron: "0 * * * *", templateReference: "tpl-1" } },
+            ])
+          );
+        }
+        return Promise.resolve({ data: { data: [] } });
+      });
+      render(page("5"));
+
+      expect(await screen.findByText("Loading...")).toBeInTheDocument();
+      await act(async () => resolveTemplates(templatesResponse));
+      expect(await screen.findByText("sch-1")).toBeInTheDocument();
+      expect(screen.getByText("Plan and apply")).toBeInTheDocument();
+    });
+
+    it("revalidates permissions, templates and actions when a tab is entered, leaving the workspace to its poll", async () => {
+      getMock.mockImplementation((url: string) => {
+        if (url === "organization/org-1/template") return Promise.resolve(templatesResponse);
+        if (url.includes("/access-token/")) return Promise.resolve({ data: { manageState: false } });
+        if (url.includes("/workspace/ws-1")) return Promise.resolve(workspaceResponse());
+        return Promise.resolve({ data: { data: [] } });
+      });
+      const { rerender } = render(page("1"));
+      await waitFor(() => expect(actionLoads()).toBe(1));
+      expect(permissionLoads()).toBe(1);
+      expect(templateLoads()).toBe(1);
+
+      rerender(page("4"));
+      await waitFor(() => expect(actionLoads()).toBe(2));
+      expect(permissionLoads()).toBe(2);
+      expect(templateLoads()).toBe(2);
+
+      rerender(page("6", "locking"));
+      await waitFor(() => expect(actionLoads()).toBe(3));
+      expect(permissionLoads()).toBe(3);
+      expect(templateLoads()).toBe(3);
+      expect(workspaceLoads()).toBe(1);
+    });
+  });
 });

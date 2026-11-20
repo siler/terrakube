@@ -14,7 +14,7 @@ import {
 } from "@ant-design/icons";
 import { Alert, Avatar, Button, Col, Empty, message, Row, Space, Table, Tabs, Typography, Modal } from "antd";
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useJobStatusSubscription, usePolling } from "../../hooks";
 import { BiTerminal } from "react-icons/bi";
 import { FiGitCommit } from "react-icons/fi";
@@ -141,11 +141,10 @@ export const WorkspaceDetails = ({
   const [organizationNameLocal, setOrganizationNameLocal] = useState<string>();
   const [workspaceName, setWorkspaceName] = useState("...");
   const [activeKey, setActiveKey] = useState(selectedTab ?? "1");
-  const [templates, setTemplates] = useState([]);
+  const [templates, setTemplates] = useState<Template[] | null>(null);
   const [lastRun, setLastRun] = useState("");
   const [executionMode, setExecutionMode] = useState("...");
   const [, setAgent] = useState("...");
-  const [orgTemplates, setOrgTemplates] = useState([]);
   const [vcsProvider, setVCSProvider] = useState<VcsType>(VcsType.UNKNOWN);
   const [resources, setResources] = useState<Resource[]>([]);
   const [outputs, setOutputs] = useState<StateOutputVariableWithName[]>([]);
@@ -154,6 +153,8 @@ export const WorkspaceDetails = ({
   const [contextState, setContextState] = useState({});
   const [projectName, setProjectName] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const manageStateRequest = useRef<Promise<boolean>>(Promise.resolve(false));
+  const firstLoadPending = useRef(true);
 
   const runLink = (jobid: string) => `/organizations/${organizationId}/workspaces/${id}/runs/${jobid}`;
 
@@ -271,14 +272,15 @@ export const WorkspaceDetails = ({
     },
   ];
 
-  const loadOrgTemplates = () => {
+  const loadTemplates = () => {
     axiosInstance
       .get(`organization/${organizationId}/template`)
       .then((response) => {
-        setOrgTemplates(response.data.data);
+        setTemplates(response.data.data);
       })
       .catch((err) => {
         console.error("Failed to load org templates:", err);
+        setTemplates((current) => current ?? []);
       });
   };
 
@@ -322,9 +324,10 @@ export const WorkspaceDetails = ({
   useEffect(() => {
     setLoading(true);
     setLoadError(null);
-    loadWorkspace(true, true, true);
-    loadPermissionSet();
-    loadOrgTemplates();
+    firstLoadPending.current = true;
+    manageStateRequest.current = loadPermissionSet();
+    loadTemplates();
+    loadWorkspace(true);
     // Polling is now handled by usePolling hook below
   }, [id]);
 
@@ -335,6 +338,14 @@ export const WorkspaceDetails = ({
   useEffect(() => {
     setActiveKey(selectedTab ?? "1");
   }, [selectedTab]);
+
+  // Tabs share one mounted page, so entering one revalidates what only a page load fetches.
+  useEffect(() => {
+    if (firstLoadPending.current) return;
+    manageStateRequest.current = loadPermissionSet();
+    loadTemplates();
+    fetchActions();
+  }, [selectedTab, settingsSection]);
 
   // Keep the Runs view in sync with the URL: viewing /runs/:runid shows that job's
   // details, but navigating back to the bare /runs list (e.g. via the sidebar) must
@@ -351,7 +362,7 @@ export const WorkspaceDetails = ({
   // Polling for workspace updates
   usePolling(
     () => {
-      loadWorkspace(false, false, false);
+      loadWorkspace(false);
     },
     { interval: 10000, enabled: Boolean(id), immediate: false }
   );
@@ -361,7 +372,7 @@ export const WorkspaceDetails = ({
   useJobStatusSubscription({
     workspaceId: id ?? "",
     enabled: Boolean(id),
-    onEvent: () => loadWorkspace(false, false, false),
+    onEvent: () => loadWorkspace(false),
   });
 
   const changeJob = (id: string) => {
@@ -370,118 +381,89 @@ export const WorkspaceDetails = ({
     setActiveKey("2");
   };
 
-  const loadPermissionSet = () => {
-    const url = `${apiUrl("")}/access-token/v1/teams/permissions/organization/${organizationId}`;
-    axiosInstance
+  // The workspace endpoint already includes the organization permissions.
+  const loadPermissionSet = (): Promise<boolean> => {
+    const url = `${apiUrl("")}/access-token/v1/teams/permissions/organization/${organizationId}/workspace/${id}`;
+    return axiosInstance
       .get(url)
       .then((response) => {
         setManageState(response.data.manageState);
         setManageWorkspace(response.data.manageWorkspace);
         setPlanJob(response.data.planJob);
         setApproveJob(response.data.approveJob);
-
-        if (id === undefined || id === null) setPermissionsLoaded(true);
-        if (id !== undefined && id !== null) {
-          const urlWorkspaceAccess = `${apiUrl(
-            ""
-          )}/access-token/v1/teams/permissions/organization/${organizationId}/workspace/${id}`;
-          axiosInstance
-            .get(urlWorkspaceAccess)
-            .then((response) => {
-              setManageState(response.data.manageState);
-              setManageWorkspace(response.data.manageWorkspace);
-              setPlanJob(response.data.planJob);
-              setApproveJob(response.data.approveJob);
-              setPermissionsLoaded(true);
-            })
-            .catch((err) => {
-              console.error("Failed to load workspace permissions:", err);
-              setPermissionsLoaded(true);
-            });
-        }
+        return Boolean(response.data.manageState);
       })
       .catch((err) => {
-        console.error("Failed to load org permissions:", err);
+        console.error("Failed to load workspace permissions:", err);
+        return false;
+      })
+      .finally(() => {
         setPermissionsLoaded(true);
       });
   };
 
-  const loadWorkspace = (_loadVersions: boolean, _loadTemplates = false, _loadPermissionSet = false) => {
-    const templatesRequest: Promise<any[]> = _loadTemplates
-      ? axiosInstance.get(`organization/${organizationId}/template`).then((template) => {
-          setTemplates(template.data.data);
-          return template.data.data;
-        })
-      : Promise.resolve(templates);
-    templatesRequest
-      .then((templateList) => {
-        axiosInstance
-          .get(
-            `organization/${organizationId}/workspace/${id}?include=job,variable,history,schedule,vcs,agent,organization,webhook,reference,project`
-          )
-          .then(async (response) => {
-            if (_loadPermissionSet) loadPermissionSet();
+  const loadWorkspace = (_loadVersions: boolean) => {
+    axiosInstance
+      .get(
+        `organization/${organizationId}/workspace/${id}?include=job,variable,history,schedule,vcs,agent,organization,webhook,reference,project`
+      )
+      .then(async (response) => {
+        setWorkspace(response.data.data);
 
-            setWorkspace(response.data.data);
+        if (response.data.included) {
+          await setupWorkspaceIncludes(
+            response.data,
+            setVariables,
+            setJobs,
+            setEnvVariables,
+            setHistory,
+            setSchedule,
+            manageStateRequest.current,
+            setLastRun,
+            setVCSProvider,
+            setCurrentStateId,
+            currentStateId,
+            axiosInstance,
+            setResources,
+            setOutputs,
+            setAgent,
+            false,
+            setContextState,
+            setCollectionVariables,
+            setCollectionEnvVariables,
+            setGlobalVariables,
+            setGlobalEnvVariables
+          );
+        }
 
-            if (response.data.included) {
-              await setupWorkspaceIncludes(
-                response.data,
-                setVariables,
-                setJobs,
-                setEnvVariables,
-                setHistory,
-                setSchedule,
-                templateList,
-                setLastRun,
-                setVCSProvider,
-                setCurrentStateId,
-                currentStateId,
-                axiosInstance,
-                setResources,
-                setOutputs,
-                setAgent,
-                _loadTemplates,
-                setContextState,
-                setCollectionVariables,
-                setCollectionEnvVariables,
-                setGlobalVariables,
-                setGlobalEnvVariables
-              );
-            }
+        const organization: Organization | undefined = response.data.included?.find(
+          (item: IncludedItem<Organization>) => item.type === "organization"
+        );
+        if (organization) {
+          const organizationName = organization.attributes.name;
+          setOrganizationName(organizationName);
+          sessionStorage.setItem(ORGANIZATION_NAME, organizationName);
+        }
 
-            const organization: Organization | undefined = response.data.included?.find(
-              (item: IncludedItem<Organization>) => item.type === "organization"
-            );
-            if (organization) {
-              const organizationName = organization.attributes.name;
-              setOrganizationName(organizationName);
-              sessionStorage.setItem(ORGANIZATION_NAME, organizationName);
-            }
-
-            const proj = response.data.included?.find((item: any) => item.type === "project");
-            if (proj) {
-              setProjectName(proj.attributes?.name ?? null);
-              setProjectId(proj.id ?? null);
-            } else {
-              setProjectName(null);
-              setProjectId(null);
-            }
-            setOrganizationNameLocal(sessionStorage.getItem(ORGANIZATION_NAME)!);
-            setWorkspaceName(response.data.data.attributes.name);
-            setExecutionMode(response.data.data.attributes.executionMode ?? "remote");
-            if (_loadVersions) fetchActions();
-            setLoadError(null);
-          })
-          .catch((err) => {
-            setLoadError(getErrorMessage(err));
-          })
-          .finally(() => {
-            setLoading(false);
-          });
+        const proj = response.data.included?.find((item: any) => item.type === "project");
+        if (proj) {
+          setProjectName(proj.attributes?.name ?? null);
+          setProjectId(proj.id ?? null);
+        } else {
+          setProjectName(null);
+          setProjectId(null);
+        }
+        setOrganizationNameLocal(sessionStorage.getItem(ORGANIZATION_NAME)!);
+        setWorkspaceName(response.data.data.attributes.name);
+        setExecutionMode(response.data.data.attributes.executionMode ?? "remote");
+        if (_loadVersions) fetchActions();
+        setLoadError(null);
       })
       .catch((err) => {
         setLoadError(getErrorMessage(err));
+      })
+      .finally(() => {
+        firstLoadPending.current = false;
         setLoading(false);
       });
   };
@@ -536,6 +518,15 @@ export const WorkspaceDetails = ({
   const latestJob = currentRun?.job;
   const runCardTitle = currentRun?.active ? "Current run" : "Latest run";
   const metrics = computeWorkspaceMetrics(jobs);
+  // Templates load alongside the workspace, so schedules take their names here rather than when they load.
+  const namedSchedules = useMemo(
+    () =>
+      schedule.map((item) => ({
+        ...item,
+        name: templates?.find((t) => t.id === item.templateReference)?.attributes?.name ?? "",
+      })),
+    [schedule, templates]
+  );
 
   const renderSection = (workspace: Workspace) => {
     switch (activeKey) {
@@ -589,8 +580,7 @@ export const WorkspaceDetails = ({
                         <div>
                           <dt>Template</dt>
                           <dd>
-                            {(templates as Template[]).find((t) => t.id === latestJob.templateReference)?.attributes
-                              ?.name ?? "—"}
+                            {templates?.find((t) => t.id === latestJob.templateReference)?.attributes?.name ?? "—"}
                           </dd>
                         </div>
                         <div>
@@ -791,7 +781,7 @@ export const WorkspaceDetails = ({
             <DetailsJob key={jobId} jobId={jobId!} workspaceName={workspaceName} canApprove={approveJob} />
           </Suspense>
         ) : (
-          <RunList jobs={jobs} onRunClick={changeJob} runLink={runLink} />
+          <RunList jobs={jobs} templates={templates} onRunClick={changeJob} runLink={runLink} />
         );
       case "3":
         return (
@@ -821,7 +811,7 @@ export const WorkspaceDetails = ({
         );
       case "5":
         return templates ? (
-          <Schedules schedules={schedule} manageWorkspace={manageWorkspace} reload={() => loadWorkspace(false)} />
+          <Schedules schedules={namedSchedules} manageWorkspace={manageWorkspace} reload={() => loadWorkspace(false)} />
         ) : (
           <p>Loading...</p>
         );
@@ -840,7 +830,7 @@ export const WorkspaceDetails = ({
             <WorkspaceSettings
               workspace={workspace}
               vcsProvider={vcsProvider}
-              orgTemplates={orgTemplates}
+              orgTemplates={templates ?? []}
               manageWorkspace={manageWorkspace}
               planJob={planJob}
               onWorkspaceUpdate={() => loadWorkspace(false)}
@@ -933,6 +923,8 @@ export const WorkspaceDetails = ({
           changeJob={changeJob}
           planJob={planJob}
           resources={resources}
+          templates={templates}
+          onOpen={loadTemplates}
           disabledReason={
             workspace.attributes.source === "empty" && workspace.attributes.branch === "remote-content"
               ? "This CLI/API driven workspace has no applied configuration yet. Upload and apply a configuration with the terraform CLI/API before using Run now."
