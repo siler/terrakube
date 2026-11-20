@@ -1,18 +1,50 @@
 import axiosInstance from "@/config/axiosConfig";
+import type { RelationshipBody } from "@/domain/api/writeBodies";
+import type { JobStatus, PolicyComplianceStatus } from "@/domain/generated/apiResources";
 import { apiPost } from "@/modules/api/apiWrapper";
-import { ApiResponse } from "@/modules/api/types";
-import {
-  ListWorkspacesResponse,
-  WorkspaceListItem,
-  WorkspacePageRequest,
-  WorkspacePageResponse,
-  WorkspaceTagBinding,
-  WorkspaceTagFilter,
-} from "@/modules/workspaces/types";
+import { ApiFailure, ApiResponse } from "@/modules/api/types";
+import { WorkspacePageRequest, WorkspaceTagBinding, WorkspaceTagFilter } from "@/modules/workspaces/types";
 import formatSshUrl from "@/modules/workspaces/utils/formatSshUrl";
 import quoteRsql from "@/modules/workspaces/utils/quoteRsql";
 
-async function listWorkspaces(organizationId: string): Promise<ApiResponse<ListWorkspacesResponse>> {
+/** A workspace as the organization and project workspace lists show it. */
+export type WorkspaceListItem = {
+  id: string;
+  name: string;
+  description?: string;
+  source: string;
+  normalizedSource?: string;
+  branch?: string;
+  terraformVersion?: string;
+  iacType: string;
+  lastStatus?: JobStatus;
+  lastRun?: string;
+  locked?: boolean;
+  policyComplianceStatus?: PolicyComplianceStatus;
+  tags: WorkspaceTagBinding[];
+  projectId?: string;
+  projectName?: string;
+};
+
+type ListWorkspacesResult = {
+  organizationId: string;
+  organizationName: string;
+  workspaces: WorkspaceListItem[];
+};
+
+/** One server-side page of an organization's workspaces, with the filter facet counts. */
+export type WorkspacePageResult = {
+  organizationName: string;
+  workspaces: WorkspaceListItem[];
+  pageInfo: { endCursor?: string; hasNextPage: boolean; totalRecords: number };
+  statusCounts: Record<string, number>;
+  policyCounts: Record<string, number>;
+};
+
+// The GraphQL bodies are read field by field below, with every field optional.
+const anyBody = (body: unknown): any => body;
+
+async function listWorkspaces(organizationId: string): Promise<ApiResponse<ListWorkspacesResult>> {
   const body = {
     query: `{
           organization(ids: ["${organizationId}"]) {
@@ -60,23 +92,13 @@ async function listWorkspaces(organizationId: string): Promise<ApiResponse<ListW
         }`,
   };
 
-  const tempData = await apiPost<unknown, any>("/graphql/api/v1", body, {
+  const tempData = await apiPost("/graphql/api/v1", body, anyBody, {
     dataWrapped: true,
     contentType: "application/json",
   });
 
   if (tempData.isError) {
-    return {
-      isError: tempData.isError,
-      responseCode: tempData.responseCode,
-      error: tempData.error,
-      originResponseCode: tempData.originResponseCode,
-      data: {
-        organizationId: "",
-        organizationName: "",
-        workspaces: [],
-      },
-    };
+    return tempData;
   }
   const organization = tempData.data.organization.edges[0].node;
   const includes = tempData.data.organization.edges[0].node.workspace.edges;
@@ -105,9 +127,8 @@ async function listWorkspaces(organizationId: string): Promise<ApiResponse<ListW
   });
 
   return {
-    isError: tempData.isError,
+    isError: false,
     responseCode: tempData.responseCode,
-    error: tempData.error,
     originResponseCode: tempData.originResponseCode,
     data: {
       organizationId: organization?.id,
@@ -134,8 +155,8 @@ function combineFilters(...filters: (string | undefined)[]): string | undefined 
   return filters.filter(Boolean).join(";") || undefined;
 }
 
-function toTagBindings(edges: any): WorkspaceTagBinding[] | undefined {
-  return edges?.map(({ node }: any) => ({ tagId: node.tagId, value: node.value ?? null }));
+function toTagBindings(edges: any): WorkspaceTagBinding[] {
+  return edges?.map(({ node }: any) => ({ tagId: node.tagId, value: node.value ?? null })) ?? [];
 }
 
 /** One tag filter as RSQL. Elide puts both predicates on one join alias, so they match the same binding. */
@@ -202,7 +223,7 @@ function clearTagFilterCache() {
   TAG_MATCH_CACHE.key = "";
 }
 
-const TOO_MANY_TAG_MATCHES: ApiResponse<never> = {
+const TOO_MANY_TAG_MATCHES: ApiFailure = {
   isError: true,
   responseCode: 400,
   error: {
@@ -222,7 +243,7 @@ const TOO_MANY_TAG_MATCHES: ApiResponse<never> = {
  */
 async function tagFilterExpression(
   request: WorkspacePageRequest
-): Promise<{ expression?: string; failed?: ApiResponse<unknown> }> {
+): Promise<{ expression?: string; failed?: ApiFailure }> {
   const filters = request.tagFilters ?? [];
   if (filters.length <= 1) return { expression: filters[0] && tagPairExpression(filters[0]) };
 
@@ -255,7 +276,7 @@ async function tagFilterExpression(
     },
   };
 
-  const response = await apiPost<typeof body, any>("/graphql/api/v1", body, {
+  const response = await apiPost("/graphql/api/v1", body, anyBody, {
     dataWrapped: true,
     contentType: "application/json",
   });
@@ -278,29 +299,13 @@ async function tagFilterExpression(
   return { expression };
 }
 
-function failedPage(response: ApiResponse<unknown>): ApiResponse<WorkspacePageResponse> {
-  return {
-    isError: true,
-    responseCode: response.responseCode,
-    error: response.error,
-    originResponseCode: response.originResponseCode,
-    data: {
-      organizationName: "",
-      workspaces: [],
-      pageInfo: { hasNextPage: false, totalRecords: 0 },
-      statusCounts: {},
-      policyCounts: {},
-    },
-  };
-}
-
 async function listWorkspacePage(
   request: WorkspacePageRequest,
   includeStatusCounts = true
-): Promise<ApiResponse<WorkspacePageResponse>> {
+): Promise<ApiResponse<WorkspacePageResult>> {
   const { expression: tagExpression, failed } = await tagFilterExpression(request);
   if (failed) {
-    return failedPage(failed);
+    return failed;
   }
   const filter = workspaceFilter(request, {}, tagExpression);
   // Facet counts: each dimension is counted with every other filter applied, but its own filter varied.
@@ -376,13 +381,13 @@ async function listWorkspacePage(
     },
   };
 
-  const response = await apiPost<typeof body, any>("/graphql/api/v1", body, {
+  const response = await apiPost("/graphql/api/v1", body, anyBody, {
     dataWrapped: true,
     contentType: "application/json",
   });
 
   if (response.isError) {
-    return failedPage(response);
+    return response;
   }
 
   const organization = response.data?.organization?.edges?.[0]?.node;
@@ -426,19 +431,17 @@ async function listWorkspacePage(
 }
 
 async function assignWorkspaceToProject(orgId: string, workspaceId: string, projectId: string): Promise<void> {
-  await axiosInstance.patch(
-    `organization/${orgId}/workspace/${workspaceId}/relationships/project`,
-    { data: { type: "project", id: projectId } },
-    { headers: { "Content-Type": "application/vnd.api+json" } }
-  );
+  const body: RelationshipBody<"workspace", "project"> = { data: { type: "project", id: projectId } };
+  await axiosInstance.patch(`organization/${orgId}/workspace/${workspaceId}/relationships/project`, body, {
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
 }
 
 async function removeWorkspaceFromProject(orgId: string, workspaceId: string): Promise<void> {
-  await axiosInstance.patch(
-    `organization/${orgId}/workspace/${workspaceId}/relationships/project`,
-    { data: null },
-    { headers: { "Content-Type": "application/vnd.api+json" } }
-  );
+  const body: RelationshipBody<"workspace", "project"> = { data: null };
+  await axiosInstance.patch(`organization/${orgId}/workspace/${workspaceId}/relationships/project`, body, {
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
 }
 
 const methods = {

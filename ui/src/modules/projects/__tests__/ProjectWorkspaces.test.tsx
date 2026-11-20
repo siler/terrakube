@@ -5,48 +5,49 @@ import { message } from "antd";
 import ProjectWorkspaces from "../ProjectWorkspaces";
 import workspaceService from "@/modules/workspaces/workspaceService";
 import { usePolling } from "@/hooks";
-import { JobStatus } from "@/domain/types";
-import { WorkspaceListItem } from "@/modules/workspaces/types";
+import type { WorkspaceListItem, WorkspacePageResult } from "@/modules/workspaces/workspaceService";
+import type { ApiFailure, ApiResponse, ApiSuccess } from "@/modules/api/types";
+import { workspaceListItem } from "@/testUtils/workspaceListItem";
 import { formatDateTimeWithZone } from "@/modules/utils/dates";
 
 jest.mock("@/hooks", () => ({ usePolling: jest.fn() }));
 jest.mock("@/modules/workspaces/workspaceService", () => ({ listWorkspacePage: jest.fn(), listWorkspaces: jest.fn() }));
-jest.mock("antd", () => ({ ...jest.requireActual("antd"), message: { error: jest.fn() } }));
+jest.mock("antd", () => ({ ...jest.requireActual<typeof import("antd")>("antd"), message: { error: jest.fn() } }));
 
 const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
-const workspace = (overrides: Partial<WorkspaceListItem> = {}): WorkspaceListItem => ({
-  id: "ws-1",
-  name: "network-production",
-  iacType: "terraform",
-  source: "https://github.com/acme/network",
-  normalizedSource: "https://github.com/acme/network",
-  lastStatus: JobStatus.Completed,
-  lastRun: twoHoursAgo,
-  projectId: "proj-1",
-  ...overrides,
-});
+const workspace = (overrides: Partial<WorkspaceListItem> = {}): WorkspaceListItem =>
+  workspaceListItem({
+    id: "ws-1",
+    name: "network-production",
+    iacType: "terraform",
+    source: "https://github.com/acme/network",
+    normalizedSource: "https://github.com/acme/network",
+    lastStatus: "completed",
+    lastRun: twoHoursAgo,
+    projectId: "proj-1",
+    ...overrides,
+  });
 
-const page = (workspaces: WorkspaceListItem[], totalRecords = workspaces.length) => ({
+const page = (workspaces: WorkspaceListItem[], totalRecords = workspaces.length): ApiSuccess<WorkspacePageResult> => ({
   isError: false,
   responseCode: 200,
   data: {
     organizationName: "acme",
     workspaces,
-    pageInfo: { hasNextPage: false, totalRecords },
+    pageInfo: { endCursor: undefined, hasNextPage: false, totalRecords },
     statusCounts: {},
     policyCounts: {},
   },
 });
 
-const failure = (status = "Failed to load workspaces", errorMessage = "The API is not reachable") => ({
+const failure = (status = "Failed to load workspaces", errorMessage = "The API is not reachable"): ApiFailure => ({
   isError: true,
   responseCode: 500,
   error: { status, message: errorMessage },
-  data: undefined,
 });
 
-const listWorkspacePage = workspaceService.listWorkspacePage as jest.Mock;
+const listWorkspacePage = jest.mocked(workspaceService.listWorkspacePage);
 
 function renderTab(projectId = "proj-1") {
   return render(
@@ -56,12 +57,27 @@ function renderTab(projectId = "proj-1") {
   );
 }
 
-const lastRequest = () => listWorkspacePage.mock.calls.at(-1)![0];
-const poll = () => act(async () => (usePolling as jest.Mock).mock.calls.at(-1)![0]());
+const lastRequest = () => {
+  const call = listWorkspacePage.mock.lastCall;
+  if (call === undefined) {
+    throw new Error("Expected a workspace page request");
+  }
+  return call[0];
+};
+
+const poll = () => {
+  const call = jest.mocked(usePolling).mock.lastCall;
+  if (call === undefined) {
+    throw new Error("Expected the tab to poll");
+  }
+  return act(async () => call[0]());
+};
 
 describe("ProjectWorkspaces", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Clearing keeps queued once-values, so a test whose request never happened would leak them into the next.
+    listWorkspacePage.mockReset();
     listWorkspacePage.mockResolvedValue(page([workspace()]));
   });
 
@@ -82,7 +98,10 @@ describe("ProjectWorkspaces", () => {
 
     const link = await screen.findByRole("link", { name: "network-production" });
     expect(link).toHaveAttribute("href", "/organizations/org-1/workspaces/ws-1");
-    const row = link.closest("tr")!;
+    const row = link.closest("tr");
+    if (row === null) {
+      throw new Error("Expected the name link to sit in a table row");
+    }
     expect(within(row).getByText("2 hours ago")).toBeInTheDocument();
     const repository = within(row).getByRole("link", { name: "acme/network" });
     expect(repository).toHaveAttribute("href", "https://github.com/acme/network");
@@ -218,8 +237,10 @@ describe("ProjectWorkspaces", () => {
   });
 
   it("ignores a slow response that was overtaken by a newer request", async () => {
-    let resolveFirst: (value: unknown) => void = () => {};
-    listWorkspacePage.mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)));
+    let resolveFirst: (value: ApiResponse<WorkspacePageResult>) => void = () => {};
+    listWorkspacePage.mockReturnValueOnce(
+      new Promise<ApiResponse<WorkspacePageResult>>((resolve) => (resolveFirst = resolve))
+    );
     renderTab();
 
     listWorkspacePage.mockResolvedValueOnce(page([workspace({ id: "ws-2", name: "newer-result" })]));

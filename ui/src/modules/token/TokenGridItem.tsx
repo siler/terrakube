@@ -7,22 +7,20 @@ import {
 } from "@ant-design/icons";
 import { Button, Flex, Typography, Tag } from "antd";
 import dayjs from "dayjs";
-import { UserToken } from "@/modules/user/types";
+import { GridToken } from "./types";
 import { formatOrdinalDate, relativeTime } from "@/modules/utils/dates";
 
 type Props = {
-  token: UserToken;
+  token: GridToken;
   loading: boolean;
   onDelete: (id: string) => void;
 };
 
 export default function TokenGridItem({ token, onDelete, loading }: Props) {
+  const lifetime = { days: token.days, hours: token.hours ?? 0, minutes: token.minutes ?? 0 };
   const expiryDate =
-    token.createdDate && (token.days > 0 || (token.hours ?? 0) > 0 || (token.minutes ?? 0) > 0)
-      ? dayjs(token.createdDate)
-          .add(token.days, "day")
-          .add(token.hours ?? 0, "hour")
-          .add(token.minutes ?? 0, "minute")
+    token.createdDate && (lifetime.days > 0 || lifetime.hours > 0 || lifetime.minutes > 0)
+      ? dayjs(token.createdDate).add(lifetime.days, "day").add(lifetime.hours, "hour").add(lifetime.minutes, "minute")
       : null;
   const expired = expiryDate !== null && expiryDate.isBefore(dayjs());
 

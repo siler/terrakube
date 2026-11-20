@@ -2,7 +2,7 @@ import { TagsOutlined } from "@ant-design/icons";
 import { Popover, Tag } from "antd";
 import type { CSSProperties } from "react";
 import getDeterministicColors from "@/modules/utils/getDeterministicColors";
-import { TagModel } from "@/modules/organizations/types";
+import { TagModel } from "@/modules/organizations/organizationService";
 import { WorkspaceTagBinding } from "@/modules/workspaces/types";
 import { formatWorkspaceTag, sortWorkspaceTagBindings } from "@/modules/workspaces/utils/workspaceTags";
 import WorkspaceTagLabel from "@/modules/workspaces/components/WorkspaceTagLabel";
@@ -18,11 +18,11 @@ type Props = {
 function TagChip({ binding, tags }: { binding: WorkspaceTagBinding; tags: TagModel[] }) {
   const colors = getDeterministicColors(binding.tagId);
   // The border is set inline: the dark theme gives filled tags a grey border at the same specificity
-  const style = {
+  const style: CSSProperties = {
     "--tag-color": colors.background,
     "--tag-key-text": colors.color,
     borderColor: colors.background,
-  } as CSSProperties;
+  };
   return (
     <Tag title={formatWorkspaceTag(binding, tags)} className="workspace-tag-chip" style={style}>
       <WorkspaceTagLabel binding={binding} tags={tags} />

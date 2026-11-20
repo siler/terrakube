@@ -1,32 +1,27 @@
+import { isOneOf } from "@/modules/utils/typeGuards";
+
+const WORKSPACE_SORT_VALUES = [
+  "name_asc",
+  "name_desc",
+  "lastRun_desc",
+  "lastRun_asc",
+  "status",
+  "source_asc",
+  "source_desc",
+  "terraformVersion_asc",
+  "terraformVersion_desc",
+] as const;
+
 /** Combined sort option: field + direction in one value for the UI */
-export type WorkspaceSortOption =
-  | "name_asc"
-  | "name_desc"
-  | "lastRun_desc"
-  | "lastRun_asc"
-  | "status"
-  | "source_asc"
-  | "source_desc"
-  | "terraformVersion_asc"
-  | "terraformVersion_desc";
+export type WorkspaceSortOption = (typeof WORKSPACE_SORT_VALUES)[number];
 
 const SORT_STORAGE_KEY = "workspaceSortValue";
 
+/** Reads the persisted sort option, falling back to name ascending when absent or unrecognised. */
 export function getStoredWorkspaceSortOption(): WorkspaceSortOption {
   const stored = sessionStorage.getItem(SORT_STORAGE_KEY);
-  const valid: WorkspaceSortOption[] = [
-    "name_asc",
-    "name_desc",
-    "lastRun_desc",
-    "lastRun_asc",
-    "status",
-    "source_asc",
-    "source_desc",
-    "terraformVersion_asc",
-    "terraformVersion_desc",
-  ];
-  if (stored && valid.includes(stored as WorkspaceSortOption)) {
-    return stored as WorkspaceSortOption;
+  if (isOneOf(WORKSPACE_SORT_VALUES, stored)) {
+    return stored;
   }
   return "name_asc";
 }

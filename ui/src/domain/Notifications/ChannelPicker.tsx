@@ -1,5 +1,5 @@
 import { CheckCircleFilled } from "@ant-design/icons";
-import { NotificationChannelType } from "../types";
+import type { NotificationChannelType } from "../generated/apiResources";
 import { CHANNEL_META, CHANNEL_ORDER } from "./channelMeta";
 import "./Notifications.css";
 

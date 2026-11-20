@@ -2,8 +2,8 @@ import { useCallback, useState } from "react";
 import { ApiResponse, ErrorInformation } from "./types";
 import { notification } from "antd";
 
-type UseApiRequestOptions<TResponse, TRequest = unknown> = {
-  action: (data?: TRequest) => Promise<ApiResponse<TResponse>>;
+type UseApiRequestOptions<TResponse, TRequest> = {
+  action: (data: TRequest) => Promise<ApiResponse<TResponse>>;
   onReturn: (data: TResponse) => void;
   showErrorAsNotification?: boolean;
   returnsData?: boolean;
@@ -11,14 +11,14 @@ type UseApiRequestOptions<TResponse, TRequest = unknown> = {
   errorInfo?: ErrorInformation;
 };
 
-type UseApiRequestReturn<TRequest = unknown> = {
+type UseApiRequestReturn<TRequest> = {
   error: ErrorInformation | undefined;
   loading: boolean;
-  execute: (data?: TRequest) => Promise<void>;
+  execute: (data: TRequest) => Promise<void>;
   notificationContext: React.ReactElement;
 };
 
-function useApiRequest<TResponse, TRequest>({
+function useApiRequest<TResponse, TRequest = void>({
   action,
   onReturn,
 
@@ -46,7 +46,7 @@ function useApiRequest<TResponse, TRequest>({
   );
 
   const execute = useCallback(
-    async (data?: TRequest) => {
+    async (data: TRequest) => {
       try {
         setLoading(true);
         setError(undefined);
@@ -62,7 +62,7 @@ function useApiRequest<TResponse, TRequest>({
             return;
           }
 
-          onReturn(response.data!);
+          onReturn(response.data);
           return;
         }
 

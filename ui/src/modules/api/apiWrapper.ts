@@ -2,26 +2,58 @@ import axios from "axios";
 import { mgr } from "../../config/authConfig";
 import { apiUrl } from "../../config/apiUrls";
 import getUserFromStorage from "../../config/authUser";
-import { ApiResponse, RequestOptions } from "./types";
+import { ApiError, ApiResponse, RequestOptions } from "./types";
+import { ResponseShapeError } from "./responseShapeError";
+import { isRecord } from "../utils/typeGuards";
 
 const BASE_API_URL = apiUrl("");
-type RuntimeEnv = Window["_env_"] & { REACT_APP_TERRAKUBE_SEND_COOKIES?: string };
+const sendCookiesWithRequests = window._env_.REACT_APP_TERRAKUBE_SEND_COOKIES?.trim().toLowerCase() === "true";
 
-const runtimeEnv = window._env_ as RuntimeEnv;
-const sendCookiesWithRequests = runtimeEnv.REACT_APP_TERRAKUBE_SEND_COOKIES?.trim().toLowerCase() === "true";
+type ResolvedRequestOptions = Omit<RequestOptions, "requireAuth" | "contentType"> & {
+  requireAuth: boolean;
+  contentType: string;
+};
 
-const defaultRequestOptions: RequestOptions = {
+const defaultRequestOptions: ResolvedRequestOptions = {
   requireAuth: true,
   contentType: "application/vnd.api+json",
 };
 
-function getOptions(options?: RequestOptions): RequestOptions {
-  if (options === undefined) return defaultRequestOptions;
+function getOptions(options?: RequestOptions): ResolvedRequestOptions {
+  if (options === undefined) {
+    return defaultRequestOptions;
+  }
   return {
-    ...defaultRequestOptions,
     ...options,
+    requireAuth: options.requireAuth ?? defaultRequestOptions.requireAuth,
+    contentType: options.contentType ?? defaultRequestOptions.contentType,
   };
 }
+
+/** Unwraps `{ data }` when the endpoint wraps its payload, as GraphQL does. */
+const responseBody = (body: unknown, dataWrapped: boolean | undefined): unknown => {
+  if (!dataWrapped) {
+    return body;
+  }
+  return isRecord(body) ? body.data : undefined;
+};
+
+/** Joins the messages of a GraphQL `errors` array, or undefined when the body carries no errors. */
+const graphQLErrorMessage = (body: unknown): string | undefined => {
+  if (!isRecord(body) || !Array.isArray(body.errors) || body.errors.length === 0) {
+    return undefined;
+  }
+  const errors: unknown[] = body.errors;
+  return errors.map((error) => (isRecord(error) && typeof error.message === "string" ? error.message : "")).join("\n");
+};
+
+// Spring's default error body has a numeric status, so it falls back to the HTTP status text.
+const isApiError = (value: unknown): value is ApiError =>
+  typeof value === "object" &&
+  value !== null &&
+  ("status" in value || "message" in value) &&
+  (!("status" in value) || typeof value.status === "string") &&
+  (!("message" in value) || typeof value.message === "string");
 
 async function requestWrapper<T>(
   requireAuth: boolean = true,
@@ -44,6 +76,13 @@ async function requestWrapper<T>(
     }
     return await requestFunc();
   } catch (error) {
+    if (error instanceof ResponseShapeError) {
+      return {
+        isError: true,
+        error: { status: "Unexpected response", message: error.message },
+        responseCode: 200,
+      };
+    }
     if (axios.isAxiosError(error)) {
       if (error.response?.status === 401) {
         // Token rejected by the API - sign out so the user lands back on Login.
@@ -84,23 +123,19 @@ async function requestWrapper<T>(
         };
       }
 
-      let apiErr = error.response?.data;
-
-      if (Object.keys(apiErr ?? {}).length === 0) {
-        const errRes = error.response as any;
-        apiErr = {
-          statusCode: errRes?.status || 500,
-          message: errRes?.statusText || "Failed to request",
-          status: errRes?.statusText || "Internal server error",
-        };
-      }
-
-      const res = {
+      const responseCode = error.response?.status || 500;
+      const body: unknown = error.response?.data;
+      return {
         isError: true,
-        error: apiErr,
-        responseCode: (error.response as any)?.status || 500,
+        error: isApiError(body)
+          ? body
+          : {
+              statusCode: responseCode,
+              message: error.response?.statusText || "Failed to request",
+              status: error.response?.statusText || "Internal server error",
+            },
+        responseCode,
       };
-      return res;
     } else {
       return {
         isError: true,
@@ -110,40 +145,45 @@ async function requestWrapper<T>(
   }
 }
 
+/** Reads a response body into the caller's type, throwing {@link ResponseShapeError} when it does not fit. */
+export type ParseBody<T> = (body: unknown) => T;
+
 export async function apiPost<TRequest, TResponse>(
   path: string,
   body: TRequest,
+  parse: ParseBody<TResponse>,
   options?: RequestOptions
 ): Promise<ApiResponse<TResponse>> {
-  return await post<TRequest, TResponse>(`${BASE_API_URL}${path}`, body, getOptions(options));
+  return await post(`${BASE_API_URL}${path}`, body, parse, getOptions(options));
 }
 
 export async function apiPut<TRequest, TResponse>(
   path: string,
   body: TRequest,
+  parse: ParseBody<TResponse>,
   options?: RequestOptions
 ): Promise<ApiResponse<TResponse>> {
-  return await put<TRequest, TResponse>(`${BASE_API_URL}${path}`, body, getOptions(options));
+  return await put(`${BASE_API_URL}${path}`, body, parse, getOptions(options));
 }
-export async function apiGet<T>(path: string, options?: RequestOptions): Promise<ApiResponse<T>> {
-  return await get<T>(`${BASE_API_URL}${path}`, getOptions(options));
+export async function apiGet<T>(path: string, parse: ParseBody<T>, options?: RequestOptions): Promise<ApiResponse<T>> {
+  return await get(`${BASE_API_URL}${path}`, parse, getOptions(options));
 }
 
 export async function apiDelete(path: string, options?: RequestOptions): Promise<ApiResponse<undefined>> {
   return await intDelete(`${BASE_API_URL}${path}`, getOptions(options));
 }
 
-async function get<T>(path: string, options: RequestOptions): Promise<ApiResponse<T>> {
+async function get<T>(path: string, parse: ParseBody<T>, options: ResolvedRequestOptions): Promise<ApiResponse<T>> {
   return await requestWrapper(options.requireAuth, async (accessToken?: string) => {
     const headers: Record<string, string> = {
-      "Content-type": options.contentType!,
+      "Content-type": options.contentType,
     };
 
     if (options.requireAuth) {
       headers["Authorization"] = `Bearer ${accessToken}`;
     }
 
-    const response = await axios({
+    const response = await axios<unknown>({
       method: "GET",
       url: path,
       headers: headers,
@@ -152,7 +192,7 @@ async function get<T>(path: string, options: RequestOptions): Promise<ApiRespons
     });
     return {
       isError: false,
-      data: options.dataWrapped ? response.data?.data : response.data,
+      data: parse(responseBody(response.data, options.dataWrapped)),
       responseCode: response.status,
     };
   });
@@ -161,17 +201,18 @@ async function get<T>(path: string, options: RequestOptions): Promise<ApiRespons
 async function post<TRequest, TResponse>(
   path: string,
   body: TRequest,
-  options: RequestOptions
+  parse: ParseBody<TResponse>,
+  options: ResolvedRequestOptions
 ): Promise<ApiResponse<TResponse>> {
   return await requestWrapper(options.requireAuth, async (accessToken?: string) => {
     const headers: Record<string, string> = {
-      "Content-type": options.contentType!,
+      "Content-type": options.contentType,
     };
 
     if (options.requireAuth) {
       headers["Authorization"] = `Bearer ${accessToken}`;
     }
-    const response = await axios({
+    const response = await axios<unknown>({
       method: "POST",
       url: path,
       headers: headers,
@@ -180,12 +221,13 @@ async function post<TRequest, TResponse>(
       withCredentials: sendCookiesWithRequests,
     });
 
-    if (options.dataWrapped && response.data?.errors?.length) {
+    const errorMessage = options.dataWrapped ? graphQLErrorMessage(response.data) : undefined;
+    if (errorMessage !== undefined) {
       return {
         isError: true,
         error: {
           status: "GraphQL request failed",
-          message: response.data.errors.map((error: { message: string }) => error.message).join("\n"),
+          message: errorMessage,
         },
         responseCode: response.status,
       };
@@ -193,7 +235,7 @@ async function post<TRequest, TResponse>(
 
     return {
       isError: false,
-      data: options.dataWrapped ? response.data?.data : response.data,
+      data: parse(responseBody(response.data, options.dataWrapped)),
       responseCode: response.status,
     };
   });
@@ -201,17 +243,18 @@ async function post<TRequest, TResponse>(
 async function put<TRequest, TResponse>(
   path: string,
   body: TRequest,
-  options: RequestOptions
+  parse: ParseBody<TResponse>,
+  options: ResolvedRequestOptions
 ): Promise<ApiResponse<TResponse>> {
   return await requestWrapper(options.requireAuth, async (accessToken?: string) => {
     const headers: Record<string, string> = {
-      "Content-type": options.contentType!,
+      "Content-type": options.contentType,
     };
 
     if (options.requireAuth) {
       headers["Authorization"] = `Bearer ${accessToken}`;
     }
-    const response = await axios({
+    const response = await axios<unknown>({
       method: "PUT",
       url: path,
       headers: headers,
@@ -221,22 +264,22 @@ async function put<TRequest, TResponse>(
     });
     return {
       isError: false,
-      data: options.dataWrapped ? response.data?.data : response.data,
+      data: parse(responseBody(response.data, options.dataWrapped)),
       responseCode: response.status,
     };
   });
 }
-async function intDelete<T>(path: string, options: RequestOptions): Promise<ApiResponse<T>> {
+async function intDelete(path: string, options: ResolvedRequestOptions): Promise<ApiResponse<undefined>> {
   return await requestWrapper(options.requireAuth, async (accessToken?: string) => {
     const headers: Record<string, string> = {
-      "Content-type": options.contentType!,
+      "Content-type": options.contentType,
     };
 
     if (options.requireAuth) {
       headers["Authorization"] = `Bearer ${accessToken}`;
     }
 
-    const response = await axios({
+    const response = await axios<unknown>({
       method: "DELETE",
       url: path,
       headers: headers,
@@ -245,7 +288,7 @@ async function intDelete<T>(path: string, options: RequestOptions): Promise<ApiR
     });
     return {
       isError: false,
-      data: response.data,
+      data: undefined,
       responseCode: response.status,
     };
   });

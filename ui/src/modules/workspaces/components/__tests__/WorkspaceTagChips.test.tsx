@@ -123,8 +123,8 @@ describe("WorkspaceTagChips", () => {
     const css = readFileSync(join(__dirname, "..", "WorkspaceTagChips.css"), "utf-8");
     const rule = css.match(/\.workspace-tag-chip,\s*\.workspace-tag-chip-toggle\s*\{([^}]*)\}/);
     expect(rule).not.toBeNull();
-    expect(rule![1]).toMatch(/position:\s*relative/);
-    expect(Number(rule![1].match(/z-index:\s*(\d+)/)?.[1])).toBeGreaterThan(0);
+    expect(rule?.[1]).toMatch(/position:\s*relative/);
+    expect(Number(rule?.[1].match(/z-index:\s*(\d+)/)?.[1])).toBeGreaterThan(0);
   });
 
   // The dark theme gives every filled tag a grey border at the same specificity as a stylesheet rule

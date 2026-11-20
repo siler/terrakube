@@ -1,7 +1,5 @@
-import { apiGet } from "@/modules/api/apiWrapper";
-import { ApiResponse } from "@/modules/api/types";
 import { axiosGraphQL } from "@/config/axiosConfig";
-import { FlatOrganization, Organization } from "../../domain/types";
+import { FlatOrganization } from "../../domain/types";
 import { TagModel } from "./types";
 import { WorkspaceStatusFilter } from "@/modules/workspaces/utils/workspaceFilter";
 import { isOrgId } from "@/config/orgId";
@@ -13,10 +11,6 @@ function computeWorkspaceStatusCounts(edges: { node: { lastJobStatus?: string } 
     counts[status] = (counts[status] || 0) + 1;
   }
   return counts;
-}
-
-async function listOrganizations(): Promise<ApiResponse<Organization[]>> {
-  return await apiGet("/api/v1/organization", { dataWrapped: true });
 }
 
 async function listOrganizationSummaries(): Promise<FlatOrganization[]> {
@@ -140,8 +134,9 @@ async function listOrganizationTags(organizationId: string): Promise<TagModel[]>
   }));
 }
 
+export type { TagModel };
+
 const methods = {
-  listOrganizations,
   listOrganizationSummaries,
   getOrganizationNameGraphQL,
   listOrganizationTags,

@@ -1,22 +1,23 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import OrganizationTable from "../OrganizationTable";
-import { OrganizationModel } from "../../../types";
+import { FlatOrganization } from "@/domain/types";
 import { ORGANIZATION_ARCHIVE, ORGANIZATION_NAME } from "@/config/actionTypes";
 import { useOrgPermissions } from "@/modules/permissions/useOrgPermissions";
+import { orgPermissionsResult } from "@/testUtils/orgPermissions";
 
 jest.mock("@/modules/permissions/useOrgPermissions");
-const mockUseOrgPermissions = useOrgPermissions as jest.Mock;
+const mockUseOrgPermissions = jest.mocked(useOrgPermissions);
 
-const organizations: OrganizationModel[] = [
+const organizations: FlatOrganization[] = [
   {
     id: "org-1",
     name: "acme-platform",
     description: "Core platform infra",
-    executionMode: "Remote",
+    executionMode: "remote",
     workspaceCount: 14,
   },
-  { id: "org-2", name: "data-eng", description: "Data lake and pipelines", executionMode: "Local", workspaceCount: 0 },
+  { id: "org-2", name: "data-eng", description: "Data lake and pipelines", executionMode: "local", workspaceCount: 0 },
 ];
 
 function renderTable(orgs = organizations) {
@@ -30,20 +31,20 @@ function renderTable(orgs = organizations) {
 describe("OrganizationTable", () => {
   beforeEach(() => {
     sessionStorage.clear();
-    mockUseOrgPermissions.mockReturnValue({ permissions: { managePermission: true }, loading: false });
+    mockUseOrgPermissions.mockReturnValue(orgPermissionsResult({ managePermission: true }));
   });
 
   it("renders a row per organization with name, description and execution mode", () => {
     renderTable();
     expect(screen.getByText("acme-platform")).toBeInTheDocument();
     expect(screen.getByText("Core platform infra")).toBeInTheDocument();
-    expect(screen.getByText("Remote")).toBeInTheDocument();
+    expect(screen.getByText("remote")).toBeInTheDocument();
   });
 
   it("shows description as its own column, with a fallback for organizations without one", () => {
     renderTable([
-      { id: "org-1", name: "acme-platform", description: "Core platform infra", executionMode: "Remote" },
-      { id: "org-3", name: "no-desc-org", executionMode: "Local" },
+      { id: "org-1", name: "acme-platform", description: "Core platform infra", executionMode: "remote" },
+      { id: "org-3", name: "no-desc-org", executionMode: "local" },
     ]);
     expect(screen.getByText("Description")).toBeInTheDocument();
     expect(screen.getByText("No description set for this organization")).toBeInTheDocument();
@@ -65,7 +66,7 @@ describe("OrganizationTable", () => {
       {
         id: "org-1",
         name: "acme-platform",
-        executionMode: "Remote",
+        executionMode: "remote",
         workspaceCount: 14,
         workspaceStatusCounts: { failed: 2, running: 1, completed: 10, waitingApproval: 0 },
       },

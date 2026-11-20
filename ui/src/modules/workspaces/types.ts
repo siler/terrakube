@@ -1,53 +1,12 @@
-import { JobStatus } from "../../domain/types";
+import type { WorkspaceTagRow } from "@/domain/Workspaces/workspaceTagFields";
 
 /** A tag on a workspace. Key-only tags keep the value empty. */
-export type WorkspaceTagBinding = {
-  tagId: string;
-  value?: string | null;
-};
+export type WorkspaceTagBinding = Pick<WorkspaceTagRow, "tagId"> & Partial<Pick<WorkspaceTagRow, "value">>;
 
 /** One row of the tag filter: a key, optionally narrowed to a value. */
 export type WorkspaceTagFilter = {
   tagId: string;
   value?: string;
-};
-
-export type WorkspaceListItem = {
-  id: string;
-  lastRun?: string;
-  lastStatus?: JobStatus;
-  name: string;
-  description?: string;
-  branch?: string;
-  iacType: string;
-  source: string;
-  normalizedSource?: string;
-  terraformVersion?: string;
-  tags?: WorkspaceTagBinding[];
-  projectId?: string;
-  projectName?: string;
-  locked?: boolean;
-  policyComplianceStatus?: string;
-};
-
-export type ListWorkspacesResponse = {
-  organizationId: string;
-  organizationName: string;
-  workspaces: WorkspaceListItem[];
-};
-
-export type WorkspacePageInfo = {
-  endCursor?: string;
-  hasNextPage: boolean;
-  totalRecords: number;
-};
-
-export type WorkspacePageResponse = {
-  organizationName: string;
-  workspaces: WorkspaceListItem[];
-  pageInfo: WorkspacePageInfo;
-  statusCounts: Record<string, number>;
-  policyCounts: Record<string, number>;
 };
 
 export type WorkspacePageRequest = {
